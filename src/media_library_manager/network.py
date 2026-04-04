@@ -19,6 +19,10 @@ RESOLVE_RE = re.compile(r"can be reached at (?P<target>[^ ]+?)\s*:\s*(?P<port>\d
 ARP_LINE_RE = re.compile(
     r"^(?P<host>.+?)\s+\((?P<ip>\d+\.\d+\.\d+\.\d+)\)\s+at\s+(?P<mac>[0-9a-f:]+|[^\s]+)\s+on\s+(?P<iface>\S+)"
 )
+IP_NEIGH_LINE_RE = re.compile(
+    r"^(?P<ip>\d+\.\d+\.\d+\.\d+)\s+dev\s+(?P<iface>\S+)(?:\s+lladdr\s+(?P<mac>[0-9a-f:]+))?.*$",
+    re.IGNORECASE,
+)
 
 
 def discover_lan_devices() -> dict[str, Any]:
@@ -137,6 +141,10 @@ def resolve_service_instance(instance: str, service_type: str, domain: str) -> d
 
 def discover_arp_hosts() -> list[dict[str, Any]]:
     output = run_command(["arp", "-a"], timeout=1)
+    if not output.strip():
+        output = run_command(["ip", "neigh"], timeout=1)
+        if output.strip():
+            return parse_ip_neigh_hosts(output)
     hosts: list[dict[str, Any]] = []
     for raw_line in output.splitlines():
         match = ARP_LINE_RE.match(raw_line.strip())
@@ -160,10 +168,34 @@ def discover_arp_hosts() -> list[dict[str, Any]]:
     return hosts
 
 
+def parse_ip_neigh_hosts(output: str) -> list[dict[str, Any]]:
+    hosts: list[dict[str, Any]] = []
+    for raw_line in output.splitlines():
+        match = IP_NEIGH_LINE_RE.match(raw_line.strip())
+        if not match:
+            continue
+        ip = match.group("ip")
+        iface = match.group("iface")
+        mac = match.group("mac")
+        hosts.append(
+            {
+                "device_key": normalize_device_key(ip),
+                "display_name": ip,
+                "hostname": None,
+                "ip_address": ip,
+                "mac_address": mac,
+                "interface": iface,
+            }
+        )
+    return hosts
+
+
 def run_command(command: list[str], *, timeout: int) -> str:
     try:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         return completed.stdout or ""
+    except FileNotFoundError:
+        return ""
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout
         if stdout is None:

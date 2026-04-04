@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from media_library_manager.operations import apply_plan
+from media_library_manager.operations import apply_plan, delete_folder, move_folder, move_folder_contents
 
 
 class OperationTests(unittest.TestCase):
@@ -60,3 +60,56 @@ class OperationTests(unittest.TestCase):
             self.assertFalse(duplicate.exists())
             self.assertTrue((library_root / "Movie (2024)" / "Movie (2024).mkv").exists())
             self.assertTrue((library_root / "Movie (2024)" / "Movie (2024).srt").exists())
+
+    def test_move_folder_moves_directory_into_destination_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source_parent = tmp_path / "Downloads"
+            destination_parent = tmp_path / "Library"
+            source_folder = source_parent / "Movie (2024)"
+            source_parent.mkdir()
+            destination_parent.mkdir()
+            source_folder.mkdir()
+            (source_folder / "Movie (2024).mkv").write_bytes(b"movie")
+
+            preview = move_folder(source_folder, destination_parent, execute=False)
+            self.assertEqual(preview["status"], "dry-run")
+            self.assertTrue(source_folder.exists())
+
+            result = move_folder(source_folder, destination_parent, execute=True)
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(source_folder.exists())
+            self.assertTrue((destination_parent / "Movie (2024)" / "Movie (2024).mkv").exists())
+
+    def test_move_folder_contents_moves_children_into_existing_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source = tmp_path / "Downloads" / "Movie (2024)"
+            destination = tmp_path / "Library" / "Movie (2024)"
+            source.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            (source / "Movie (2024).mkv").write_bytes(b"movie")
+            (source / "Movie (2024).srt").write_text("sub", encoding="utf-8")
+
+            preview = move_folder_contents(source, destination, execute=False)
+            self.assertEqual(preview["status"], "dry-run")
+
+            result = move_folder_contents(source, destination, execute=True)
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(source.exists())
+            self.assertTrue((destination / "Movie (2024).mkv").exists())
+            self.assertTrue((destination / "Movie (2024).srt").exists())
+
+    def test_delete_folder_removes_directory_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            target = tmp_path / "DeleteMe" / "Nested"
+            target.mkdir(parents=True)
+            (target / "file.txt").write_text("x", encoding="utf-8")
+
+            preview = delete_folder(tmp_path / "DeleteMe", execute=False)
+            self.assertEqual(preview["status"], "dry-run")
+
+            result = delete_folder(tmp_path / "DeleteMe", execute=True)
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse((tmp_path / "DeleteMe").exists())

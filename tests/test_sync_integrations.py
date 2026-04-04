@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from media_library_manager.sync_integrations import default_integrations, normalize_base_url, sync_after_apply
+from media_library_manager.sync_integrations import default_integrations, list_provider_items, normalize_base_url, refresh_provider_item, sync_after_apply
 
 
 class FakeRadarrClient:
@@ -86,3 +86,19 @@ class SyncIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["summary"]["updated"], 2)
+
+    @patch("media_library_manager.sync_integrations.RadarrClient", FakeRadarrClient)
+    def test_list_provider_items_returns_radarr_items(self) -> None:
+        integrations = default_integrations()
+        integrations["radarr"].update({"enabled": True, "base_url": "http://radarr.local:7878", "api_key": "abc"})
+        result = list_provider_items(integrations, "radarr")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["items"][0]["title"], "Dune Part Two")
+
+    @patch("media_library_manager.sync_integrations.RadarrClient", FakeRadarrClient)
+    def test_refresh_provider_item_calls_provider_refresh(self) -> None:
+        integrations = default_integrations()
+        integrations["radarr"].update({"enabled": True, "base_url": "http://radarr.local:7878", "api_key": "abc"})
+        result = refresh_provider_item(integrations, "radarr", 1)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["item_id"], 1)

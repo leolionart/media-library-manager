@@ -6,6 +6,12 @@
     <meta name="theme-color" content="#10151c" />
     <title>Media Library Manager</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -20,13 +26,20 @@
         </div>
 
         <nav class="sidebar-nav">
-          <button class="nav-item active" data-view="overview">Overview</button>
-          <button class="nav-item" data-view="roots">Library Roots</button>
-          <button class="nav-item" data-view="integrations">Integrations</button>
-          <button class="nav-item" data-view="browser">LAN Browser</button>
-          <button class="nav-item" data-view="report">Duplicate Report</button>
-          <button class="nav-item" data-view="plan">Action Plan</button>
-          <button class="nav-item" data-view="activity">Activity Log</button>
+          <button class="nav-item active" data-view="operations" type="button">
+            <span class="nav-icon" data-icon="operations" aria-hidden="true"></span>
+            <span class="nav-copy">
+              <strong>Operations</strong>
+              <span>Detect duplicates and move folders between connected locations.</span>
+            </span>
+          </button>
+          <button class="nav-item" data-view="settings" type="button">
+            <span class="nav-icon" data-icon="settings" aria-hidden="true"></span>
+            <span class="nav-copy">
+              <strong>Settings</strong>
+              <span>Manage SMB profiles, connected folders, and Radarr or Sonarr.</span>
+            </span>
+          </button>
         </nav>
 
         <div class="sidebar-panel">
@@ -36,7 +49,7 @@
             <span id="serverStatus">Dashboard ready</span>
           </div>
           <div class="small-copy">
-            Centralized workspace for scanning roots, building a clean-up plan, and auditing every operation.
+            Operations stays focused on scan, duplicate review, and cut or paste moves. Settings holds the connection layer.
           </div>
         </div>
       </aside>
@@ -44,179 +57,224 @@
       <main class="main-content">
         <header class="topbar">
           <div class="topbar-copy">
-            <p class="eyebrow">Admin Dashboard</p>
-            <h1 id="viewTitle">Overview</h1>
-            <p id="viewDescription" class="topbar-subtitle">Scan storage roots, review duplicates, and consolidate media safely.</p>
-          </div>
-
-          <div class="topbar-actions">
-            <button id="scanButton" class="btn btn-primary">Run Scan</button>
-            <button id="planButton" class="btn">Build Plan</button>
-            <button id="dryRunButton" class="btn">Dry Run Apply</button>
+            <p class="eyebrow">Control Surface</p>
+            <h1 id="viewTitle">Operations</h1>
+            <p id="viewDescription" class="topbar-subtitle">
+              Scan connected folders, review duplicate suggestions, and move one folder from place A to place B.
+            </p>
           </div>
         </header>
 
-        <section class="system-strip">
-          <article class="system-card">
-            <p class="panel-label">Targets</p>
-            <strong id="targetHealthValue">Not configured</strong>
-            <span id="targetHealthMeta" class="muted">Set movie and series roots to enable canonical moves.</span>
-          </article>
-          <article class="system-card">
-            <p class="panel-label">Latest Activity</p>
-            <strong id="activityHeadline">No jobs yet</strong>
-            <span id="activityMeta" class="muted">Run scan, plan, or apply to populate the log.</span>
-          </article>
-          <article class="system-card">
-            <p class="panel-label">Queue Health</p>
-            <strong id="actionHealthValue">No plan</strong>
-            <span id="actionHealthMeta" class="muted">Build a plan to preview move, delete, and review actions.</span>
-          </article>
+        <section id="operationsView" class="view active">
+          <section class="system-strip operations-metrics-strip">
+            <article class="system-card system-card-compact">
+              <p class="panel-label">Connected Folders</p>
+              <strong id="connectedFolderCountValue">0</strong>
+              <span id="connectedFolderMeta" class="muted">Add one or more root folders in Settings.</span>
+            </article>
+            <article class="system-card system-card-compact">
+              <p class="panel-label">Duplicate Summary</p>
+              <strong id="duplicateSummaryValue">No scan</strong>
+              <span id="duplicateSummaryMeta" class="muted">Run scan to generate duplicate suggestions.</span>
+            </article>
+            <article class="system-card system-card-compact">
+              <p class="panel-label">Integrations</p>
+              <strong id="integrationSummaryValue">Disabled</strong>
+              <span id="integrationSummaryMeta" class="muted">Radarr and Sonarr are configured from Settings.</span>
+            </article>
+            <article class="system-card system-card-compact">
+              <p class="panel-label">Latest Scan</p>
+              <strong id="heroLastScanValue">Never</strong>
+              <span class="muted">Most recent duplicate analysis snapshot.</span>
+            </article>
+            <article class="system-card system-card-compact">
+              <p class="panel-label">Latest Plan</p>
+              <strong id="heroLastPlanValue">Never</strong>
+              <span class="muted">Latest generated action plan.</span>
+            </article>
+            <article class="system-card system-card-compact">
+              <p class="panel-label">Latest Apply</p>
+              <strong id="heroLastApplyValue">Never</strong>
+              <span class="muted">Most recent dry-run or execute result.</span>
+            </article>
+          </section>
+
+          <div class="content-grid workflow-layout">
+            <div class="workflow-main">
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <h3 class="title-with-icon">
+                      <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
+                      <span>Folder Move</span>
+                    </h3>
+                    <p>Use this when you want to cut a folder from source A and paste it into destination B.</p>
+                  </div>
+                </div>
+                <form id="moveFolderForm" class="form-stack">
+                  <label class="field">
+                    <span>Source Folder</span>
+                    <input id="moveSourceInput" name="source" placeholder="/mnt/downloads/Movie (2024)" required />
+                  </label>
+                  <label class="field">
+                    <span>Destination Parent Folder</span>
+                    <input id="moveDestinationInput" name="destination_parent" placeholder="/mnt/library/movies" required />
+                  </label>
+                  <div class="field-row">
+                    <button id="previewMoveButton" class="btn" type="button">Preview Move</button>
+                    <button class="btn btn-primary" type="submit">Move Folder</button>
+                  </div>
+                </form>
+                <div id="moveFolderSummary" class="collection compact"></div>
+              </article>
+
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <h3 class="title-with-icon">
+                      <span class="icon-badge" data-icon="library" aria-hidden="true"></span>
+                      <span>Folder List</span>
+                    </h3>
+                    <p>The main workspace is a list of connected folders. Use the action dropdown on each row to work from that folder.</p>
+                  </div>
+                </div>
+                <div id="operationsRootsList" class="collection"></div>
+              </article>
+
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <h3 class="title-with-icon">
+                      <span class="icon-badge" data-icon="operations" aria-hidden="true"></span>
+                      <span>Duplicate Detection</span>
+                    </h3>
+                    <p>Scan connected folders, build a plan from duplicate findings, then dry-run or execute.</p>
+                  </div>
+                  <div class="header-actions">
+                    <button id="scanButton" class="btn btn-primary" type="button">Run Scan</button>
+                    <button id="planButton" class="btn" type="button">Build Plan</button>
+                    <button id="dryRunButton" class="btn" type="button">Dry Run Apply</button>
+                    <button id="executePlanButton" class="btn btn-danger" type="button">Execute Apply</button>
+                  </div>
+                </div>
+                <div class="workflow-summary-grid compact" id="operationSummaryCards"></div>
+                <label class="toggle-row">
+                  <span>Delete lower-quality versions automatically when building plan</span>
+                  <input id="deleteLowerQuality" type="checkbox" />
+                </label>
+                <label class="toggle-row">
+                  <span>Prune empty folders after apply</span>
+                  <input id="pruneEmptyDirs" type="checkbox" checked />
+                </label>
+              </article>
+
+              <div class="content-grid two-up">
+                <article class="card">
+                  <div class="card-header">
+                    <div>
+                      <h3>Exact Duplicates</h3>
+                      <p>Exact file matches suggested for dedupe.</p>
+                    </div>
+                    <span id="exactDuplicateCount" class="pill">0</span>
+                  </div>
+                  <div id="exactDuplicatesList" class="collection compact"></div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <div>
+                      <h3>Media Collisions</h3>
+                      <p>Same movie or episode found in more than one location.</p>
+                    </div>
+                    <span id="collisionCount" class="pill">0</span>
+                  </div>
+                  <div id="reportList" class="collection compact"></div>
+                </article>
+              </div>
+
+              <div class="content-grid two-up">
+                <article class="card">
+                  <div class="card-header">
+                    <div>
+                      <h3>Action Plan</h3>
+                      <p>Preview move, delete, and review actions generated from the latest scan.</p>
+                    </div>
+                    <span id="planActionCount" class="pill">0</span>
+                  </div>
+                  <div id="planSummaryCards" class="workflow-summary-grid compact"></div>
+                  <div id="planList" class="collection compact"></div>
+                </article>
+
+                <article class="card">
+                  <div class="card-header">
+                    <div>
+                      <h3>Apply Result</h3>
+                      <p>Latest dry run or execute result.</p>
+                    </div>
+                    <span id="applyResultBadge" class="pill">No run</span>
+                  </div>
+                  <div id="applySummary" class="collection compact"></div>
+                </article>
+              </div>
+            </div>
+
+            <aside class="workflow-side">
+              <article class="card process-card">
+                <div class="card-header">
+                  <div>
+                    <h3 class="title-with-icon">
+                      <span class="icon-badge" data-icon="logs" aria-hidden="true"></span>
+                      <span>Process Logs</span>
+                    </h3>
+                    <p>Current job progress stays here while scan, plan, or apply is running.</p>
+                  </div>
+                </div>
+                <div id="currentJobSummary" class="process-summary"></div>
+                <div id="currentJobLogs" class="collection compact process-log-list"></div>
+              </article>
+
+              <article class="card process-card">
+                <div class="card-header">
+                  <div>
+                    <h3 class="title-with-icon">
+                      <span class="icon-badge" data-icon="activity" aria-hidden="true"></span>
+                      <span>Recent Activity</span>
+                    </h3>
+                    <p>Latest configuration changes and operational events.</p>
+                  </div>
+                </div>
+                <div id="recentActivityList" class="collection compact"></div>
+              </article>
+            </aside>
+          </div>
         </section>
 
-        <section id="overviewView" class="view active">
-          <div class="hero-card">
-            <div class="hero-copy">
-              <p class="eyebrow">Library Status</p>
-              <h2>Consolidate duplicate media with one governed workflow.</h2>
-              <p class="lead">
-                Track roots, browse mounted shares, inspect collisions, and review operational logs before touching real files.
-              </p>
-            </div>
-
-            <div class="hero-stack">
-              <div class="hero-chip">
-                <span class="hero-chip-label">Last Scan</span>
-                <strong id="lastScanValue">Never</strong>
-              </div>
-              <div class="hero-chip">
-                <span class="hero-chip-label">Last Plan</span>
-                <strong id="lastPlanValue">Never</strong>
-              </div>
-              <div class="hero-chip">
-                <span class="hero-chip-label">Last Apply</span>
-                <strong id="lastApplyValue">Never</strong>
-              </div>
-            </div>
-          </div>
-
-          <section id="stats" class="stats-grid"></section>
-
-          <div class="content-grid two-up">
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Configured Roots</h3>
-                  <p>Roots currently included in scan scope.</p>
-                </div>
-                <span id="rootCount" class="pill">0</span>
-              </div>
-              <div id="overviewRoots" class="collection compact"></div>
-            </article>
-
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Mounted LAN Shares</h3>
-                  <p>Mounted network filesystems visible from this machine.</p>
-                </div>
-                <span id="mountCount" class="pill">0</span>
-              </div>
-              <div id="mountsList" class="collection compact"></div>
-            </article>
-          </div>
-
+        <section id="settingsView" class="view view-stack">
           <article class="card">
             <div class="card-header">
               <div>
-                <h3>Recent Activity</h3>
-                <p>Latest configuration changes and scan/apply history.</p>
+                <h3 class="title-with-icon">
+                  <span class="icon-badge" data-icon="library" aria-hidden="true"></span>
+                  <span>Connected Folders</span>
+                </h3>
+                <p>Add root folders through the modal. Most of the time one root per disk or share is enough.</p>
               </div>
-              <button class="btn btn-small" data-view-jump="activity">Open Log</button>
+              <div class="header-actions">
+                <button id="openAddFolderModalButton" class="btn btn-primary" type="button">Add Folder</button>
+              </div>
             </div>
-            <div id="activityOverviewList" class="collection"></div>
+            <div id="settingsRootsList" class="collection"></div>
           </article>
-        </section>
 
-        <section id="rootsView" class="view">
           <div class="content-grid two-up">
             <article class="card">
               <div class="card-header">
                 <div>
-                  <h3>Add Scan Root</h3>
-                  <p>Add a local disk path or a mounted LAN share path.</p>
-                </div>
-              </div>
-              <form id="rootForm" class="form-stack">
-                <label class="field">
-                  <span>Path</span>
-                  <input id="rootPathInput" name="path" placeholder="/Volumes/NAS/Movies" required />
-                </label>
-                <div class="field-row">
-                  <label class="field">
-                    <span>Label</span>
-                    <input name="label" placeholder="Primary Movies" />
-                  </label>
-                  <label class="field">
-                    <span>Priority</span>
-                    <input name="priority" type="number" value="50" />
-                  </label>
-                </div>
-                <label class="field">
-                  <span>Kind</span>
-                  <select name="kind">
-                    <option value="mixed">Mixed</option>
-                    <option value="movie">Movie</option>
-                    <option value="series">Series</option>
-                  </select>
-                </label>
-                <button type="submit" class="btn btn-primary">Add Root</button>
-              </form>
-            </article>
-
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Canonical Targets</h3>
-                  <p>Define managed destinations for consolidated files.</p>
-                </div>
-              </div>
-              <form id="targetsForm" class="form-stack">
-                <label class="field">
-                  <span>Movie Root</span>
-                  <input name="movie_root" placeholder="/Volumes/MediaPool/Movies" />
-                </label>
-                <label class="field">
-                  <span>Series Root</span>
-                  <input name="series_root" placeholder="/Volumes/MediaPool/Series" />
-                </label>
-                <label class="field">
-                  <span>Review Root</span>
-                  <input name="review_root" placeholder="/Volumes/MediaPool/_review" />
-                </label>
-                <button type="submit" class="btn">Save Targets</button>
-              </form>
-            </article>
-          </div>
-
-          <article class="card">
-            <div class="card-header">
-              <div>
-                <h3>Root Inventory</h3>
-                <p>These folders are scanned when you run the library scan.</p>
-              </div>
-            </div>
-            <div id="rootsList" class="collection"></div>
-          </article>
-        </section>
-
-        <section id="integrationsView" class="view">
-          <div class="content-grid two-up">
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Radarr</h3>
-                  <p>Configure movie library sync after files are moved into the managed root.</p>
+                  <h3 class="title-with-icon">
+                    <span class="icon-badge" data-icon="radarr" aria-hidden="true"></span>
+                    <span>Radarr</span>
+                  </h3>
+                  <p>Keep movie path updates available for managed folders and post-move refresh.</p>
                 </div>
               </div>
               <form id="radarrForm" class="form-stack">
@@ -234,7 +292,7 @@
                 </label>
                 <label class="field">
                   <span>Managed Root Folder</span>
-                  <input name="root_folder_path" placeholder="/Volumes/MediaPool/Movies" />
+                  <input name="root_folder_path" placeholder="/mnt/library/movies" />
                 </label>
               </form>
             </article>
@@ -242,8 +300,11 @@
             <article class="card">
               <div class="card-header">
                 <div>
-                  <h3>Sonarr</h3>
-                  <p>Configure series path updates so Sonarr tracks the new canonical show folder.</p>
+                  <h3 class="title-with-icon">
+                    <span class="icon-badge" data-icon="sonarr" aria-hidden="true"></span>
+                    <span>Sonarr</span>
+                  </h3>
+                  <p>Keep series path updates and refresh behavior separate from the folder setup flow.</p>
                 </div>
               </div>
               <form id="sonarrForm" class="form-stack">
@@ -261,7 +322,7 @@
                 </label>
                 <label class="field">
                   <span>Managed Root Folder</span>
-                  <input name="root_folder_path" placeholder="/Volumes/MediaPool/Series" />
+                  <input name="root_folder_path" placeholder="/mnt/library/series" />
                 </label>
               </form>
             </article>
@@ -271,8 +332,11 @@
             <article class="card">
               <div class="card-header">
                 <div>
-                  <h3>Sync Options</h3>
-                  <p>Control when the dashboard pushes new paths back into Radarr and Sonarr.</p>
+                  <h3 class="title-with-icon">
+                    <span class="icon-badge" data-icon="sync" aria-hidden="true"></span>
+                    <span>Integration Options</span>
+                  </h3>
+                  <p>Save connection settings and test them without leaving Settings.</p>
                 </div>
               </div>
               <form id="integrationOptionsForm" class="form-stack">
@@ -281,7 +345,7 @@
                   <input name="sync_after_apply" type="checkbox" checked />
                 </label>
                 <label class="toggle-row">
-                  <span>Trigger refresh/rescan after update</span>
+                  <span>Trigger refresh or rescan after update</span>
                   <input name="rescan_after_update" type="checkbox" checked />
                 </label>
                 <label class="toggle-row">
@@ -299,8 +363,11 @@
             <article class="card">
               <div class="card-header">
                 <div>
-                  <h3>Connection Status</h3>
-                  <p>Connectivity validation and latest synchronization result.</p>
+                  <h3 class="title-with-icon">
+                    <span class="icon-badge" data-icon="status" aria-hidden="true"></span>
+                    <span>Integration Status</span>
+                  </h3>
+                  <p>Connectivity status and the latest sync result.</p>
                 </div>
               </div>
               <div id="integrationTestResults" class="collection compact"></div>
@@ -309,158 +376,188 @@
           </div>
         </section>
 
-        <section id="browserView" class="view">
-          <article class="card browser-discovery-card">
-            <div class="card-header">
-              <div>
-                <h3>LAN Devices</h3>
-                <p>Discover SMB, NFS, and AFP hosts on the local network, even when they are not mounted yet.</p>
-              </div>
-              <div class="header-actions">
-                <span id="lanDeviceCount" class="pill">0</span>
-                <button id="refreshLanDevicesButton" class="btn btn-small">Refresh LAN</button>
-              </div>
-            </div>
-            <div id="lanDevicesList" class="collection"></div>
-          </article>
-
-          <div class="content-grid browser-layout">
-            <article class="card browser-sidebar-card">
-              <div class="card-header">
-                <div>
-                  <h3>Share Browser</h3>
-                  <p>Browse mounted LAN shares and local paths, then add the current folder as a scan root.</p>
-                </div>
-              </div>
-              <div id="browserFavorites" class="collection compact"></div>
-            </article>
-
-            <article class="card browser-main-card">
-              <div class="card-header">
-                <div>
-                  <h3>Filesystem</h3>
-                  <p id="browserMountLabel">Browse folders accessible to this machine.</p>
-                </div>
-                <div class="header-actions">
-                  <button id="browseUpButton" class="btn btn-small">Up</button>
-                  <button id="addCurrentFolderButton" class="btn btn-primary btn-small">Add Current Folder As Root</button>
-                </div>
-              </div>
-
-              <div class="browser-toolbar">
-                <input id="browserPathInput" placeholder="/Volumes" />
-                <button id="browseGoButton" class="btn">Go</button>
-              </div>
-
-              <div id="breadcrumbs" class="breadcrumbs"></div>
-              <div id="browserEntries" class="table-list"></div>
-            </article>
-          </div>
-        </section>
-
-        <section id="reportView" class="view">
-          <div class="content-grid two-up">
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Exact Duplicate Groups</h3>
-                  <p>Byte-identical files found across roots.</p>
-                </div>
-                <span id="exactDuplicateCount" class="pill">0</span>
-              </div>
-              <div id="exactDuplicatesList" class="collection"></div>
-            </article>
-
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Media Collisions</h3>
-                  <p>Same movie or episode stored in multiple places.</p>
-                </div>
-                <span id="collisionCount" class="pill">0</span>
-              </div>
-              <div id="reportList" class="collection"></div>
-            </article>
-          </div>
-        </section>
-
-        <section id="planView" class="view">
-          <div class="content-grid two-up">
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Plan Controls</h3>
-                  <p>Generate cleanup actions, preview them, then execute when ready.</p>
-                </div>
-              </div>
-              <div class="form-stack">
-                <label class="toggle-row">
-                  <span>Delete lower-quality versions automatically</span>
-                  <input id="deleteLowerQuality" type="checkbox" />
-                </label>
-                <label class="toggle-row">
-                  <span>Prune empty folders after apply</span>
-                  <input id="pruneEmptyDirs" type="checkbox" checked />
-                </label>
-                <div class="field-row">
-                  <button id="buildPlanButton" class="btn btn-primary">Build Plan</button>
-                  <button id="executePlanButton" class="btn btn-danger">Execute Plan</button>
-                </div>
-              </div>
-            </article>
-
-            <article class="card">
-              <div class="card-header">
-                <div>
-                  <h3>Apply Result</h3>
-                  <p>Dry-run or execute result for the latest plan.</p>
-                </div>
-              </div>
-              <div id="applySummary" class="collection compact"></div>
-            </article>
-          </div>
-
-          <article class="card">
-            <div class="card-header">
-              <div>
-                <h3>Action Queue</h3>
-                <p>Generated move, delete, and review actions.</p>
-              </div>
-              <span id="planActionCount" class="pill">0</span>
-            </div>
-            <div id="planList" class="collection"></div>
-          </article>
-        </section>
-
-        <section id="activityView" class="view">
-          <div class="content-grid log-layout">
-            <article class="card log-list-card">
-              <div class="card-header">
-                <div>
-                  <h3>Event Timeline</h3>
-                  <p>Persistent history of configuration changes and runtime jobs.</p>
-                </div>
-                <span id="activityCount" class="pill">0</span>
-              </div>
-              <div id="activityList" class="collection compact"></div>
-            </article>
-
-            <article class="card log-detail-card">
-              <div class="card-header">
-                <div>
-                  <h3>Event Detail</h3>
-                  <p>Inspect summary metrics, structured payload, and process preview.</p>
-                </div>
-              </div>
-              <div id="activityDetail" class="log-detail-empty">
-                Select an event from the timeline to inspect the process details.
-              </div>
-            </article>
-          </div>
-        </section>
-
         <div id="message" class="toast" hidden></div>
       </main>
+    </div>
+
+    <div id="addFolderModal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-close-modal="add-folder"></div>
+      <div class="modal-card">
+        <div class="card-header modal-header">
+          <div>
+            <h3 class="title-with-icon">
+              <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
+              <span>Add Connected Folder</span>
+            </h3>
+            <p>Connect to the SMB host first, then pick the mounted runtime folder the app can actually scan and move.</p>
+          </div>
+          <button class="btn btn-small" type="button" data-close-modal="add-folder">Close</button>
+        </div>
+        <div class="form-stack">
+          <article class="card modal-section-card">
+            <div class="card-header">
+              <div>
+                <h3 class="title-with-icon">
+                  <span class="icon-badge" data-icon="network" aria-hidden="true"></span>
+                  <span>Step 1. Connection</span>
+                </h3>
+                <p>Choose a saved profile, pick a discovered host, or enter an IP manually. Once the connection is ready, the folder step opens below.</p>
+              </div>
+            </div>
+            <div class="form-stack">
+            <div class="field-row modal-connection-row">
+              <label class="field">
+                <span>Saved Profile</span>
+                  <select id="savedLanConnectionSelect">
+                    <option value="">Select saved profile</option>
+                  </select>
+              </label>
+              <div class="field modal-inline-actions">
+                  <span>Fallback</span>
+                  <div class="field-row modal-button-row">
+                    <button id="useSavedLanConnectionButton" class="btn btn-small" type="button">Re-Apply</button>
+                    <button id="openManualSmbButton" class="btn btn-small" type="button">Enter Manually</button>
+                    <button id="useDirectPathButton" class="btn btn-small" type="button">Direct Path</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card compact-nested-card">
+                <div class="row split compact-subhead">
+                  <strong>Discovered Hosts</strong>
+                  <div class="item-meta">
+                    <span id="lanDeviceCount" class="pill small">0</span>
+                    <button id="refreshLanDevicesButton" class="btn btn-small" type="button">Refresh LAN</button>
+                  </div>
+                </div>
+                <div id="lanDevicesList" class="compact-chip-grid"></div>
+              </div>
+
+              <form id="lanConnectionForm" class="form-stack" hidden>
+                <input name="id" type="hidden" />
+                <div class="field-row">
+                  <label class="field">
+                    <span>Label</span>
+                    <input name="label" placeholder="Media NAS" required />
+                  </label>
+                  <label class="field">
+                    <span>Host</span>
+                    <input name="host" placeholder="192.168.1.20" required />
+                  </label>
+                </div>
+                <div class="field-row">
+                  <label class="field">
+                    <span>Share Name</span>
+                    <input name="share_name" placeholder="Auto-detect after Test SMB" />
+                  </label>
+                  <label class="field">
+                    <span>Base Path</span>
+                    <input name="base_path" placeholder="Pick from share preview or enter manually" />
+                  </label>
+                </div>
+                <div class="field-row">
+                  <label class="field">
+                    <span>Username</span>
+                    <input name="username" placeholder="plex" required />
+                  </label>
+                  <label class="field">
+                    <span>Password</span>
+                    <input name="password" type="password" placeholder="Stored only when provided" />
+                  </label>
+                </div>
+                <div class="field-row">
+                  <button class="btn btn-primary" type="submit">Save SMB</button>
+                  <button id="testLanConnectionButton" class="btn" type="button">Test SMB</button>
+                  <button id="resetLanConnectionButton" class="btn" type="button">Reset</button>
+                </div>
+              </form>
+
+              <div id="selectedConnectionSummary" class="collection compact"></div>
+              <div id="lanConnectionTestSummary" class="collection compact"></div>
+            </div>
+          </article>
+
+          <article id="folderStepCard" class="card modal-section-card" hidden>
+            <form id="addFolderForm" class="form-stack">
+              <div class="card-header compact-header">
+                <div>
+                  <h3 class="title-with-icon">
+                    <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
+                    <span>Step 2. Folder</span>
+                  </h3>
+                  <p>The connection above is already selected. Adjust the folder fields only if needed.</p>
+                </div>
+              </div>
+              <div id="folderConnectionSummary" class="collection compact"></div>
+              <div class="field-row">
+                <label class="field">
+                  <span>Label</span>
+                  <input name="label" placeholder="Movies Disk 1" />
+                </label>
+                <label class="field">
+                  <span>Folder Kind</span>
+                  <select name="kind">
+                    <option value="mixed">Mixed</option>
+                    <option value="movie">Movie</option>
+                    <option value="series">Series</option>
+                  </select>
+                </label>
+              </div>
+              <label id="runtimePathField" class="field">
+                <span>Runtime Path</span>
+                <input name="path" placeholder="/mnt/media/movies" required />
+              </label>
+              <div id="runtimePathAssist" class="collection compact"></div>
+              <div class="field-row">
+                <label class="field">
+                  <span>Priority</span>
+                  <input name="priority" type="number" value="50" />
+                </label>
+                <label class="field">
+                  <span>SMB Profile</span>
+                  <select name="connection_id" id="addFolderConnectionSelect"></select>
+                </label>
+              </div>
+              <div class="field-row">
+                <button class="btn btn-primary" type="submit">Add Folder</button>
+                <button class="btn" type="button" data-close-modal="add-folder">Cancel</button>
+              </div>
+            </form>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div id="providerMoveModal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-close-modal="provider-move"></div>
+      <div class="modal-card">
+        <div class="card-header modal-header">
+          <div>
+            <h3 class="title-with-icon">
+              <span class="icon-badge" data-icon="sync" aria-hidden="true"></span>
+              <span id="providerMoveModalTitle">Move To Provider</span>
+            </h3>
+            <p>Select the movie or series already managed by the provider, then move the folder contents into that existing managed path.</p>
+          </div>
+          <button class="btn btn-small" type="button" data-close-modal="provider-move">Close</button>
+        </div>
+        <form id="providerMoveForm" class="form-stack">
+          <input name="provider" type="hidden" />
+          <label class="field">
+            <span>Source Folder</span>
+            <input name="source" readonly />
+          </label>
+          <label class="field">
+            <span>Provider Item</span>
+            <select name="item_id" id="providerItemSelect"></select>
+          </label>
+          <div id="providerItemMeta" class="collection compact"></div>
+          <div class="field-row">
+            <button id="previewProviderMoveButton" class="btn" type="button">Preview</button>
+            <button class="btn btn-primary" type="submit">Move And Refresh</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <script src="/app.js"></script>

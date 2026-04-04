@@ -30,7 +30,7 @@ class MountInfo:
 def list_mounts() -> list[MountInfo]:
     try:
         result = subprocess.run(["mount"], capture_output=True, text=True, check=False, timeout=3)
-    except subprocess.TimeoutExpired:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return fallback_mounts()
     mounts: list[MountInfo] = []
     for line in result.stdout.splitlines():
@@ -107,9 +107,9 @@ def browse_path(raw_path: str | None) -> dict[str, Any]:
 
 def normalize_browse_path(raw_path: str | None) -> Path:
     if not raw_path:
-        volumes = Path("/Volumes")
-        if volumes.exists():
-            return volumes.resolve()
+        for candidate in [Path("/libraries"), Path("/mnt"), Path("/media"), Path("/Volumes")]:
+            if candidate.exists():
+                return candidate.resolve()
         return Path("/").resolve()
     return Path(raw_path).expanduser().resolve()
 
@@ -137,7 +137,7 @@ def build_favorites(mounts: list[MountInfo]) -> list[dict[str, Any]]:
             continue
         seen.add(payload["mount_point"])
         favorites.append(payload)
-    for fallback in [Path("/Volumes"), Path("/")]:
+    for fallback in [Path("/libraries"), Path("/mnt"), Path("/media"), Path("/Volumes"), Path("/")]:
         if fallback.exists() and str(fallback) not in seen:
             favorites.append(
                 {
@@ -167,9 +167,10 @@ def find_mount_for_path(path: Path, mounts: list[MountInfo]) -> MountInfo | None
 def fallback_mounts() -> list[MountInfo]:
     mounts: list[MountInfo] = []
     seen: set[str] = set()
-    volumes_root = Path("/Volumes")
-    if volumes_root.exists():
-        for child in sorted(volumes_root.iterdir(), key=lambda item: item.name.lower()):
+    for root in [Path("/libraries"), Path("/mnt"), Path("/media"), Path("/Volumes")]:
+        if not root.exists():
+            continue
+        for child in sorted(root.iterdir(), key=lambda item: item.name.lower()):
             if not child.is_dir():
                 continue
             key = str(child)
@@ -185,5 +186,5 @@ def fallback_mounts() -> list[MountInfo]:
                 )
             )
     if "/" not in seen:
-        mounts.append(MountInfo(source="local", mount_point=Path("/"), filesystem="apfs", is_network=False))
+        mounts.append(MountInfo(source="local", mount_point=Path("/"), filesystem="directory", is_network=False))
     return mounts

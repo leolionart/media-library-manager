@@ -29,6 +29,9 @@ That file is intentionally organized around three layers of tokens:
   - `.field`
   - `.collection-item`
   - `.empty-state`
+- Reuse the shared icon patterns for dashboard chrome and section headings:
+  - `.nav-icon`
+  - `.icon-badge`
 - For component variants, prefer local CSS custom properties on the component class rather than copy-pasting whole blocks.
 
 ## Visual direction

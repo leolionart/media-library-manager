@@ -60,7 +60,7 @@ def add_shared_root_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="PRIORITY:PATH",
-        help="Root with explicit priority, for example 100:/Volumes/Media/Movies.",
+        help="Root with explicit priority, for example 100:/libraries/media/movies.",
     )
 
 

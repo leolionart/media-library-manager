@@ -10,13 +10,23 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .browser import browse_path, list_mounts
+from .lan_connections import (
+    browse_smb_path,
+    create_smb_directory,
+    delete_smb_directory,
+    remove_smb_connection,
+    resolve_smb_connection,
+    resolve_smb_connection_for_test,
+    test_smb_connection,
+    upsert_smb_connection,
+)
 from .models import LibraryTargets, RootConfig
 from .network import discover_lan_devices
-from .operations import apply_plan
+from .operations import apply_plan, delete_folder, move_folder, move_folder_contents
 from .planner import load_report, plan_actions
 from .scanner import scan_roots
 from .state import StateStore
-from .sync_integrations import default_integrations, sync_after_apply, test_integrations
+from .sync_integrations import default_integrations, list_provider_items, refresh_provider_item, sync_after_apply, test_integrations
 
 
 PLAN_PROGRESS_TOTAL = 3
@@ -35,6 +45,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
+        self._run_with_api_error_boundary(self._do_get)
+
+    def _do_get(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self._serve_static("index.html", "text/html; charset=utf-8")
@@ -60,6 +73,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/lan/discover":
             self._send_json(discover_lan_devices())
             return
+        if parsed.path == "/api/lan/connections":
+            self._send_json(self.store.api_payload()["lan_connections"])
+            return
+        if parsed.path == "/api/smb/browse":
+            params = parse_qs(parsed.query)
+            connection_id = params.get("connection_id", [None])[0]
+            if not connection_id:
+                self._send_json({"error": "missing connection_id query parameter"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            connection = resolve_smb_connection(self.store.load_lan_connections(), connection_id)
+            if connection is None:
+                self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
+                return
+            result = browse_smb_path(connection, params.get("path", [None])[0])
+            if result.get("status") != "success":
+                self._send_json({"error": result.get("message", "SMB browse failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json(result)
+            return
         if parsed.path == "/api/browse":
             params = parse_qs(parsed.query)
             requested_path = params.get("path", [None])[0]
@@ -68,9 +100,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (FileNotFoundError, NotADirectoryError, PermissionError) as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
+        if parsed.path in {"/api/integrations/radarr/items", "/api/integrations/sonarr/items"}:
+            provider = "radarr" if "radarr" in parsed.path else "sonarr"
+            result = list_provider_items(self.store.load_integrations(), provider)
+            if result.get("status") != "success":
+                self._send_json({"error": result.get("message", "provider list failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json(result)
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
+        self._run_with_api_error_boundary(self._do_post)
+
+    def _do_post(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/roots":
             payload = self._read_json()
@@ -88,6 +131,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "path": str(root.path),
                     "priority": root.priority,
                     "kind": root.kind,
+                    "connection_id": root.connection_id,
+                    "connection_label": root.connection_label,
                 },
             )
             self._send_json(self.store.api_payload(), status=HTTPStatus.CREATED)
@@ -143,6 +188,176 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 details={"results": results},
             )
             self._send_json({"results": results})
+            return
+
+        if parsed.path == "/api/lan/connections":
+            payload = self._read_json()
+            connections, saved = upsert_smb_connection(self.store.load_lan_connections(), payload)
+            self.store.save_lan_connections(connections)
+            self.store.append_activity(
+                kind="lan",
+                status="success",
+                message="Saved SMB connection profile.",
+                details={
+                    "id": saved["id"],
+                    "label": saved["label"],
+                    "host": saved["host"],
+                    "share_name": saved["share_name"],
+                    "base_path": saved["base_path"],
+                    "enabled": saved["enabled"],
+                },
+            )
+            self._send_json(self.store.api_payload()["lan_connections"], status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/lan/connections/test":
+            payload = self._read_json()
+            connection = resolve_smb_connection_for_test(self.store.load_lan_connections(), payload)
+            result = test_smb_connection(connection)
+            activity_status = "success" if result.get("status") == "success" else "error"
+            self.store.append_activity(
+                kind="lan",
+                status=activity_status,
+                message="SMB connection test finished.",
+                details={
+                    "id": connection["id"],
+                    "label": connection["label"],
+                    "host": connection["host"],
+                    "share_name": connection["share_name"],
+                    "result": result,
+                },
+            )
+            self._send_json(result, status=HTTPStatus.OK if result.get("status") == "success" else HTTPStatus.BAD_REQUEST)
+            return
+
+        if parsed.path == "/api/managed-folders":
+            payload = self._read_json()
+            connection_id = str(payload.get("connection_id") or "").strip()
+            path = str(payload.get("path") or "").strip()
+            connection = resolve_smb_connection(self.store.load_lan_connections(), connection_id)
+            if connection is None:
+                self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
+                return
+            state, saved = self.store.add_managed_folder(
+                {
+                    "connection_id": connection["id"],
+                    "connection_label": connection["label"],
+                    "share_name": connection["share_name"],
+                    "path": path,
+                    "label": payload.get("label") or Path(path or "/").name or connection["share_name"],
+                }
+            )
+            self.store.append_activity(
+                kind="folder",
+                status="success",
+                message="Added managed SMB folder.",
+                details={"id": saved["id"], "connection_id": saved["connection_id"], "path": saved["path"]},
+            )
+            self._send_json({"managed_folders": state["managed_folders"]}, status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/smb/folders":
+            payload = self._read_json()
+            connection_id = str(payload.get("connection_id") or "").strip()
+            connection = resolve_smb_connection(self.store.load_lan_connections(), connection_id)
+            if connection is None:
+                self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
+                return
+            result = create_smb_directory(connection, payload.get("parent_path"), str(payload.get("folder_name") or ""))
+            if result.get("status") != "success":
+                self.store.append_activity(
+                    kind="folder",
+                    status="error",
+                    message="SMB folder creation failed.",
+                    details={"connection_id": connection_id, "parent_path": payload.get("parent_path"), "error": result.get("message")},
+                )
+                self._send_json({"error": result.get("message", "SMB folder creation failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.append_activity(
+                kind="folder",
+                status="success",
+                message="Created SMB folder.",
+                details={"connection_id": connection_id, "path": result["path"]},
+            )
+            self._send_json(result, status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/folders/move":
+            payload = self._read_json()
+            result = move_folder(
+                str(payload.get("source") or ""),
+                str(payload.get("destination_parent") or ""),
+                execute=bool(payload.get("execute")),
+            )
+            if result.get("status") == "error":
+                self.store.append_activity(
+                    kind="folder",
+                    status="error",
+                    message="Folder move failed.",
+                    details={
+                        "source": payload.get("source"),
+                        "destination_parent": payload.get("destination_parent"),
+                        "error": result.get("message"),
+                    },
+                )
+                self._send_json({"error": result.get("message", "folder move failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.append_activity(
+                kind="folder",
+                status="success" if result.get("status") == "applied" else "running",
+                message="Folder move preview created." if result.get("status") == "dry-run" else "Folder moved.",
+                details=result,
+            )
+            self._send_json(result)
+            return
+
+        if parsed.path == "/api/folders/move-to-provider":
+            payload = self._read_json()
+            provider = str(payload.get("provider") or "").strip()
+            item_id = int(payload.get("item_id") or 0)
+            destination = str(payload.get("destination") or "").strip()
+            result = move_folder_contents(
+                str(payload.get("source") or ""),
+                destination,
+                execute=bool(payload.get("execute")),
+            )
+            if result.get("status") == "error":
+                self.store.append_activity(
+                    kind="folder",
+                    status="error",
+                    message="Provider folder move failed.",
+                    details={"provider": provider, "source": payload.get("source"), "destination": destination, "error": result.get("message")},
+                )
+                self._send_json({"error": result.get("message", "provider folder move failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            refresh_result = None
+            if result.get("status") == "applied":
+                refresh_result = refresh_provider_item(self.store.load_integrations(), provider, item_id)
+                if refresh_result.get("status") != "success":
+                    self.store.append_activity(
+                        kind="integration",
+                        status="error",
+                        message=f"{provider.capitalize()} refresh after folder move failed.",
+                        details=refresh_result,
+                    )
+                    self._send_json(
+                        {
+                            "error": refresh_result.get("message", "provider refresh failed"),
+                            "move_result": result,
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+
+            message = "Provider folder move preview created." if result.get("status") == "dry-run" else "Folder moved into provider path."
+            self.store.append_activity(
+                kind="folder",
+                status="success" if result.get("status") == "applied" else "running",
+                message=message,
+                details={"provider": provider, "item_id": item_id, "destination": destination, "move_result": result, "refresh_result": refresh_result},
+            )
+            self._send_json({"move_result": result, "refresh_result": refresh_result})
             return
 
         if parsed.path == "/api/sync":
@@ -404,7 +619,101 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:
+        self._run_with_api_error_boundary(self._do_delete)
+
+    def _do_delete(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/folders":
+            params = parse_qs(parsed.query)
+            path_value = params.get("path", [None])[0]
+            execute = params.get("execute", ["false"])[0].lower() == "true"
+            if not path_value:
+                self._send_json({"error": "missing path query parameter"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            result = delete_folder(path_value, execute=execute)
+            if result.get("status") == "error":
+                self.store.append_activity(
+                    kind="folder",
+                    status="error",
+                    message="Folder delete failed.",
+                    details={"path": path_value, "error": result.get("message")},
+                )
+                self._send_json({"error": result.get("message", "folder delete failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.append_activity(
+                kind="folder",
+                status="success" if result.get("status") == "applied" else "running",
+                message="Folder delete preview created." if result.get("status") == "dry-run" else "Folder deleted.",
+                details=result,
+            )
+            self._send_json(result)
+            return
+        if parsed.path == "/api/managed-folders":
+            params = parse_qs(parsed.query)
+            folder_id = params.get("id", [None])[0]
+            if not folder_id:
+                self._send_json({"error": "missing id query parameter"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            state, removed = self.store.remove_managed_folder(folder_id)
+            if removed is None:
+                self._send_json({"error": f"managed folder not found: {folder_id}"}, status=HTTPStatus.NOT_FOUND)
+                return
+            self.store.append_activity(
+                kind="folder",
+                status="success",
+                message="Removed managed SMB folder.",
+                details={"id": removed["id"], "path": removed["path"], "connection_id": removed["connection_id"]},
+            )
+            self._send_json({"managed_folders": state["managed_folders"]})
+            return
+        if parsed.path == "/api/smb/folders":
+            params = parse_qs(parsed.query)
+            connection_id = params.get("connection_id", [None])[0]
+            path_value = params.get("path", [None])[0]
+            if not connection_id or not path_value:
+                self._send_json({"error": "missing connection_id or path query parameter"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            connection = resolve_smb_connection(self.store.load_lan_connections(), connection_id)
+            if connection is None:
+                self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
+                return
+            result = delete_smb_directory(connection, path_value)
+            if result.get("status") != "success":
+                self.store.append_activity(
+                    kind="folder",
+                    status="error",
+                    message="SMB folder deletion failed.",
+                    details={"connection_id": connection_id, "path": path_value, "error": result.get("message")},
+                )
+                self._send_json({"error": result.get("message", "SMB folder deletion failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.append_activity(
+                kind="folder",
+                status="success",
+                message="Deleted SMB folder.",
+                details={"connection_id": connection_id, "path": path_value},
+            )
+            self._send_json(result)
+            return
+        if parsed.path == "/api/lan/connections":
+            params = parse_qs(parsed.query)
+            connection_id = params.get("id", [None])[0]
+            if not connection_id:
+                self._send_json({"error": "missing id query parameter"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            connections, removed = remove_smb_connection(self.store.load_lan_connections(), connection_id)
+            if removed is None:
+                self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
+                return
+            self.store.save_lan_connections(connections)
+            self.store.append_activity(
+                kind="lan",
+                status="success",
+                message="Removed SMB connection profile.",
+                details={"id": removed["id"], "label": removed["label"], "host": removed["host"]},
+            )
+            self._send_json(self.store.api_payload()["lan_connections"])
+            return
         if parsed.path != "/api/roots":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -424,6 +733,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:
         return
+
+    def _run_with_api_error_boundary(self, handler: Any) -> None:
+        try:
+            handler()
+        except Exception as exc:
+            if self.path.startswith("/api/"):
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+            raise
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        if self.path.startswith("/api/"):
+            try:
+                status = HTTPStatus(code)
+                default_message = message or status.phrase
+                self._send_json({"error": default_message}, status=status)
+                return
+            except ValueError:
+                self._send_json({"error": message or "Request failed"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+        super().send_error(code, message, explain)
 
     def _serve_static(self, file_name: str, content_type: str) -> None:
         content = resources.files("media_library_manager").joinpath("static", file_name).read_bytes()
@@ -525,6 +860,8 @@ def normalize_root_payload(payload: dict) -> RootConfig:
         label=(payload.get("label") or path.name).strip(),
         priority=int(payload.get("priority", 50)),
         kind=(payload.get("kind") or "mixed").strip() or "mixed",
+        connection_id=str(payload.get("connection_id") or "").strip(),
+        connection_label=str(payload.get("connection_label") or "").strip(),
     )
 
 
@@ -569,6 +906,8 @@ def summarize_roots(roots: list[RootConfig]) -> list[dict[str, object]]:
             "path": str(root.path),
             "priority": root.priority,
             "kind": root.kind,
+            "connection_id": root.connection_id,
+            "connection_label": root.connection_label,
         }
         for root in roots
     ]

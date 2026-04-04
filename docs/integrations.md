@@ -2,32 +2,29 @@
 
 Tài liệu này mô tả logic tích hợp hiện tại với Radarr và Sonarr.
 
-## 1. Mục tiêu của integration layer
+## 1. Vai trò trong product mới
 
-Project xử lý cleanup trên filesystem trước.
-Sau khi file đã được move thành công, integration layer có nhiệm vụ đồng bộ lại path ở Radarr/Sonarr để hai hệ thống tiếp tục theo dõi library đúng vị trí mới.
+Trong product shape hiện tại:
 
-Điều quan trọng:
+- `Settings` giữ cấu hình provider
+- `Operations` mới là nơi chạy duplicate workflow
 
-- integrations không quyết định file nào nên move/delete
-- integrations chỉ chạy sau khi có plan và kết quả apply
+Điều này có nghĩa:
 
-## 2. Cấu hình mặc định
+- integrations không lẫn vào folder onboarding
+- integrations không quyết định duplicate logic
+- integrations chỉ bổ trợ cho path sync sau apply hoặc sync thủ công
 
-Project có cấu hình mặc định cho:
+## 2. Cấu hình hiện có
 
-- `radarr`
-- `sonarr`
-- `sync_options`
-
-Mỗi provider hiện có:
+Mỗi provider có:
 
 - `enabled`
 - `base_url`
 - `api_key`
 - `root_folder_path`
 
-`sync_options` hiện có:
+`sync_options` có:
 
 - `sync_after_apply`
 - `rescan_after_update`
@@ -35,161 +32,55 @@ Mỗi provider hiện có:
 
 ## 3. Test kết nối
 
-Dashboard hỗ trợ test kết nối bằng `POST /api/integrations/test`.
+Dashboard gọi `POST /api/integrations/test`.
 
-Logic:
+Kết quả:
 
-- nếu provider bị disable thì trả `status = disabled`
-- nếu enabled thì gọi `/api/v3/system/status`
-- nếu lỗi HTTP/network/config thì trả `status = error`
+- `disabled` nếu provider tắt
+- `success` nếu gọi được `/api/v3/system/status`
+- `error` nếu lỗi network, config hoặc HTTP
 
-## 4. Thời điểm sync được chạy
+## 4. Thời điểm sync chạy
 
-### Sync tự động
+### Tự động
 
-Khi gọi apply ở mode execute từ dashboard:
+Sau `apply` với `execute=true`, dashboard gọi `sync_after_apply()`.
 
-1. dashboard chạy `apply_plan()`
-2. nếu execute thành công, dashboard gọi `sync_after_apply()`
-3. kết quả sync được lưu vào `last-sync.json`
+### Thủ công
 
-### Sync thủ công
+Người dùng có thể gọi `POST /api/sync` từ `Settings`.
 
-Người dùng cũng có thể gọi `POST /api/sync`.
+## 5. Mối quan hệ với manual folder move
 
-Điều kiện:
+Manual folder move là một luồng độc lập trong `Operations`.
 
-- phải có `plan`
-- phải có `apply_result`
+Hiện tại code có 2 nhánh:
 
-## 5. Điều kiện bỏ qua sync
+- `POST /api/folders/move`
+  move cả folder từ A sang destination parent B
+  nhánh này không tự sync provider
 
-Nếu `sync_after_apply = false` thì integration layer trả về trạng thái:
+- `POST /api/folders/move-to-provider`
+  move nội dung của source folder vào path đang được provider quản lý
+  nhánh này sẽ refresh provider sau khi move execute thành công
 
-- `status = skipped`
-- `reason = sync_after_apply_disabled`
+Điều này phản ánh đúng use case:
 
-## 6. Root folder management
+- nếu người dùng move vào đúng folder movie/series mà Radarr/Sonarr đang track
+- provider path không đổi
+- app chỉ cần refresh hoặc rescan để provider nhìn thấy nội dung mới
 
-Nếu `create_root_folder_if_missing = true`:
+## 6. Khi nào app update path, khi nào chỉ refresh
 
-- Radarr client sẽ kiểm tra root folder đã tồn tại chưa
-- Sonarr client cũng làm tương tự
-- nếu thiếu thì gọi API tạo mới
+### Chỉ refresh
 
-Nếu bước này lỗi, sync flow dừng lại và trả `status = error`.
+Nếu destination là path đang được provider quản lý sẵn:
 
-## 7. Action nào được sync
+- app move nội dung vào folder đó
+- app không đổi `movie.path` hoặc `series.path`
+- app chỉ gọi refresh hoặc rescan
 
-Integration layer hiện chỉ sync các action `move` đã thực sự được apply thành công.
+### Update path
 
-Nó lấy:
-
-- `plan["actions"]` loại `move`
-- `apply_result["results"]` có `status = applied` và `type = move`
-
-Các action `delete` hoặc `review` không được sync.
-
-## 8. Cách xác định provider
-
-Project xác định provider bằng `media_key`:
-
-- key bắt đầu bằng `movie:` -> Radarr
-- ngược lại -> Sonarr
-
-Điều này có nghĩa:
-
-- movie collision/move sẽ sync sang Radarr
-- episode/series move sẽ sync sang Sonarr
-
-## 9. Matching logic cho Radarr
-
-Khi sync movie, project cố tìm movie trong Radarr theo thứ tự:
-
-1. path parent của source hoặc destination
-2. `title + year`
-
-Nếu tìm thấy:
-
-- cập nhật `movie["path"]` thành thư mục chứa file đích
-- nếu có target root thì cập nhật `rootFolderPath`
-- gọi update movie với `moveFiles=false`
-- tùy option, gọi thêm `RefreshMovie`
-
-Nếu không tìm thấy movie phù hợp:
-
-- trả `status = error`
-- message là `movie not found`
-
-## 10. Matching logic cho Sonarr
-
-Khi sync series, project cố tìm series theo thứ tự:
-
-1. source hoặc destination nằm bên dưới path của series
-2. title đã normalize
-
-Nếu tìm thấy:
-
-- tính lại series path
-- cập nhật `series["path"]`
-- nếu có target root thì cập nhật `rootFolderPath`
-- gọi update series với `moveFiles=false`
-- tùy option, gọi thêm `RefreshSeries`
-
-### Cách tính series path
-
-Nếu destination nằm bên dưới `target_root`:
-
-- lấy thư mục show trực tiếp dưới root đó
-
-Nếu không:
-
-- nếu cha trực tiếp là `Season XX` thì lấy thư mục cha của season
-- ngược lại lấy thư mục cha trực tiếp của destination
-
-## 11. Provider client hiện tại
-
-`JsonApiClient` ở `providers/base.py` đang phụ trách:
-
-- build URL
-- gửi GET/POST/PUT
-- gắn header `X-Api-Key`
-- parse JSON response
-- chuyển lỗi HTTP/network thành `ProviderError`
-
-Client cụ thể:
-
-- `RadarrClient`
-- `SonarrClient`
-
-## 12. Kết quả sync
-
-Kết quả sync hiện có:
-
-- `status`
-- `summary`
-- `results`
-
-`summary` đếm:
-
-- `updated`
-- `error`
-- `skipped`
-
-Mỗi result có thể mang:
-
-- `provider`
-- `source`
-- `destination`
-- `item_id`
-- `path`
-- `refresh`
-- `message`
-
-## 13. Những giới hạn hiện tại
-
-- integration phụ thuộc vào matching heuristic theo path hoặc title
-- nếu item trên Radarr/Sonarr không match được thì sync sẽ fail cho item đó
-- project không tạo movie/series mới trên provider, chỉ update item đã tồn tại
-- sync chỉ được gọi trong dashboard flow, CLI `apply` hiện không tự trigger integrations
-- `moveFiles=false` nghĩa là Radarr/Sonarr không phải bên tự di chuyển file; filesystem đã được tool này xử lý trước
+Luồng update path hiện vẫn thuộc duplicate workflow `apply + sync_after_apply()`.
+Khi action plan đã move media sang path mới, integration layer có thể cập nhật `path` và `rootFolderPath` trên provider.

@@ -313,7 +313,7 @@ def finalize_details(
     codec_match = CODEC_RE.search(haystack)
     dynamic_range_match = DYNAMIC_RANGE_RE.search(haystack)
 
-    resolution = f"{resolution_match.group(1)}p" if resolution_match else None
+    resolution = int(resolution_match.group(1)) if resolution_match else None
     source = source_match.group(1).lower() if source_match else None
     codec = codec_match.group(1).lower() if codec_match else None
     dynamic_range = dynamic_range_match.group(1).lower() if dynamic_range_match else None
@@ -340,11 +340,11 @@ def finalize_details(
     }
 
 
-def resolution_rank(resolution: str | None) -> int:
+def resolution_rank(resolution: int | None) -> int:
     if not resolution:
         return 0
-    mapping = {"480p": 10, "576p": 12, "720p": 20, "1080p": 30, "2160p": 40}
-    return mapping.get(resolution.lower(), 0)
+    mapping = {480: 10, 576: 12, 720: 20, 1080: 30, 2160: 40}
+    return mapping.get(resolution, 0)
 
 
 def extract_year(text: str) -> int | None:

@@ -1,0 +1,190 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: M
+      - generic [ref=e6]:
+        - generic [ref=e7]: Media Library Manager
+        - generic [ref=e8]: Control Surface
+    - navigation [ref=e9]:
+      - button "Operations Detect duplicates and move folders between connected locations." [ref=e10] [cursor=pointer]:
+        - generic [ref=e12]:
+          - strong [ref=e13]: Operations
+          - generic [ref=e14]: Detect duplicates and move folders between connected locations.
+      - button "Settings Manage SMB profiles, connected folders, and Radarr or Sonarr." [ref=e15] [cursor=pointer]:
+        - generic [ref=e17]:
+          - strong [ref=e18]: Settings
+          - generic [ref=e19]: Manage SMB profiles, connected folders, and Radarr or Sonarr.
+    - generic [ref=e20]:
+      - paragraph [ref=e21]: Runtime
+      - generic [ref=e24]: Dashboard ready
+      - generic [ref=e25]: Operations stays focused on scan, duplicate review, and cut or paste moves. Settings holds the connection layer.
+  - main [ref=e26]:
+    - generic [ref=e28]:
+      - paragraph [ref=e29]: Control Surface
+      - heading "Operations" [level=1] [ref=e30]
+      - paragraph [ref=e31]: Scan connected folders, review duplicate suggestions, and move one folder from place A to place B.
+    - generic [ref=e32]:
+      - article [ref=e33]:
+        - paragraph [ref=e34]: Connected Folders
+        - strong [ref=e35]: "0"
+        - generic [ref=e36]: Add one or more root folders in Settings.
+      - article [ref=e37]:
+        - paragraph [ref=e38]: Duplicate Summary
+        - strong [ref=e39]: No scan
+        - generic [ref=e40]: Run scan to generate duplicate suggestions.
+      - article [ref=e41]:
+        - paragraph [ref=e42]: Integrations
+        - strong [ref=e43]: Disabled
+        - generic [ref=e44]: Radarr and Sonarr are configured from Settings.
+      - article [ref=e45]:
+        - paragraph [ref=e46]: Latest Scan
+        - strong [ref=e47]: Never
+        - generic [ref=e48]: Most recent duplicate analysis snapshot.
+      - article [ref=e49]:
+        - paragraph [ref=e50]: Latest Plan
+        - strong [ref=e51]: Never
+        - generic [ref=e52]: Latest generated action plan.
+      - article [ref=e53]:
+        - paragraph [ref=e54]: Latest Apply
+        - strong [ref=e55]: Never
+        - generic [ref=e56]: Most recent dry-run or execute result.
+    - generic [ref=e58]:
+      - generic [ref=e59]:
+        - article [ref=e60]:
+          - generic [ref=e62]:
+            - heading "Folder Move" [level=3] [ref=e63]:
+              - generic [ref=e65]: Folder Move
+            - paragraph [ref=e66]: Use this when you want to cut a folder from source A and paste it into destination B.
+          - generic [ref=e67]:
+            - generic [ref=e68]:
+              - generic [ref=e69]: Source Folder
+              - textbox "Source Folder" [ref=e70]:
+                - /placeholder: /mnt/downloads/Movie (2024)
+            - generic [ref=e71]:
+              - generic [ref=e72]: Destination Parent Folder
+              - textbox "Destination Parent Folder" [ref=e73]:
+                - /placeholder: /mnt/library/movies
+            - generic [ref=e74]:
+              - button "Preview Move" [ref=e75] [cursor=pointer]
+              - button "Move Folder" [ref=e76] [cursor=pointer]
+          - generic [ref=e144]: No move preview yet.
+        - article [ref=e77]:
+          - generic [ref=e79]:
+            - heading "Folder List" [level=3] [ref=e80]:
+              - generic [ref=e82]: Folder List
+            - paragraph [ref=e83]: The main workspace is a list of connected folders. Use the action dropdown on each row to work from that folder.
+          - generic [ref=e146]: No connected folders yet. Add one from Settings.
+        - article [ref=e84]:
+          - generic [ref=e85]:
+            - generic [ref=e86]:
+              - heading "Duplicate Detection" [level=3] [ref=e87]:
+                - generic [ref=e89]: Duplicate Detection
+              - paragraph [ref=e90]: Scan connected folders, build a plan from duplicate findings, then dry-run or execute.
+            - generic [ref=e91]:
+              - button "Run Scan" [ref=e92] [cursor=pointer]
+              - button "Build Plan" [ref=e93] [cursor=pointer]
+              - button "Dry Run Apply" [ref=e94] [cursor=pointer]
+              - button "Execute Apply" [ref=e95] [cursor=pointer]
+          - generic [ref=e147]:
+            - generic [ref=e148]:
+              - generic [ref=e149]: Files Indexed
+              - strong [ref=e150]: "0"
+            - generic [ref=e151]:
+              - generic [ref=e152]: Exact Groups
+              - strong [ref=e153]: "0"
+            - generic [ref=e154]:
+              - generic [ref=e155]: Collision Groups
+              - strong [ref=e156]: "0"
+            - generic [ref=e157]:
+              - generic [ref=e158]: Plan Actions
+              - strong [ref=e159]: "0"
+          - generic [ref=e96]:
+            - generic [ref=e97]: Delete lower-quality versions automatically when building plan
+            - checkbox "Delete lower-quality versions automatically when building plan" [ref=e98]
+          - generic [ref=e99]:
+            - generic [ref=e100]: Prune empty folders after apply
+            - checkbox "Prune empty folders after apply" [checked] [ref=e101]
+        - generic [ref=e102]:
+          - article [ref=e103]:
+            - generic [ref=e104]:
+              - generic [ref=e105]:
+                - heading "Exact Duplicates" [level=3] [ref=e106]
+                - paragraph [ref=e107]: Exact file matches suggested for dedupe.
+              - generic [ref=e108]: "0"
+            - generic [ref=e161]: No exact duplicate groups yet.
+          - article [ref=e109]:
+            - generic [ref=e110]:
+              - generic [ref=e111]:
+                - heading "Media Collisions" [level=3] [ref=e112]
+                - paragraph [ref=e113]: Same movie or episode found in more than one location.
+              - generic [ref=e114]: "0"
+            - generic [ref=e163]: No collision groups yet.
+        - generic [ref=e115]:
+          - article [ref=e116]:
+            - generic [ref=e117]:
+              - generic [ref=e118]:
+                - heading "Action Plan" [level=3] [ref=e119]
+                - paragraph [ref=e120]: Preview move, delete, and review actions generated from the latest scan.
+              - generic [ref=e121]: "0"
+            - generic [ref=e164]:
+              - generic [ref=e165]:
+                - generic [ref=e166]: Move
+                - strong [ref=e167]: "0"
+              - generic [ref=e168]:
+                - generic [ref=e169]: Delete
+                - strong [ref=e170]: "0"
+              - generic [ref=e171]:
+                - generic [ref=e172]: Review
+                - strong [ref=e173]: "0"
+            - generic [ref=e175]: No action plan yet.
+          - article [ref=e122]:
+            - generic [ref=e123]:
+              - generic [ref=e124]:
+                - heading "Apply Result" [level=3] [ref=e125]
+                - paragraph [ref=e126]: Latest dry run or execute result.
+              - generic [ref=e127]: No run
+            - generic [ref=e177]: No apply result yet.
+      - complementary [ref=e128]:
+        - article [ref=e129]:
+          - generic [ref=e131]:
+            - heading "Process Logs" [level=3] [ref=e132]:
+              - generic [ref=e134]: Process Logs
+            - paragraph [ref=e135]: Current job progress stays here while scan, plan, or apply is running.
+          - generic [ref=e179]: No active process right now.
+          - generic [ref=e181]: Logs will appear here while a job is running.
+        - article [ref=e136]:
+          - generic [ref=e138]:
+            - heading "Recent Activity" [level=3] [ref=e139]:
+              - generic [ref=e141]: Recent Activity
+            - paragraph [ref=e142]: Latest configuration changes and operational events.
+          - generic [ref=e182]:
+            - generic [ref=e183]:
+              - generic [ref=e184]:
+                - strong [ref=e185]: Scan failed because no roots are configured.
+                - generic [ref=e186]: error
+              - generic [ref=e187]: scan • 4/4/2026, 1:29:20 PM
+            - generic [ref=e188]:
+              - generic [ref=e189]:
+                - strong [ref=e190]: Scan failed because no roots are configured.
+                - generic [ref=e191]: error
+              - generic [ref=e192]: scan • 4/4/2026, 12:06:04 PM
+            - generic [ref=e193]:
+              - generic [ref=e194]:
+                - strong [ref=e195]: Integration connectivity test finished.
+                - generic [ref=e196]: success
+              - generic [ref=e197]: integration • 4/4/2026, 11:58:29 AM
+            - generic [ref=e198]:
+              - generic [ref=e199]:
+                - strong [ref=e200]: Manual sync failed because plan/apply result is missing.
+                - generic [ref=e201]: error
+              - generic [ref=e202]: integration • 4/4/2026, 11:58:19 AM
+            - generic [ref=e203]:
+              - generic [ref=e204]:
+                - strong [ref=e205]: Integration connectivity test finished.
+                - generic [ref=e206]: success
+              - generic [ref=e207]: integration • 4/4/2026, 11:58:19 AM
+            - generic [ref=e208]:
+              - generic [ref=e209]:
+                - strong [ref=e210]: Manual sync failed because plan/apply result is missing.
+                - generic [ref=e211]: error
+              - generic [ref=e212]: integration • 4/4/2026, 11:57:46 AM

@@ -1,0 +1,25 @@
+services:
+  media-library-manager:
+    image: ${MLM_IMAGE:-ghcr.io/leolionart/media-library-manager:latest}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      HOST: 0.0.0.0
+      PORT: ${MLM_PORT:-9988}
+      STATE_FILE: /app/data/app-state.json
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+      - type: bind
+        source: /mnt
+        target: /mnt
+        read_only: true
+      - type: bind
+        source: /media
+        target: /media
+        read_only: true
+      - type: bind
+        source: /srv
+        target: /srv
+        read_only: true

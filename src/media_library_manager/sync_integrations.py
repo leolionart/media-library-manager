@@ -52,6 +52,50 @@ def test_integrations(integrations: dict[str, Any]) -> dict[str, Any]:
     return results
 
 
+def list_provider_items(integrations: dict[str, Any], provider: str) -> dict[str, Any]:
+    if provider not in {"radarr", "sonarr"}:
+        return {"status": "error", "message": f"unsupported provider: {provider}"}
+
+    config = build_provider_config(integrations.get(provider, {}))
+    if not config.enabled:
+        return {"status": "error", "message": f"{provider} is disabled"}
+
+    try:
+        if provider == "radarr":
+            client = RadarrClient(config)
+            items = [
+                {"id": item.get("id"), "title": item.get("title"), "year": item.get("year"), "path": item.get("path")}
+                for item in client.list_movies()
+            ]
+        else:
+            client = SonarrClient(config)
+            items = [
+                {"id": item.get("id"), "title": item.get("title"), "year": item.get("year"), "path": item.get("path")}
+                for item in client.list_series()
+            ]
+    except ProviderError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    items.sort(key=lambda item: ((item.get("title") or "").lower(), str(item.get("year") or "")))
+    return {"status": "success", "provider": provider, "items": items}
+
+
+def refresh_provider_item(integrations: dict[str, Any], provider: str, item_id: int) -> dict[str, Any]:
+    config = build_provider_config(integrations.get(provider, {}))
+    if not config.enabled:
+        return {"status": "error", "message": f"{provider} is disabled"}
+    try:
+        if provider == "radarr":
+            refresh = RadarrClient(config).refresh_movie(item_id)
+        elif provider == "sonarr":
+            refresh = SonarrClient(config).refresh_series(item_id)
+        else:
+            return {"status": "error", "message": f"unsupported provider: {provider}"}
+    except ProviderError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "success", "provider": provider, "item_id": item_id, "refresh": refresh}
+
+
 def sync_after_apply(*, plan: dict[str, Any], apply_result: dict[str, Any], integrations: dict[str, Any]) -> dict[str, Any]:
     options = integrations.get("sync_options", {})
     if not options.get("sync_after_apply", True):

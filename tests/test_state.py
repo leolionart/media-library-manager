@@ -12,6 +12,16 @@ class StateStoreTests(unittest.TestCase):
             tmp_path = Path(raw_tmp)
             store = StateStore(tmp_path / "state" / "app-state.json")
             store.add_root(RootConfig(path=tmp_path, label="Local", priority=90, kind="movie"))
+            store.add_root(
+                RootConfig(
+                    path=tmp_path / "MountedNAS",
+                    label="NAS Movies",
+                    priority=70,
+                    kind="movie",
+                    connection_id="smb-1",
+                    connection_label="NAS",
+                )
+            )
             store.save_targets(LibraryTargets(movie_root=tmp_path / "Movies"))
             store.save_integrations(
                 {
@@ -20,14 +30,42 @@ class StateStoreTests(unittest.TestCase):
                     "sync_options": {"sync_after_apply": True, "rescan_after_update": True, "create_root_folder_if_missing": True},
                 }
             )
+            store.save_lan_connections(
+                {
+                    "smb": [
+                        {
+                            "id": "smb-1",
+                            "label": "NAS",
+                            "host": "nas.local",
+                            "share_name": "Media",
+                            "username": "leo",
+                            "password": "secret",
+                        }
+                    ]
+                }
+            )
+            store.add_managed_folder(
+                {
+                    "connection_id": "smb-1",
+                    "connection_label": "NAS",
+                    "share_name": "Media",
+                    "path": "/Movies",
+                }
+            )
             store.save_report({"generated_at": "2026-04-04T00:00:00+00:00", "summary": {"files": 1}})
             store.save_apply_result({"generated_at": "2026-04-04T01:00:00+00:00", "summary": {"applied": 0}})
             store.save_sync_result({"generated_at": "2026-04-04T01:30:00+00:00", "summary": {"updated": 1}})
 
             payload = store.api_payload()
             self.assertEqual(payload["roots"][0]["label"], "Local")
+            self.assertEqual(payload["roots"][1]["connection_id"], "smb-1")
+            self.assertEqual(payload["roots"][1]["connection_label"], "NAS")
             self.assertEqual(payload["targets"]["movie_root"], str(tmp_path / "Movies"))
             self.assertTrue(payload["integrations"]["radarr"]["enabled"])
+            self.assertEqual(payload["lan_connections"]["smb"][0]["label"], "NAS")
+            self.assertTrue(payload["lan_connections"]["smb"][0]["has_password"])
+            self.assertEqual(payload["lan_connections"]["smb"][0]["password"], "")
+            self.assertEqual(payload["managed_folders"][0]["path"], "/Movies")
             self.assertEqual(payload["report"]["summary"]["files"], 1)
             self.assertEqual(payload["apply_result"]["summary"]["applied"], 0)
             self.assertEqual(payload["sync_result"]["summary"]["updated"], 1)

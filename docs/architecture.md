@@ -4,27 +4,27 @@ Tài liệu này mô tả kiến trúc logic hiện tại của dự án.
 
 ## 1. Kiến trúc tổng thể
 
-Project được tổ chức theo kiểu:
+Project vẫn là một hệ thống filesystem-first, nhưng bề mặt vận hành được tổ chức lại thành 2 lớp dashboard rõ ràng:
 
-- một lõi xử lý filesystem-first
-- một CLI để chạy các nghiệp vụ
-- một dashboard web cục bộ để thao tác qua giao diện
-- một lớp tích hợp Radarr/Sonarr chạy sau bước apply
+- `Operations`: chạy scan, review duplicate, build/apply plan, và move folder thủ công
+- `Settings`: quản lý SMB profiles, connected folders, và Radarr/Sonarr
 
-Luồng chính:
+Luồng chính hiện tại:
 
-1. người dùng khai báo roots và targets
-2. scanner quét filesystem và sinh report
-3. planner đọc report và sinh plan
-4. operations đọc plan và apply ra filesystem
-5. integrations đồng bộ lại path với Radarr/Sonarr nếu cần
-6. state store lưu toàn bộ snapshot để dashboard hiển thị lại
+1. người dùng cấu hình SMB profiles và connected folders trong `Settings`
+2. connected folders được lưu dưới dạng scan roots có thêm metadata SMB profile
+3. `scanner.py` quét các roots này và sinh report duplicate
+4. `planner.py` build plan `move/delete/review`
+5. `operations.py` apply plan hoặc preview
+6. `operations.py` cũng cung cấp manual folder move cho use case cut/paste folder từ A sang B
+7. `sync_integrations.py` đồng bộ path về Radarr/Sonarr sau apply execute hoặc sync thủ công
+8. `state.py` lưu mọi snapshot để dashboard render lại sau restart
 
 ## 2. Các module chính
 
 ### `models.py`
 
-Chứa các dataclass lõi:
+Chứa dataclass lõi:
 
 - `RootConfig`
 - `MediaFile`
@@ -32,162 +32,156 @@ Chứa các dataclass lõi:
 - `LibraryTargets`
 - `Action`
 
-Đây là lớp dữ liệu nền cho scanner, planner, operations và state.
+`RootConfig` hiện ngoài `path/label/priority/kind` còn có:
+
+- `connection_id`
+- `connection_label`
+
+Hai field này giúp dashboard biết connected folder nào thuộc SMB profile nào, nhưng engine scan vẫn làm việc trên filesystem path thực tế. Popup add folder sẽ cố match SMB profile với mounted path hiện có để giảm nhập tay phần runtime path.
 
 ### `scanner.py`
 
 Chịu trách nhiệm:
 
-- đi qua các root
-- lọc file video hợp lệ
-- parse identity media
-- tính quality metadata
+- đi qua từng connected folder
+- index video files
 - phát hiện exact duplicates
 - phát hiện media collisions
-- xác định sidecar files
 
 ### `planner.py`
 
-Chịu trách nhiệm:
+Biến `ScanReport` thành plan JSON gồm:
 
-- đọc `ScanReport`
-- chọn keeper cho từng group
-- quyết định action `move/delete/review`
-- build path đích chuẩn cho movie/series/review
-- xuất plan JSON
+- `move`
+- `delete`
+- `review`
 
 ### `operations.py`
 
-Chịu trách nhiệm:
+Chứa hai nhóm thao tác:
 
-- đọc plan
-- thực thi hoặc dry-run từng action
-- move bundle gồm video và sidecar files
-- delete bundle
-- prune thư mục rỗng nếu bật option
+- apply plan từ duplicate workflow
+- move folder thủ công bằng kiểu cut/paste từ source sang destination parent
+- move contents của folder download vào folder đang được provider quản lý
+- delete folder
 
 ### `state.py`
 
-Chịu trách nhiệm:
+Lưu:
 
-- lưu state dashboard vào `app-state.json`
-- lưu report/plan/apply/sync mới nhất ra file riêng
-- cung cấp payload tổng hợp cho API `/api/state`
-- ghi activity log
+- connected folders
+- SMB profiles
+- integration settings
+- latest report/plan/apply/sync
+- activity log
+- current job
 
 ### `web.py`
 
-Chịu trách nhiệm:
+Phục vụ:
 
-- chạy HTTP server cục bộ
-- phục vụ static files của dashboard
-- cung cấp các API để root UI thao tác
-- kết nối dashboard với scanner, planner, operations, state và integrations
+- static dashboard
+- API cho `Operations`
+- API cho `Settings`
 
-### `browser.py`
+### `lan_connections.py`
 
-Chịu trách nhiệm:
+Quản lý:
 
-- liệt kê mount point từ hệ điều hành
-- xác định mount nào là network filesystem
-- browse thư mục phục vụ LAN Browser trên dashboard
+- SMB profile persistence
+- connection test qua `smbclient`
+- SMB folder helper cho browse/create/delete khi cần
 
 ### `sync_integrations.py`
 
-Chịu trách nhiệm:
+Giữ logic:
 
-- chuẩn hóa cấu hình integrations
-- test kết nối Radarr/Sonarr
-- sync path sau apply
-- điều khiển root folder creation và refresh behavior
+- normalize cấu hình Radarr/Sonarr
+- test connectivity
+- sync path sau apply execute
 
-### `providers/`
+## 3. Hai mặt vận hành của dashboard
 
-Bao gồm:
+### `Operations`
 
-- `base.py`: HTTP JSON client chung
-- `radarr.py`: hành vi dành riêng cho Radarr
-- `sonarr.py`: hành vi dành riêng cho Sonarr
+Đây là working layer.
 
-## 3. Hai mặt vận hành của hệ thống
+Nó tập trung vào:
 
-### CLI layer
+- xem connected folders
+- preview manual folder move
+- execute manual folder move
+- run scan
+- review duplicate findings
+- build plan
+- dry-run apply
+- execute apply
+- theo dõi process logs và activity
 
-CLI cung cấp các entrypoint:
+### `Settings`
 
-- `scan`
-- `plan`
-- `apply`
-- `serve`
+Đây là support layer.
 
-CLI phù hợp cho:
+Nó tập trung vào:
 
-- chạy tay
-- script hóa
-- automation
-
-### Dashboard layer
-
-Dashboard là lớp vận hành cục bộ, không phải backend service nhiều người dùng.
-Nó phù hợp cho:
-
-- cấu hình root trực quan
-- browse LAN share
-- xem report và plan
-- theo dõi activity log
+- save nhiều SMB profiles với credential khác nhau
+- add connected folders qua modal
+- gán connected folder với SMB profile khi cần
+- cấu hình Radarr
+- cấu hình Sonarr
+- cấu hình sync options
 
 ## 4. Luồng dữ liệu chính
 
+### Connected folder setup
+
+`Settings form -> /api/roots -> StateStore -> app-state.json`
+
 ### Scan flow
 
-`RootConfig[] -> scanner.scan_roots() -> ScanReport -> report.json`
+`connected roots -> scanner.scan_roots() -> ScanReport -> last-report.json`
 
 ### Plan flow
 
-`ScanReport + LibraryTargets -> planner.plan_actions() -> plan.json`
+`ScanReport + LibraryTargets -> planner.plan_actions() -> last-plan.json`
 
 ### Apply flow
 
-`plan.json -> operations.apply_plan() -> apply result JSON`
+`last-plan.json -> operations.apply_plan() -> last-apply.json`
+
+### Manual move flow
+
+`Operations form -> /api/folders/move -> operations.move_folder()`
+
+### Provider move flow
+
+`Folder list action -> /api/integrations/<provider>/items -> /api/folders/move-to-provider -> operations.move_folder_contents() -> provider refresh`
 
 ### Sync flow
 
-`plan + apply_result + integrations -> sync_after_apply() -> sync result JSON`
+`plan + apply_result + integrations -> sync_after_apply() -> last-sync.json`
 
 ## 5. Nguyên tắc thiết kế hiện tại
 
 ### Filesystem-first
 
-Project ưu tiên sự thật trên ổ đĩa trước, thay vì phụ thuộc vào metadata của Radarr/Sonarr.
+Project ưu tiên trạng thái thật trên ổ đĩa trước.
+SMB profile chỉ là lớp kết nối hỗ trợ setup; scan/apply vẫn dựa vào path mà runtime đọc và ghi được.
+
+### Operations vs Settings
+
+Mọi thứ gây nhiễu vận hành được dồn về `Settings`.
+`Operations` chỉ giữ lại hành động mà người dùng thực sự làm hàng ngày.
 
 ### Safe by default
 
-Mặc định là dry-run.
-Điều này làm cho cleanup an toàn hơn khi heuristic parse chưa chắc chắn 100%.
+- duplicate workflow vẫn có dry-run
+- manual folder move có preview trước execute
 
-### Machine-readable outputs
+## 6. Những coupling quan trọng
 
-Các bước scan, plan, apply và sync đều tạo payload JSON rõ ràng để:
-
-- debug
-- audit
-- tái sử dụng trong tooling khác
-
-### Local and self-contained
-
-Web dashboard chạy bằng HTTP server tiêu chuẩn trong Python, không phụ thuộc framework web ngoài.
-
-## 6. Những điểm coupling quan trọng
-
-- `scanner.py` quyết định chất lượng dữ liệu đầu vào cho mọi bước sau
-- `planner.py` phụ thuộc mạnh vào `media_key`, `canonical_name`, `quality_rank`
-- `operations.py` giả định plan hợp lệ và không tự tái diễn giải logic nghiệp vụ
-- `sync_integrations.py` phụ thuộc vào `action.details` và `media_key` để biết item thuộc Radarr hay Sonarr
-- `state.py` là nguồn tổng hợp cho toàn bộ dashboard
-
-## 7. Những điểm cần cẩn trọng khi mở rộng
-
-- thay đổi parse logic trong scanner sẽ làm đổi grouping và chất lượng plan
-- thay đổi canonical path builder sẽ ảnh hưởng sync Radarr/Sonarr
-- thay đổi JSON schema của report/plan/apply có thể làm dashboard hoặc tooling phụ thuộc bị lệch
-- web handler đang là synchronous request model, nên scan/apply lớn sẽ chiếm request thread trong lúc chạy
+- `RootConfig.path` vẫn là input thật cho scanner
+- metadata SMB trong `RootConfig` chỉ hỗ trợ bề mặt dashboard, không thay thế filesystem path
+- `planner.py` vẫn phụ thuộc vào scan report và target roots
+- `sync_integrations.py` vẫn phụ thuộc vào plan/apply result
+- frontend `app.js` phụ thuộc trực tiếp vào payload từ `StateStore.api_payload()`

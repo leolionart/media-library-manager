@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -169,3 +170,121 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, int]:
     for result in results:
         summary[result["status"]] = summary.get(result["status"], 0) + 1
     return summary
+
+
+def move_folder(
+    source: str | Path,
+    destination_parent: str | Path,
+    *,
+    execute: bool = False,
+) -> dict[str, Any]:
+    source_path = Path(source).expanduser().resolve()
+    destination_parent_path = Path(destination_parent).expanduser().resolve()
+
+    if not source_path.exists():
+        return {"status": "error", "message": f"source does not exist: {source_path}"}
+    if not source_path.is_dir():
+        return {"status": "error", "message": f"source is not a directory: {source_path}"}
+    if not destination_parent_path.exists():
+        return {"status": "error", "message": f"destination does not exist: {destination_parent_path}"}
+    if not destination_parent_path.is_dir():
+        return {"status": "error", "message": f"destination is not a directory: {destination_parent_path}"}
+
+    destination_path = destination_parent_path / source_path.name
+    if destination_path.exists():
+        return {"status": "error", "message": f"destination already exists: {destination_path}"}
+    try:
+        source_path.relative_to(destination_parent_path)
+        return {"status": "error", "message": "destination cannot contain the source folder"}
+    except ValueError:
+        pass
+
+    operations = [{"move_dir": str(source_path), "to_parent": str(destination_parent_path), "destination": str(destination_path)}]
+    if not execute:
+        return {
+            "status": "dry-run",
+            "type": "move-folder",
+            "source": str(source_path),
+            "destination_parent": str(destination_parent_path),
+            "destination": str(destination_path),
+            "operations": operations,
+        }
+
+    shutil.move(str(source_path), str(destination_path))
+    return {
+        "status": "applied",
+        "type": "move-folder",
+        "source": str(source_path),
+        "destination_parent": str(destination_parent_path),
+        "destination": str(destination_path),
+        "operations": operations,
+    }
+
+
+def move_folder_contents(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    execute: bool = False,
+) -> dict[str, Any]:
+    source_path = Path(source).expanduser().resolve()
+    destination_path = Path(destination).expanduser().resolve()
+
+    if not source_path.exists():
+        return {"status": "error", "message": f"source does not exist: {source_path}"}
+    if not source_path.is_dir():
+        return {"status": "error", "message": f"source is not a directory: {source_path}"}
+    if not destination_path.exists():
+        return {"status": "error", "message": f"destination does not exist: {destination_path}"}
+    if not destination_path.is_dir():
+        return {"status": "error", "message": f"destination is not a directory: {destination_path}"}
+    try:
+        destination_path.relative_to(source_path)
+        return {"status": "error", "message": "destination cannot be inside the source folder"}
+    except ValueError:
+        pass
+
+    items = sorted(source_path.iterdir(), key=lambda item: item.name.lower())
+    operations = [{"move": str(item), "destination": str(destination_path / item.name)} for item in items]
+    for item in items:
+        if (destination_path / item.name).exists():
+            return {"status": "error", "message": f"destination entry exists: {destination_path / item.name}"}
+
+    if not execute:
+        return {
+            "status": "dry-run",
+            "type": "move-folder-contents",
+            "source": str(source_path),
+            "destination": str(destination_path),
+            "operations": operations,
+        }
+
+    for item in items:
+        shutil.move(str(item), str(destination_path / item.name))
+    try:
+        source_path.rmdir()
+    except OSError:
+        pass
+
+    return {
+        "status": "applied",
+        "type": "move-folder-contents",
+        "source": str(source_path),
+        "destination": str(destination_path),
+        "operations": operations,
+    }
+
+
+def delete_folder(path: str | Path, *, execute: bool = False) -> dict[str, Any]:
+    target = Path(path).expanduser().resolve()
+    if not target.exists():
+        return {"status": "error", "message": f"path does not exist: {target}"}
+    if not target.is_dir():
+        return {"status": "error", "message": f"path is not a directory: {target}"}
+
+    operations = [{"delete_dir": str(target)}]
+    if not execute:
+        return {"status": "dry-run", "type": "delete-folder", "path": str(target), "operations": operations}
+
+    shutil.rmtree(target)
+    return {"status": "applied", "type": "delete-folder", "path": str(target), "operations": operations}

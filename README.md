@@ -1,81 +1,194 @@
 # Media Library Manager
 
-`media-library-manager` is a local dashboard and CLI for consolidating movie and TV libraries spread across multiple folders, disks, and mounted LAN shares.
+`media-library-manager` is a local dashboard and CLI for working with existing media folders across local disks, mounted shares, and SMB hosts.
 
-It is built for the gap between download managers like Radarr/Sonarr and manual storage cleanup:
+The project is built around a simple operating model:
 
-- Scan multiple roots at once.
-- Detect exact duplicates with SHA-256.
-- Detect same movie or episode stored in different places.
-- Build a safe `move/delete/review` plan.
-- Keep `dry-run` as the default so nothing is modified until you execute.
-- Browse mounted LAN shares directly from the dashboard.
-- Discover other devices on the LAN through Bonjour/ARP, not just shares already mounted on this Mac.
-- Sync moved paths back into Radarr and Sonarr so they stop tracking the old folder.
+1. Connect the app to folders that already exist, including folders managed by Radarr and Sonarr.
+2. Detect duplicate folders or duplicate files and suggest what can be removed.
+3. Allow moving a folder from location A to location B with an explicit cut/paste style workflow.
 
-## Run
+The application is not meant to replace Radarr or Sonarr. It sits beside them and helps operate on the filesystem they already use.
+
+## Product Scope
+
+The dashboard works with storage that already exists:
+
+- local folders visible to the runtime
+- mounted network shares
+- SMB hosts with different usernames and passwords
+- folders already managed by Radarr
+- folders already managed by Sonarr
+
+Typical use cases:
+
+- connect one or more storage roots so the app can scan them
+- find duplicate movie or series folders spread across multiple disks
+- find duplicate files inside those folders
+- review deletion suggestions before removing anything
+- move a movie or series folder from one storage location to another
+- move a downloaded folder into the correct Radarr or Sonarr managed library path
+
+## Dashboard Structure
+
+The UI is intentionally split into two pages.
+
+### 1. Operations
+
+This page contains the operational tools:
+
+- list connected folders as the main workspace
+- use a per-folder action dropdown
+- choose a source folder
+- choose a destination folder
+- cut and paste a folder from A to B
+- delete a folder
+- scan connected folders for duplicate files and folders
+- review suggested deletions
+- move a download folder into an existing Radarr or Sonarr managed path
+
+This page should stay focused on day-to-day actions, not connection setup.
+
+### 2. Settings
+
+This page contains all application setup:
+
+- save multiple SMB host profiles
+- each profile can have its own host, username, and password
+- add folders through a modal
+- when adding a folder, select one of the saved SMB profiles and let the modal suggest the mounted runtime path automatically when possible
+- add multiple folders when needed, because media may be spread across multiple disks
+- in most cases, add a high-level root folder and let the app scan and operate inside that root
+- configure Radarr connection
+- configure Sonarr connection
+
+Settings should remain the support layer. Operations should remain the working layer.
+
+## Folder Connection Model
+
+The expected workflow for folder setup is:
+
+1. Save one or more SMB profiles.
+2. Open the add-folder modal.
+3. Discover a LAN SMB host or enter an IP manually.
+4. Save or reuse an SMB profile.
+5. Select that saved profile and let the modal match it to an existing mounted runtime path.
+6. Confirm or adjust the suggested folder path.
+7. Repeat if you need to work across multiple disks or multiple hosts.
+
+The common case is still simple:
+
+- add one large root folder per disk or share
+- let the app scan that root
+- work inside the connected roots from the Operations page
+
+## Radarr / Sonarr Relationship
+
+Radarr and Sonarr remain part of the project.
+
+The app must be able to work with folders already managed by those systems:
+
+- use Radarr and Sonarr as connection-backed library references
+- keep their API settings in `Settings`
+- allow operational actions in `Operations` to move folders into the correct managed location
+- keep filesystem actions explicit so the user can review what is about to happen
+
+Example:
+
+- a movie folder exists in a download location
+- the user selects that folder in `Operations`
+- the user chooses `Move to Radarr...`
+- the user selects the movie already managed by Radarr
+- the app moves the folder contents into the existing Radarr path
+- because the managed path itself did not change, the app refreshes or rescans Radarr instead of changing `movie.path`
+
+The same pattern applies to Sonarr.
+
+## Duplicate Detection
+
+The project should detect duplicates at two levels:
+
+- duplicate files
+- duplicate folders
+
+The output should be phrased as suggestions, not automatic destructive actions.
+
+Expected behavior:
+
+- scan all connected roots
+- detect exact duplicate files where possible
+- detect folders that appear to represent the same movie or series content
+- present suggestions to delete or keep
+- require explicit confirmation before destructive actions
+
+## Deployment
+
+The primary deployment target is a Linux server running Docker Compose.
+The container is configured to join the host network and access common host mount roots directly.
+
+1. Copy the environment template:
 
 ```bash
-cd "/Volumes/DATA/Coding Projects/media-library-manager"
+cp .env.example .env
+mkdir -p data
+```
+
+2. Edit `.env` if you want to change the image tag or dashboard port:
+
+```dotenv
+MLM_IMAGE=ghcr.io/leolionart/media-library-manager:latest
+MLM_PORT=9988
+```
+
+3. Start the stack:
+
+```bash
+docker compose up -d
+```
+
+4. Open:
+
+```text
+http://localhost:9988
+```
+
+`compose.yaml` uses:
+
+- `./data` to `/app/data` for persisted dashboard state
+- `network_mode: host` so the service can reach the LAN directly
+- bind mounts for `/mnt`, `/media`, and `/srv` so host-mounted shares are visible inside the container
+
+## Local Run Without Docker
+
+```bash
 ./run-dashboard.sh
 ```
 
-Default URL:
+## Current Direction For SMB Support
 
-```text
-http://localhost:9999
-```
+SMB is a first-class setup concern in the product direction.
 
-## Dashboard Modules
+That means the dashboard should support:
 
-- `Overview`: root count, mounted shares, latest scan/plan/apply state.
-- `Library Roots`: add scan roots and define canonical movie/series/review targets.
-- `Integrations`: configure Radarr and Sonarr URL, API key, managed root folder, and sync policy.
-- `LAN Browser`: discover LAN devices, open SMB/NFS/AFP URLs, browse mounted shares, and copy folders into the root form.
-- `Duplicate Report`: inspect exact duplicate groups and same-title collisions.
-- `Action Plan`: build the cleanup plan and execute it.
-- `Activity Log`: review config changes and job history.
+- multiple SMB hosts
+- different credentials per host
+- selecting a saved SMB profile when adding a folder
+- reusing those saved profiles across multiple connected roots
 
-## Radarr / Sonarr Workflow
+Infrastructure and deployment should not assume a single SMB target.
 
-The integration is filesystem-first:
+## Release Flow
 
-1. The dashboard moves files itself.
-2. After `Execute Plan`, it can call Radarr/Sonarr APIs to update the tracked `path` and `rootFolderPath`.
-3. It then triggers refresh/rescan commands so those systems pick up the new location.
+The repository ships a Docker-only release flow:
 
-This avoids the common failure mode where Radarr/Sonarr still point at the old root and later create duplicates by downloading into the previous folder again.
+- `CI` runs tests and validates the Docker build on pull requests and pushes to `main`.
+- `release-please` opens or updates a release PR from conventional commits.
+- when that release PR is merged to `main`, GitHub Actions creates the release and publishes:
+  - `ghcr.io/leolionart/media-library-manager:latest`
+  - `ghcr.io/leolionart/media-library-manager:<version>`
+  - `ghcr.io/leolionart/media-library-manager:v<version>`
 
-## Integration Setup
-
-Open `Integrations` and fill in:
-
-- `Base URL`
-  Example: `http://192.168.1.20:7878` for Radarr, `http://192.168.1.20:8989` for Sonarr
-- `API Key`
-  Use the API key from each application
-- `Managed Root Folder`
-  Optional override. Leave blank if you want the app to use the canonical Movie Root or Series Root from `Library Roots`.
-
-Options:
-
-- `Auto-sync after execute apply`
-- `Trigger refresh/rescan after update`
-- `Create root folder if missing`
-
-Use `Test Connections` to verify both integrations.
-
-## LAN Discovery Notes
-
-- `Refresh LAN` can discover devices elsewhere in the network through Bonjour/mDNS and the local ARP table.
-- Those devices may appear before they are mounted locally.
-- To browse actual folders from the dashboard, the share still needs to be mounted so macOS exposes it as a readable path under `/Volumes/...` or another mount point.
-- The discovery panel can still give you direct URLs like `smb://nas.local` to open in Finder.
-
-## Notes
-
-- The path sync uses `moveFiles=false` when updating Radarr/Sonarr items because files were already moved by this tool.
-- Review the action plan before executing it.
+To keep releases automatic, use conventional commit prefixes such as `feat:`, `fix:`, or `chore:`.
 
 ## Verification
 

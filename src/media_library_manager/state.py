@@ -7,12 +7,14 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
+from .lan_connections import default_lan_connections, normalize_lan_connections, redact_lan_connections
 from .models import LibraryTargets, RootConfig
 from .sync_integrations import default_integrations
 
 
 ACTIVITY_LOG_LIMIT = 200
 JOB_LOG_LIMIT = 120
+MANAGED_FOLDER_KEYS = ["id", "connection_id", "connection_label", "share_name", "path", "label"]
 
 
 class StateStore:
@@ -28,7 +30,7 @@ class StateStore:
 
     def default_state(self) -> dict[str, Any]:
         return {
-            "version": 3,
+            "version": 4,
             "roots": [],
             "targets": {
                 "movie_root": None,
@@ -36,6 +38,8 @@ class StateStore:
                 "review_root": None,
             },
             "integrations": default_integrations(),
+            "lan_connections": default_lan_connections(),
+            "managed_folders": [],
             "last_scan_at": None,
             "last_plan_at": None,
             "last_apply_at": None,
@@ -62,6 +66,8 @@ class StateStore:
             **defaults["integrations"]["sync_options"],
             **state.get("integrations", {}).get("sync_options", {}),
         }
+        merged["lan_connections"] = normalize_lan_connections(state.get("lan_connections"))
+        merged["managed_folders"] = self._normalize_managed_folders(state.get("managed_folders"))
         merged["activity_log"] = state.get("activity_log", [])
         merged["current_job"] = self._normalize_job(state.get("current_job"))
         return merged
@@ -79,6 +85,8 @@ class StateStore:
                 label=item["label"],
                 priority=int(item.get("priority", 50)),
                 kind=item.get("kind", "mixed"),
+                connection_id=str(item.get("connection_id", "") or ""),
+                connection_label=str(item.get("connection_label", "") or ""),
             )
             for item in self.load_state()["roots"]
         ]
@@ -121,6 +129,39 @@ class StateStore:
         state["integrations"] = integrations
         self._write_state(state)
         return state
+
+    def load_lan_connections(self) -> dict[str, Any]:
+        return normalize_lan_connections(self.load_state().get("lan_connections"))
+
+    def save_lan_connections(self, connections: dict[str, Any]) -> dict[str, Any]:
+        state = self.load_state()
+        state["lan_connections"] = normalize_lan_connections(connections)
+        self._write_state(state)
+        return state
+
+    def list_managed_folders(self) -> list[dict[str, Any]]:
+        return list(self.load_state().get("managed_folders", []))
+
+    def save_managed_folders(self, folders: list[dict[str, Any]]) -> dict[str, Any]:
+        state = self.load_state()
+        state["managed_folders"] = self._normalize_managed_folders(folders)
+        self._write_state(state)
+        return state
+
+    def add_managed_folder(self, folder: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        folders = [item for item in self.list_managed_folders() if not self._same_managed_folder(item, folder)]
+        normalized = self._normalize_managed_folder(folder)
+        folders.append(normalized)
+        folders.sort(key=lambda item: (item["connection_label"].lower(), item["path"].lower()))
+        state = self.save_managed_folders(folders)
+        return state, normalized
+
+    def remove_managed_folder(self, folder_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        folders = self.list_managed_folders()
+        removed = next((item for item in folders if item["id"] == folder_id), None)
+        next_folders = [item for item in folders if item["id"] != folder_id]
+        state = self.save_managed_folders(next_folders)
+        return state, removed
 
     def save_report(self, report: dict[str, Any]) -> None:
         self.report_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -173,6 +214,8 @@ class StateStore:
             "roots": state["roots"],
             "targets": state["targets"],
             "integrations": state["integrations"],
+            "lan_connections": redact_lan_connections(state["lan_connections"]),
+            "managed_folders": state.get("managed_folders", []),
             "last_scan_at": state.get("last_scan_at"),
             "last_plan_at": state.get("last_plan_at"),
             "last_apply_at": state.get("last_apply_at"),
@@ -214,6 +257,35 @@ class StateStore:
         state["current_job"] = job
         self._write_state(state)
         return job
+
+    def _normalize_managed_folders(self, raw: Any) -> list[dict[str, Any]]:
+        folders: list[dict[str, Any]] = []
+        for item in raw or []:
+            folders.append(self._normalize_managed_folder(item))
+        return folders
+
+    def _normalize_managed_folder(self, folder: dict[str, Any]) -> dict[str, Any]:
+        normalized = {key: str(folder.get(key) or "").strip() for key in MANAGED_FOLDER_KEYS}
+        normalized["path"] = self._normalize_share_path(normalized["path"])
+        normalized["share_name"] = normalized["share_name"].strip("/")
+        normalized["id"] = normalized["id"] or f"folder-{time.time_ns()}"
+        normalized["label"] = normalized["label"] or Path(normalized["path"]).name or normalized["path"] or normalized["id"]
+        return normalized
+
+    def _same_managed_folder(self, left: dict[str, Any], right: dict[str, Any]) -> bool:
+        normalized_right = self._normalize_managed_folder(right)
+        normalized_left = self._normalize_managed_folder(left)
+        return (
+            normalized_left["connection_id"] == normalized_right["connection_id"]
+            and normalized_left["share_name"] == normalized_right["share_name"]
+            and normalized_left["path"] == normalized_right["path"]
+        )
+
+    def _normalize_share_path(self, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            return "/"
+        return "/" + value.strip("/")
 
     def append_job_log(
         self,
@@ -333,11 +405,17 @@ class StateStore:
         return {**base, **summary}
 
     def _normalize_job(self, job: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not job:
+        if not job or not isinstance(job, dict):
             return None
+        details = job.get("details", {})
+        if not isinstance(details, dict):
+            details = {}
+        logs = job.get("logs", [])
+        if not isinstance(logs, list):
+            logs = []
         return {
             **job,
             "summary": self._normalize_job_summary(job.get("summary")),
-            "details": job.get("details", {}),
-            "logs": job.get("logs", [])[-JOB_LOG_LIMIT:],
+            "details": details,
+            "logs": logs[-JOB_LOG_LIMIT:],
         }

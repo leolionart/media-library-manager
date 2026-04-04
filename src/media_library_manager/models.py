@@ -11,6 +11,8 @@ class RootConfig:
     label: str
     priority: int = 50
     kind: str = "mixed"
+    connection_id: str = ""
+    connection_label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -18,6 +20,8 @@ class RootConfig:
             "label": self.label,
             "priority": self.priority,
             "kind": self.kind,
+            "connection_id": self.connection_id,
+            "connection_label": self.connection_label,
         }
 
 

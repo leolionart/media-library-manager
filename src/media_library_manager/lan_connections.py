@@ -1,0 +1,434 @@
+from __future__ import annotations
+
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+
+SMB_CONNECTION_KEYS = [
+    "id",
+    "label",
+    "protocol",
+    "host",
+    "port",
+    "share_name",
+    "base_path",
+    "username",
+    "password",
+    "domain",
+    "version",
+    "enabled",
+]
+
+
+def default_lan_connections() -> dict[str, Any]:
+    return {"smb": []}
+
+
+def default_smb_connection() -> dict[str, Any]:
+    return {
+        "id": "",
+        "label": "",
+        "protocol": "smb",
+        "host": "",
+        "port": 445,
+        "share_name": "",
+        "base_path": "",
+        "username": "",
+        "password": "",
+        "domain": "",
+        "version": "3.0",
+        "enabled": True,
+    }
+
+
+def normalize_lan_connections(raw: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = default_lan_connections()
+    raw = raw or {}
+    normalized["smb"] = [normalize_stored_smb_connection(item) for item in raw.get("smb", [])]
+    return normalized
+
+
+def normalize_stored_smb_connection(connection: dict[str, Any]) -> dict[str, Any]:
+    normalized = default_smb_connection()
+    normalized.update({key: connection.get(key, normalized.get(key)) for key in SMB_CONNECTION_KEYS})
+    normalized["id"] = str(normalized.get("id") or f"smb-{time.time_ns()}")
+    normalized["label"] = str(normalized.get("label") or "").strip()
+    normalized["protocol"] = "smb"
+    normalized["host"] = str(normalized.get("host") or "").strip()
+    normalized["port"] = int(normalized.get("port") or 445)
+    normalized["share_name"] = str(normalized.get("share_name") or "").strip().strip("/")
+    normalized["base_path"] = normalize_share_path(str(normalized.get("base_path") or ""))
+    normalized["username"] = str(normalized.get("username") or "").strip()
+    normalized["password"] = str(normalized.get("password") or "")
+    normalized["domain"] = str(normalized.get("domain") or "").strip()
+    normalized["version"] = str(normalized.get("version") or "3.0").strip() or "3.0"
+    normalized["enabled"] = bool(normalized.get("enabled", True))
+    if not normalized["label"]:
+        target = normalized["share_name"] or normalized["host"] or normalized["id"]
+        normalized["label"] = f"SMB {target}"
+    return normalized
+
+
+def normalize_share_path(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    return "/" + value.strip("/")
+
+
+def upsert_smb_connection(connections: dict[str, Any], payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = normalize_lan_connections(connections)
+    existing_index = next((index for index, item in enumerate(normalized["smb"]) if item["id"] == payload.get("id")), None)
+    existing = normalized["smb"][existing_index] if existing_index is not None else None
+    merged = normalize_stored_smb_connection({**(existing or {}), **payload})
+    if existing is not None and "password" not in payload:
+        merged["password"] = existing.get("password", "")
+    if existing_index is None:
+        normalized["smb"].append(merged)
+    else:
+        normalized["smb"][existing_index] = merged
+    normalized["smb"].sort(key=lambda item: (not item.get("enabled", True), item["label"].lower(), item["host"].lower()))
+    return normalized, merged
+
+
+def remove_smb_connection(connections: dict[str, Any], connection_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    normalized = normalize_lan_connections(connections)
+    removed = next((item for item in normalized["smb"] if item["id"] == connection_id), None)
+    normalized["smb"] = [item for item in normalized["smb"] if item["id"] != connection_id]
+    return normalized, removed
+
+
+def redact_lan_connections(connections: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_lan_connections(connections)
+    return {
+        "smb": [redact_smb_connection(connection) for connection in normalized["smb"]],
+    }
+
+
+def redact_smb_connection(connection: dict[str, Any]) -> dict[str, Any]:
+    redacted = {**connection}
+    redacted["has_password"] = bool(redacted.get("password"))
+    redacted["password"] = ""
+    return redacted
+
+
+def resolve_smb_connection_for_test(connections: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_lan_connections(connections)
+    base = next((item for item in normalized["smb"] if item["id"] == payload.get("id")), None)
+    merged = {**(base or {}), **payload}
+    if base is not None and "password" not in payload:
+        merged["password"] = base.get("password", "")
+    return normalize_stored_smb_connection(merged)
+
+
+def resolve_smb_connection(connections: dict[str, Any], connection_id: str) -> dict[str, Any] | None:
+    normalized = normalize_lan_connections(connections)
+    return next((item for item in normalized["smb"] if item["id"] == connection_id), None)
+
+
+def test_smb_connection(connection: dict[str, Any], *, timeout: int = 8) -> dict[str, Any]:
+    normalized = normalize_stored_smb_connection(connection)
+    if not normalized["host"]:
+        return {"status": "error", "message": "host is required"}
+    if not normalized["username"]:
+        return {"status": "error", "message": "username is required"}
+
+    target = f"//{normalized['host']}"
+    auth_file = None
+    command: list[str]
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            auth_file = Path(handle.name)
+            handle.write(f"username = {normalized['username']}\n")
+            handle.write(f"password = {normalized['password']}\n")
+            if normalized["domain"]:
+                handle.write(f"domain = {normalized['domain']}\n")
+
+        if normalized["share_name"]:
+            target = f"{target}/{normalized['share_name']}"
+            command = [
+                "smbclient",
+                target,
+                "-A",
+                str(auth_file),
+                "-m",
+                f"SMB{normalized['version']}",
+                "-g",
+                "-c",
+                f"{build_cd_command(normalized['base_path'])}ls",
+            ]
+        else:
+            command = [
+                "smbclient",
+                "-L",
+                target,
+                "-A",
+                str(auth_file),
+                "-m",
+                f"SMB{normalized['version']}",
+                "-g",
+            ]
+
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    except FileNotFoundError:
+        return {"status": "error", "message": "smbclient is not installed in the runtime"}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "SMB connection test timed out"}
+    finally:
+        if auth_file and auth_file.exists():
+            auth_file.unlink(missing_ok=True)
+
+    if completed.returncode != 0:
+        error = (completed.stderr or completed.stdout or "SMB connection test failed").strip()
+        return {
+            "status": "error",
+            "message": error,
+            "target": target,
+        }
+
+    result = {
+        "status": "success",
+        "target": target,
+        "share_name": normalized["share_name"] or None,
+        "base_path": normalized["base_path"] or "/",
+    }
+    if not normalized["share_name"]:
+        result["shares"] = parse_smbclient_shares(completed.stdout or "")
+    else:
+        result["listing_preview"] = parse_smbclient_listing(completed.stdout or "")
+    return result
+
+
+def browse_smb_path(connection: dict[str, Any], raw_path: str | None = None, *, timeout: int = 10) -> dict[str, Any]:
+    normalized = normalize_stored_smb_connection(connection)
+    validation_error = validate_smb_browser_connection(normalized)
+    if validation_error:
+        return {"status": "error", "message": validation_error}
+
+    current_path = normalize_share_path(raw_path or normalized["base_path"])
+    command = f'{build_cd_command(current_path)}ls'
+    completed = run_smbclient_command(normalized, command, timeout=timeout)
+    if completed["status"] != "success":
+        return completed
+
+    entries = parse_smbclient_entries(str(completed.get("stdout") or ""))
+    directories = [
+        {
+            **entry,
+            "path": join_share_path(current_path, entry["name"]),
+        }
+        for entry in entries
+        if entry["type"] == "directory"
+    ]
+    return {
+        "status": "success",
+        "connection": {
+            "id": normalized["id"],
+            "label": normalized["label"],
+            "host": normalized["host"],
+            "share_name": normalized["share_name"],
+        },
+        "path": current_path or "/",
+        "parent": parent_share_path(current_path),
+        "breadcrumbs": build_share_breadcrumbs(current_path),
+        "entries": directories,
+    }
+
+
+def create_smb_directory(connection: dict[str, Any], parent_path: str | None, folder_name: str, *, timeout: int = 10) -> dict[str, Any]:
+    normalized = normalize_stored_smb_connection(connection)
+    validation_error = validate_smb_browser_connection(normalized)
+    if validation_error:
+        return {"status": "error", "message": validation_error}
+
+    clean_name = str(folder_name or "").strip().strip("/")
+    if not clean_name:
+        return {"status": "error", "message": "folder name is required"}
+    if any(part in {"..", "."} for part in clean_name.split("/")):
+        return {"status": "error", "message": "folder name must not contain relative path segments"}
+
+    current_path = normalize_share_path(parent_path or normalized["base_path"])
+    target_path = join_share_path(current_path, clean_name)
+    command = f'{build_cd_command(current_path)}mkdir "{clean_name}"'
+    completed = run_smbclient_command(normalized, command, timeout=timeout)
+    if completed["status"] != "success":
+        return completed
+
+    return {
+        "status": "success",
+        "message": "Folder created.",
+        "path": target_path,
+        "parent": current_path or "/",
+    }
+
+
+def delete_smb_directory(connection: dict[str, Any], raw_path: str, *, timeout: int = 10) -> dict[str, Any]:
+    normalized = normalize_stored_smb_connection(connection)
+    validation_error = validate_smb_browser_connection(normalized)
+    if validation_error:
+        return {"status": "error", "message": validation_error}
+
+    target_path = normalize_share_path(raw_path)
+    if not target_path or target_path == "/":
+        return {"status": "error", "message": "root folder cannot be deleted"}
+
+    parent_path = parent_share_path(target_path) or "/"
+    folder_name = Path(target_path).name
+    command = f'{build_cd_command(parent_path)}rmdir "{folder_name}"'
+    completed = run_smbclient_command(normalized, command, timeout=timeout)
+    if completed["status"] != "success":
+        return completed
+
+    return {
+        "status": "success",
+        "message": "Folder deleted.",
+        "path": target_path,
+        "parent": parent_path,
+    }
+
+
+def parse_smbclient_shares(output: str) -> list[dict[str, str]]:
+    shares: list[dict[str, str]] = []
+    for line in output.splitlines():
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) < 2 or parts[0] != "Disk":
+            continue
+        shares.append({"name": parts[1], "comment": parts[2] if len(parts) > 2 else ""})
+    return shares
+
+
+def parse_smbclient_listing(output: str) -> list[dict[str, str]]:
+    entries = parse_smbclient_entries(output)
+    preview: list[dict[str, str]] = []
+    for entry in entries:
+        if entry["type"] != "directory":
+            continue
+        preview.append({"name": entry["name"], "path": entry["path"], "type": entry["type"]})
+        if len(preview) >= 12:
+            break
+    return preview
+
+
+def validate_smb_browser_connection(connection: dict[str, Any]) -> str | None:
+    if not connection["host"]:
+        return "host is required"
+    if not connection["share_name"]:
+        return "share name is required"
+    if not connection["username"]:
+        return "username is required"
+    return None
+
+
+def run_smbclient_command(connection: dict[str, Any], smb_command: str, *, timeout: int) -> dict[str, Any]:
+    target = f"//{connection['host']}/{connection['share_name']}"
+    auth_file = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            auth_file = Path(handle.name)
+            handle.write(f"username = {connection['username']}\n")
+            handle.write(f"password = {connection['password']}\n")
+            if connection["domain"]:
+                handle.write(f"domain = {connection['domain']}\n")
+
+        completed = subprocess.run(
+            [
+                "smbclient",
+                target,
+                "-A",
+                str(auth_file),
+                "-m",
+                f"SMB{connection['version']}",
+                "-g",
+                "-c",
+                smb_command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"status": "error", "message": "smbclient is not installed in the runtime"}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "SMB command timed out"}
+    finally:
+        if auth_file and auth_file.exists():
+            auth_file.unlink(missing_ok=True)
+
+    if completed.returncode != 0:
+        error = (completed.stderr or completed.stdout or "SMB command failed").strip()
+        return {"status": "error", "message": error, "target": target}
+
+    return {"status": "success", "stdout": completed.stdout or "", "target": target}
+
+
+def build_cd_command(path: str) -> str:
+    normalized = normalize_share_path(path)
+    if not normalized or normalized == "/":
+        return ""
+    return f'cd "{normalized.strip("/")}";'
+
+
+def join_share_path(base_path: str, name: str) -> str:
+    base = normalize_share_path(base_path)
+    clean_name = name.strip().strip("/")
+    if not base or base == "/":
+        return f"/{clean_name}"
+    return f"{base}/{clean_name}"
+
+
+def parent_share_path(path: str) -> str | None:
+    normalized = normalize_share_path(path)
+    if not normalized or normalized == "/":
+        return None
+    parent = str(Path(normalized).parent)
+    return parent if parent.startswith("/") else f"/{parent}"
+
+
+def build_share_breadcrumbs(path: str) -> list[dict[str, str]]:
+    normalized = normalize_share_path(path) or "/"
+    crumbs = [{"name": "/", "path": "/"}]
+    current = ""
+    for part in Path(normalized).parts[1:]:
+        current = f"{current}/{part}"
+        crumbs.append({"name": part, "path": current})
+    return crumbs
+
+
+def parse_smbclient_entries(output: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in raw_line.split("|")]
+        if len(parts) >= 5:
+            name = parts[0]
+            if name in {".", ".."}:
+                continue
+            attributes = parts[4].upper()
+            entry_type = "directory" if "D" in attributes else "file"
+            entries.append(
+                {
+                    "name": name,
+                    "path": normalize_share_path(name),
+                    "type": entry_type,
+                    "size": parts[1] if len(parts) > 1 else "",
+                    "modified_at": " ".join(part for part in parts[2:4] if part),
+                }
+            )
+            continue
+
+        stripped = raw_line.rstrip()
+        if stripped.startswith((".", "..")) or stripped.startswith("blocks of size"):
+            continue
+        if "<DIR>" in stripped.upper():
+            name = stripped.split("<", 1)[0].strip()
+            if name:
+                entries.append({"name": name, "path": normalize_share_path(name), "type": "directory", "size": "", "modified_at": ""})
+
+    entries.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
+    return entries

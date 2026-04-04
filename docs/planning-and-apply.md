@@ -1,228 +1,98 @@
 # Planning And Apply Logic
 
-Tài liệu này giải thích cách hệ thống chuyển từ scan report sang action plan, rồi từ plan sang thay đổi thật trên filesystem.
+Tài liệu này mô tả hai nhóm thao tác filesystem hiện có:
 
-## 1. Mục tiêu của planner
+1. duplicate workflow `scan -> plan -> apply`
+2. manual folder move kiểu cut/paste
 
-Planner biến một `ScanReport` thành plan JSON có thể:
+## 1. Duplicate workflow
 
-- preview
-- audit
-- apply bằng dry-run hoặc execute
-
-Planner không scan filesystem trực tiếp.
-Nó làm việc trên dữ liệu đã được scanner cung cấp.
-
-## 2. Các loại action
-
-Project hiện có 3 loại action:
+Planner biến `ScanReport` thành plan JSON gồm:
 
 - `move`
 - `delete`
 - `review`
 
-Ý nghĩa:
+`operations.apply_plan()` sẽ:
 
-- `move`: chuyển keeper về canonical location
-- `delete`: xóa bản dư thừa
-- `review`: giữ lại để người vận hành tự xem xét
+- skip action `review`
+- move file bundle cho action `move`
+- delete file bundle cho action `delete`
 
-## 3. Chọn keeper
+Dry-run vẫn là mặc định an toàn.
 
-Trong cả exact duplicate group lẫn media collision group, planner dùng `choose_keeper()` để lấy item tốt nhất theo `score_tuple()`.
+## 2. Apply execute
 
-Điều này làm cho cùng một cơ chế xếp hạng được dùng xuyên suốt:
+Khi `execute=true`:
 
-- ở scan report, item tốt hơn thường đứng trước
-- ở plan, keeper được chọn bằng logic tương tự
-
-## 4. Logic cho exact duplicates
-
-Với mỗi exact duplicate group:
-
-1. chọn keeper
-2. tính canonical destination cho keeper nếu có target root phù hợp
-3. nếu destination khác path hiện tại, tạo action `move`
-4. với mọi item còn lại trong group, tạo action `delete`
-
-Reason hiện dùng:
-
-- `canonicalize_best_exact_duplicate`
-- `exact_duplicate`
-
-## 5. Logic cho media collisions
-
-Với mỗi media collision group:
-
-1. chọn keeper
-2. nếu keeper chưa được xử lý ở bước exact duplicate và có canonical target thì tạo `move`
-3. với item còn lại:
-   nếu `delete_lower_quality = false` thì tạo `review`
-   nếu `delete_lower_quality = true` thì tạo `delete`
-
-Reason hiện dùng:
-
-- `canonicalize_best_media`
-- `manual_review_same_media`
-- `lower_quality_duplicate`
-
-## 6. `handled_sources`
-
-Planner dùng tập `handled_sources` để tránh tạo action trùng cho cùng một file.
-
-Điểm này quan trọng vì:
-
-- một file có thể xuất hiện trong exact duplicate group
-- đồng thời vẫn nằm trong media collision group
-
-Nếu không có guard này, plan có thể tạo 2 action khác nhau cho cùng một source path.
-
-## 7. Build path đích
-
-### Movie destination
-
-Nếu item là movie và có `movie_root`:
-
-```text
-<movie_root>/<Canonical Name>/<Canonical Name>.<ext>
-```
-
-### Series destination
-
-Nếu item là series và có `series_root`:
-
-```text
-<series_root>/<Show>/<Season XX>/<Show - SXXEYY>.<ext>
-```
-
-### Review destination
-
-Nếu item bị đánh dấu review và có `review_root`:
-
-```text
-<review_root>/<kind>/<Canonical Name>/<original filename>
-```
-
-Nếu không có `review_root` thì action `review` vẫn được tạo, nhưng `destination` sẽ là `null`.
-
-## 8. Cấu trúc action
-
-Mỗi action hiện lưu:
-
-- `type`
-- `source`
-- `destination`
-- `reason`
-- `media_key`
-- `root_path`
-- `keep_path`
-- `details`
-
-`details` giữ metadata như:
-
-- `canonical_name`
-- `kind`
-- `title`
-- `year`
-- `season`
-- `episode`
-- `target_root`
-- keeper/candidate quality rank trong một số action collision
-
-## 9. Output của planner
-
-Plan JSON hiện có:
-
-- `version`
-- `summary`
-- `actions`
-
-`summary` đếm số action theo loại:
-
-- `move`
-- `delete`
-- `review`
-
-## 10. Apply: hành vi tổng quát
-
-`operations.apply_plan()` duyệt tuần tự qua `plan["actions"]`.
-
-Hành vi theo type:
-
-- `review`: không thao tác, trả về `skipped`
-- `move`: gọi `perform_move()`
-- `delete`: gọi `perform_delete()`
-- type lạ: trả về `error`
-
-## 11. Dry-run và execute
-
-### Dry-run
-
-Nếu `execute = false`:
-
-- không đổi filesystem
-- chỉ trả về danh sách operation dự kiến
-
-### Execute
-
-Nếu `execute = true`:
-
-- tạo thư mục đích nếu cần
-- move hoặc delete file thật
+- tạo destination parent nếu cần
+- move/delete thật trên filesystem
 - có thể prune thư mục rỗng nếu bật option
 
-## 12. Logic move
+## 3. Manual folder move
 
-`perform_move()` xử lý cả bundle:
+Ngoài duplicate workflow, `operations.py` hiện có thêm `move_folder()`.
 
-- file video chính
-- mọi sidecar file cùng stem
+Luồng này nhận:
 
-Mỗi item trong bundle được map sang destination tương ứng:
+- `source` là một thư mục
+- `destination_parent` là thư mục cha đích
 
-- file video đi đến `destination`
-- sidecar đi đến `destination.with_suffix(item.suffix)`
+Hành vi:
 
-### Nếu destination đã tồn tại
+- preview nếu `execute=false`
+- move thật bằng `shutil.move()` nếu `execute=true`
 
-Hệ thống xử lý theo 2 nhánh:
+Kết quả trả về:
 
-- nếu file đích và file nguồn có cùng hash thì xóa file nguồn
-- nếu khác nhau thì trả về `error` và dừng action đó
+- `source`
+- `destination_parent`
+- `destination`
+- `status`
+- `operations`
 
-Điều này giúp tránh ghi đè mù lên file đã tồn tại.
+## 4. Điều kiện lỗi của manual move
 
-## 13. Logic delete
+`move_folder()` trả lỗi nếu:
 
-`perform_delete()` cũng xử lý cả bundle:
+- source không tồn tại
+- source không phải directory
+- destination parent không tồn tại
+- destination parent không phải directory
+- destination cuối cùng đã tồn tại
+- destination parent nằm bên trong source
 
-- video chính
-- sidecar files
+## 5. Mối quan hệ giữa hai luồng
 
-Ở dry-run, nó chỉ trả về danh sách file sẽ bị xóa.
-Ở execute, nó `unlink()` từng file nếu file đó tồn tại.
+Duplicate workflow và manual move là hai bề mặt khác nhau:
 
-## 14. Prune thư mục rỗng
+- duplicate workflow dùng cho phát hiện và xử lý duplicate
+- manual move dùng cho thao tác cut/paste folder trực tiếp
 
-Nếu bật `prune_empty_dirs`:
+Chúng cùng nằm trong page `Operations`, nhưng không phụ thuộc lẫn nhau.
 
-- sau move/delete, hệ thống thử `rmdir()` dần các thư mục cha
-- dừng lại khi gặp thư mục không rỗng
-- hoặc khi chạm tới `root_path`
+## 6. Move folder contents into provider path
 
-Điều này giúp cleanup cấu trúc thư mục cũ mà không xóa nhầm ra ngoài scan root.
+`operations.py` hiện còn có `move_folder_contents()`.
 
-## 15. Tóm tắt kết quả apply
+Hàm này phục vụ use case:
 
-`summarize_results()` hiện đếm số result theo status:
+- source là folder download
+- destination là folder movie hoặc series đã được Radarr/Sonarr quản lý
 
-- `applied`
-- `dry-run`
-- `skipped`
-- `error`
+Hành vi:
 
-## 16. Những giới hạn cần biết
+- preview danh sách item sẽ được move nếu `execute=false`
+- move từng child entry của source vào destination nếu `execute=true`
+- nếu source rỗng sau khi move thì xóa source folder
 
-- apply tin rằng plan đầu vào đã đúng, nó không tái kiểm tra nghiệp vụ
-- action `review` hiện chỉ được skip, không có cơ chế move sang `review_root` ở bước apply
-- nếu plan lớn, apply chạy tuần tự và chưa có batch processing hay rollback transaction
+Backend `web.py` dùng hàm này trong endpoint `POST /api/folders/move-to-provider`.
+
+## 7. Delete folder
+
+`operations.py` hiện có `delete_folder()` cho action dropdown ở folder list.
+
+Hành vi:
+
+- preview nếu `execute=false`
+- xóa recursive directory tree nếu `execute=true`

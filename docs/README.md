@@ -1,49 +1,50 @@
 # Project Documentation
 
-Thư mục `docs/` tập hợp tài liệu mô tả logic hiện tại và các tính năng đang có của dự án `media-library-manager`.
+Thư mục `docs/` mô tả logic hiện tại của dự án theo product shape mới:
+
+- `Operations` là nơi chạy scan, review duplicate, build plan, apply, và move folder thủ công
+- `Settings` là nơi quản lý SMB profiles, connected folders, và Radarr/Sonarr
 
 ## Danh mục
 
 - [current-features.md](./current-features.md)
-  Tổng quan các tính năng hiện có, nhóm theo góc nhìn người dùng và vận hành.
+  Tập hợp các tính năng hiện có theo góc nhìn người dùng.
 
 - [architecture.md](./architecture.md)
-  Kiến trúc module, luồng dữ liệu chính, và vai trò của từng thành phần trong codebase.
-
-- [cli-and-config.md](./cli-and-config.md)
-  Giải thích cách CLI hoạt động, cách nạp root/target từ tham số hoặc file TOML.
-
-- [scanning-and-detection.md](./scanning-and-detection.md)
-  Logic scan filesystem, parse tên media, phát hiện duplicate và cách chấm điểm chất lượng.
-
-- [planning-and-apply.md](./planning-and-apply.md)
-  Cách build action plan, chọn keeper, và áp dụng `move/delete/review` với `dry-run` hoặc `execute`.
+  Kiến trúc module, luồng dữ liệu, và quan hệ giữa dashboard, state, scanner, planner, operations, integrations.
 
 - [dashboard-and-api.md](./dashboard-and-api.md)
-  Giải thích dashboard web, các view hiện có và toàn bộ HTTP API nội bộ.
+  Cấu trúc dashboard 2 page và các API nội bộ mà frontend đang dùng.
 
 - [state-and-artifacts.md](./state-and-artifacts.md)
-  Cách state được lưu, các file JSON đầu ra và activity log.
+  Cách state và các artifact JSON được lưu.
 
 - [integrations.md](./integrations.md)
-  Logic tích hợp Radarr/Sonarr, test kết nối, đồng bộ path sau apply và các giới hạn hiện tại.
+  Logic giữ kết nối Radarr/Sonarr trong `Settings` và đồng bộ path sau `apply`.
 
-## Cách đọc
+- [planning-and-apply.md](./planning-and-apply.md)
+  Cách hệ thống chuyển scan report thành action plan và áp dụng thay đổi trên filesystem, cùng manual folder move.
 
-Nếu cần nắm nhanh dự án:
+- [scanning-and-detection.md](./scanning-and-detection.md)
+  Chi tiết logic scan filesystem và phát hiện duplicate.
 
-1. Đọc `current-features.md`
-2. Đọc `architecture.md`
-3. Đọc `scanning-and-detection.md`
-4. Đọc `planning-and-apply.md`
+- [cli-and-config.md](./cli-and-config.md)
+  Cách dùng CLI và cấu hình từ command line hoặc TOML.
 
-Nếu cần vận hành dashboard và integrations:
+## Cách đọc nhanh
 
-1. Đọc `dashboard-and-api.md`
-2. Đọc `state-and-artifacts.md`
-3. Đọc `integrations.md`
+Nếu cần nắm product hiện tại:
+
+1. đọc `current-features.md`
+2. đọc `architecture.md`
+3. đọc `dashboard-and-api.md`
+
+Nếu cần đi sâu vào logic scan và apply:
+
+1. đọc `scanning-and-detection.md`
+2. đọc `planning-and-apply.md`
+3. đọc `integrations.md`
 
 ## Phạm vi
 
-Các tài liệu trong thư mục này mô tả hành vi hiện tại của code tại thời điểm viết tài liệu.
-Chúng không cố mô tả roadmap hoặc tính năng tương lai.
+Các tài liệu trong thư mục này mô tả hành vi hiện tại của codebase sau khi dashboard được rút về 2 page `Operations` và `Settings`.
