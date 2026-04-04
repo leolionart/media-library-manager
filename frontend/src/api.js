@@ -215,10 +215,10 @@ export function updateProviderPath({ provider, itemId, path }) {
   });
 }
 
-export function deletePathRepairProviderItem({ provider, itemId }) {
+export function deletePathRepairProviderItem({ provider, itemId, addImportExclusion = false }) {
   return request("/api/path-repair/delete", {
     method: "POST",
-    body: JSON.stringify({ provider, item_id: itemId }),
+    body: JSON.stringify({ provider, item_id: itemId, add_import_exclusion: addImportExclusion }),
   });
 }
 

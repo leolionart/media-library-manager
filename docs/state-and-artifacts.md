@@ -16,6 +16,8 @@ State cơ bản hiện gồm:
 - `last_plan_at`
 - `last_apply_at`
 - `last_sync_at`
+- `last_cleanup_at`
+- `last_path_repair_at`
 - `activity_log`
 - `current_job`
 
@@ -38,6 +40,8 @@ thì artifacts là:
 - `data/last-plan.json`
 - `data/last-apply.json`
 - `data/last-sync.json`
+- `data/last-cleanup-scan.json`
+- `data/last-path-repair-scan.json`
 
 ## 3. Current job
 
@@ -64,6 +68,9 @@ Job logs hiện lưu các bước chi tiết của:
 - scan
 - plan
 - apply
+- cleanup scan
+- path repair scan
+- path repair search
 
 Giới hạn:
 
@@ -85,6 +92,11 @@ Kinds hiện có thể gồm:
 - `apply`
 - `integration`
 
+`current_job.kind` hiện còn có thể là:
+
+- `cleanup-scan`
+- `path-repair`
+
 Giới hạn:
 
 ```text
@@ -100,9 +112,13 @@ ACTIVITY_LOG_LIMIT = 200
 - `plan`
 - `apply_result`
 - `sync_result`
+- `cleanup_report`
+- `path_repair_report`
 
 Frontend hiện tải phần lớn UI từ payload này cộng với một số endpoint riêng như:
 
 - `/api/process`
+- `/api/system/mounts`
 - `/api/operations/folders`
+- `/api/operations/folders/children`
 - `/api/operations/folders/tree`

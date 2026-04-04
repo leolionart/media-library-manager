@@ -9,7 +9,7 @@ from media_library_manager.path_repair import delete_provider_item, scan_provide
 
 class PathRepairTests(unittest.TestCase):
     @patch("media_library_manager.path_repair.RadarrClient.list_movies")
-    def test_scan_provider_path_issues_suggests_matching_local_root_folder(self, list_movies_mock) -> None:
+    def test_scan_provider_path_issues_lists_missing_path_without_suggestions(self, list_movies_mock) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)
             library_root = tmp_path / "Movies"
@@ -27,7 +27,7 @@ class PathRepairTests(unittest.TestCase):
 
             self.assertEqual(result["summary"]["issues"], 1)
             self.assertEqual(result["issues"][0]["reason"], "path_not_found")
-            self.assertEqual(result["issues"][0]["suggestions"][0]["path"], str(candidate.resolve()))
+            self.assertEqual(result["issues"][0]["suggestions"], [])
 
     @patch("media_library_manager.path_repair.RadarrClient.refresh_movie")
     @patch("media_library_manager.path_repair.RadarrClient.update_movie")
@@ -67,24 +67,61 @@ class PathRepairTests(unittest.TestCase):
 
             self.assertEqual(result[0]["path"], str(candidate.resolve()))
 
-    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
-    def test_scan_provider_path_issues_finds_deeper_nested_match(self, list_movies_mock) -> None:
+    def test_search_library_paths_finds_deeper_nested_match(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)
             library_root = tmp_path / "Movies"
             candidate = library_root / "Imported" / "2024" / "The Crow (2024)"
             candidate.mkdir(parents=True)
-            list_movies_mock.return_value = [
-                {"id": 21, "title": "The Crow", "year": 2024, "path": "/missing/library/The Crow (2024)"}
-            ]
 
-            result = scan_provider_path_issues(
-                {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
-                [RootConfig(path=library_root, label="Movies", kind="movie")],
-                {"smb": []},
+            result = search_library_paths(
+                provider="radarr",
+                query="The Crow",
+                roots=[RootConfig(path=library_root, label="Movies", kind="movie")],
+                lan_connections={"smb": []},
             )
 
-            self.assertEqual(result["issues"][0]["suggestions"][0]["path"], str(candidate.resolve()))
+            self.assertEqual(result[0]["path"], str(candidate.resolve()))
+
+    def test_search_library_paths_filters_irrelevant_titles(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            library_root = tmp_path / "Movies"
+            relevant = library_root / "Edge of Tomorrow (2014)"
+            irrelevant = library_root / "Tomorrowland (2015)"
+            relevant.mkdir(parents=True)
+            irrelevant.mkdir(parents=True)
+
+            result = search_library_paths(
+                provider="radarr",
+                query="Edge of Tomorrow",
+                roots=[RootConfig(path=library_root, label="Movies", kind="movie")],
+                lan_connections={"smb": []},
+            )
+
+            paths = [item["path"] for item in result]
+            self.assertIn(str(relevant.resolve()), paths)
+            self.assertNotIn(str(irrelevant.resolve()), paths)
+
+    def test_search_library_paths_prefers_exact_title_over_partial_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            library_root = tmp_path / "Movies"
+            exact = library_root / "Mission Impossible Dead Reckoning Part One (2023)"
+            partial = library_root / "Mission to Mars (2000)"
+            exact.mkdir(parents=True)
+            partial.mkdir(parents=True)
+
+            result = search_library_paths(
+                provider="radarr",
+                query="Mission Impossible Dead Reckoning",
+                roots=[RootConfig(path=library_root, label="Movies", kind="movie")],
+                lan_connections={"smb": []},
+            )
+
+            paths = [item["path"] for item in result]
+            self.assertIn(str(exact.resolve()), paths)
+            self.assertNotIn(str(partial.resolve()), paths)
 
     @patch("media_library_manager.path_repair.RadarrClient.delete_movie")
     def test_delete_provider_item_removes_radarr_item_without_deleting_files(self, delete_movie_mock) -> None:
@@ -98,3 +135,18 @@ class PathRepairTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         delete_movie_mock.assert_called_once_with(11, delete_files=False, add_import_exclusion=False)
+
+    @patch("media_library_manager.path_repair.RadarrClient.delete_movie")
+    def test_delete_provider_item_can_add_import_exclusion(self, delete_movie_mock) -> None:
+        delete_movie_mock.return_value = {"status": "deleted"}
+
+        result = delete_provider_item(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}},
+            provider="radarr",
+            item_id=11,
+            add_import_exclusion=True,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["add_import_exclusion"])
+        delete_movie_mock.assert_called_once_with(11, delete_files=False, add_import_exclusion=True)

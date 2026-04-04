@@ -2,6 +2,18 @@
 
 This repository has a small local dashboard UI. Future edits need to keep the interface consistent and Plex-adjacent instead of introducing one-off styling.
 
+## AI Context Shortcut
+
+Khi cần hiểu tính năng và logic hiện tại của project, ưu tiên đọc:
+
+- `docs/ai-project-map.md`
+- `docs/README.md`
+- `docs/current-features.md`
+
+Chỉ quay sang đọc code sau khi đã đọc các tài liệu trên hoặc khi cần xác minh behavior chi tiết.
+
+Nếu thay đổi workflow, API, artifact, hoặc tên màn hình, hãy cập nhật luôn các tài liệu này để phiên AI sau không phải đi đọc lại code từ đầu.
+
 ## Dashboard Design System
 
 The source of truth for dashboard styling is:

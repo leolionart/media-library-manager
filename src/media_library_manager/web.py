@@ -652,13 +652,63 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not roots:
                 self._send_json({"error": "no connected roots available for path repair"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            result = scan_provider_path_issues(
-                self.store.load_integrations(),
-                roots,
-                self.store.load_lan_connections(),
+            integrations = self.store.load_integrations()
+            providers = [provider for provider in ["radarr", "sonarr"] if integrations.get(provider, {}).get("enabled")]
+            self.store.start_job(
+                kind="path-repair",
+                message="Scanning provider library paths.",
+                summary={"total": max(len(providers), 1), "completed": 0},
+                details={"action": "scan-path-repair", "providers": providers, "root_count": len(roots)},
             )
+            self.store.append_activity(
+                kind="scan",
+                status="running",
+                message="Started provider library path repair scan.",
+                details={"providers": providers, "root_count": len(roots)},
+            )
+            try:
+                result = scan_provider_path_issues(
+                    integrations,
+                    roots,
+                    self.store.load_lan_connections(),
+                    progress_callback=self._path_repair_progress_callback,
+                )
+            except JobCancelledError:
+                cancel_details = {"providers": providers, "root_count": len(roots), "cancel_requested": True}
+                self.store.finish_job(status="cancelled", message="Provider path repair scan cancelled.", details=cancel_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="cancelled",
+                    message="Provider path repair scan cancelled.",
+                    details=cancel_details,
+                )
+                self._send_json({"error": "path repair scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+                return
+            except Exception as exc:
+                error_details = {"providers": providers, "root_count": len(roots), "error": str(exc)}
+                self.store.finish_job(status="error", message="Provider path repair scan failed.", details=error_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="error",
+                    message="Provider path repair scan failed.",
+                    details=error_details,
+                )
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
             result["generated_at"] = now_iso()
             self.store.save_path_repair_report(result)
+            self.store.finish_job(
+                status="success",
+                message="Provider path repair scan completed.",
+                details={"providers": providers, "summary": result.get("summary", {})},
+                summary={"total": max(len(providers), 1), "completed": max(len(providers), 1), "issues": result.get("summary", {}).get("issues", 0)},
+            )
+            self.store.append_activity(
+                kind="scan",
+                status="success",
+                message="Provider path repair scan completed.",
+                details={"providers": providers, "summary": result.get("summary", {})},
+            )
             self._send_json(result)
             return
 
@@ -719,6 +769,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             provider = str(payload.get("provider") or "").strip().lower()
             item_id = int(payload.get("item_id") or 0)
+            add_import_exclusion = bool(payload.get("add_import_exclusion"))
             if provider not in {"radarr", "sonarr"} or item_id <= 0:
                 self._send_json({"error": "provider and item_id are required"}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -726,13 +777,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 kind="path-repair",
                 message="Removing provider library item.",
                 summary={"total": 1, "completed": 0},
-                details={"provider": provider, "item_id": item_id, "action": "delete-provider-item"},
+                details={"provider": provider, "item_id": item_id, "action": "delete-provider-item", "add_import_exclusion": add_import_exclusion},
             )
-            self.store.append_job_log(level="warning", message="Removing item from provider without deleting media files.", details={"provider": provider, "item_id": item_id})
+            self.store.append_job_log(
+                level="warning",
+                message="Removing item from provider without deleting media files.",
+                details={"provider": provider, "item_id": item_id, "add_import_exclusion": add_import_exclusion},
+            )
             result = delete_provider_item(
                 self.store.load_integrations(),
                 provider=provider,
                 item_id=item_id,
+                add_import_exclusion=add_import_exclusion,
             )
             if result.get("status") != "success":
                 self.store.finish_job(
@@ -772,11 +828,46 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if provider not in {"radarr", "sonarr"} or not query:
                 self._send_json({"error": "provider and query are required"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            results = search_library_paths(
-                provider=provider,
-                query=query,
-                roots=self.store.list_roots(),
-                lan_connections=self.store.load_lan_connections(),
+            roots = self.store.list_roots()
+            matched_roots = [
+                root
+                for root in roots
+                if (provider == "radarr" and root.kind in {"movie", "mixed"})
+                or (provider == "sonarr" and root.kind in {"series", "mixed"})
+            ]
+            self.store.start_job(
+                kind="path-repair",
+                message="Searching connected library folders.",
+                summary={"total": max(len(matched_roots), 1), "completed": 0, "results": 0},
+                details={"provider": provider, "query": query, "action": "search-path-repair", "root_count": len(matched_roots)},
+            )
+            self.store.append_job_log(
+                level="info",
+                message="Preparing title-based folder search.",
+                details={"provider": provider, "query": query, "root_count": len(matched_roots)},
+            )
+            try:
+                results = search_library_paths(
+                    provider=provider,
+                    query=query,
+                    roots=roots,
+                    lan_connections=self.store.load_lan_connections(),
+                    progress_callback=self._path_repair_search_progress_callback,
+                )
+            except Exception as exc:
+                self.store.finish_job(
+                    status="error",
+                    message="Folder search failed.",
+                    details={"provider": provider, "query": query, "error": str(exc)},
+                    summary={"total": max(len(matched_roots), 1), "completed": 0, "results": 0},
+                )
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+            self.store.finish_job(
+                status="success",
+                message="Folder search completed.",
+                details={"provider": provider, "query": query, "results": len(results)},
+                summary={"total": max(len(matched_roots), 1), "completed": max(len(matched_roots), 1), "results": len(results)},
             )
             self._send_json({"items": results})
             return
@@ -1396,6 +1487,155 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "exact_duplicate_groups": int(event.get("exact_duplicate_groups", 0)),
                     "media_collision_groups": int(event.get("media_collision_groups", 0)),
                     "folder_media_duplicate_groups": int(event.get("folder_media_duplicate_groups", 0)),
+                },
+            )
+
+    def _path_repair_progress_callback(self, event: dict[str, object]) -> None:
+        self._raise_if_cancel_requested()
+        event_name = str(event.get("event") or "")
+        if event_name == "provider_started":
+            self.store.append_job_log(
+                level="info",
+                message=f"Loading provider {event.get('index')}/{event.get('total_providers')}: {event.get('provider')}",
+            )
+            self.store.update_job_progress(
+                {"total": int(event.get("total_providers", 0) or 0), "completed": max(int(event.get("index", 1)) - 1, 0)}
+            )
+            return
+        if event_name == "provider_items_loaded":
+            self.store.append_job_log(
+                level="info",
+                message=f"Loaded {int(event.get('items', 0))} item(s) from {event.get('provider')}.",
+            )
+            return
+        if event_name == "root_index_started":
+            self.store.append_job_log(
+                level="info",
+                message=f"Indexing root {int(event.get('root_index', 0))}/{int(event.get('total_roots', 0))} for {event.get('provider')}: {event.get('root_label')}",
+                details={"path": event.get("root_path")},
+            )
+            return
+        if event_name == "root_index_completed":
+            self.store.append_job_log(
+                level="info",
+                message=f"Indexed root {int(event.get('root_index', 0))}/{int(event.get('total_roots', 0))} for {event.get('provider')}: {event.get('root_label')}",
+                details={
+                    "path": event.get("root_path"),
+                    "indexed_folders": int(event.get("indexed_folders", 0)),
+                    "total_indexed_folders": int(event.get("total_indexed_folders", 0)),
+                },
+            )
+            return
+        if event_name == "provider_item_progress":
+            self.store.append_job_log(
+                level="info",
+                message=f"Matched {event.get('provider')} items {int(event.get('item_index', 0))}/{int(event.get('total_items', 0))}.",
+                details={"total_issues": int(event.get("total_issues", 0))},
+            )
+            return
+        if event_name == "provider_completed":
+            self.store.append_job_log(
+                level="info",
+                message=f"Finished provider {event.get('index')}/{event.get('total_providers')}: {event.get('provider')}",
+                details={
+                    "items": int(event.get("items", 0)),
+                    "issues_found": int(event.get("issues_found", 0)),
+                    "total_issues": int(event.get("total_issues", 0)),
+                    "total_errors": int(event.get("total_errors", 0)),
+                },
+            )
+            self.store.update_job_progress(
+                {
+                    "total": int(event.get("total_providers", 0) or 0),
+                    "completed": int(event.get("index", 0) or 0),
+                    "issues": int(event.get("total_issues", 0) or 0),
+                }
+            )
+            return
+        if event_name == "provider_failed":
+            self.store.append_job_log(
+                level="error",
+                message=f"Provider {event.get('provider')} failed to load.",
+                details={"message": event.get("message")},
+            )
+            self.store.update_job_progress(
+                {
+                    "total": int(event.get("total_providers", 0) or 0),
+                    "completed": int(event.get("index", 0) or 0),
+                    "error": int(event.get("total_errors", 0) or 0),
+                }
+            )
+            return
+        if event_name == "scan_completed":
+            self.store.append_job_log(
+                level="info",
+                message="Finished provider path repair scan.",
+                details={
+                    "issues": int(event.get("issues", 0)),
+                    "with_suggestions": int(event.get("with_suggestions", 0)),
+                    "errors": int(event.get("errors", 0)),
+                },
+            )
+
+    def _path_repair_search_progress_callback(self, event: dict[str, object]) -> None:
+        self._raise_if_cancel_requested()
+        event_name = str(event.get("event") or "")
+        provider = str(event.get("provider") or "")
+        if event_name == "search_started":
+            self.store.append_job_log(
+                level="info",
+                message="Using normalized title query for folder matching.",
+                details={
+                    "provider": provider,
+                    "query": event.get("query"),
+                    "normalized_query": event.get("normalized_query"),
+                    "root_count": int(event.get("root_count", 0) or 0),
+                    "max_depth": int(event.get("max_depth", 0) or 0),
+                },
+            )
+            return
+        if event_name == "root_index_started":
+            self.store.append_job_log(
+                level="info",
+                message=f"Searching root {int(event.get('root_index', 0))}/{int(event.get('total_roots', 0))} for {provider}: {event.get('root_label')}",
+                details={"path": event.get("root_path")},
+            )
+            return
+        if event_name == "root_index_completed":
+            completed = int(event.get("root_index", 0) or 0)
+            total_roots = int(event.get("total_roots", 0) or 0)
+            self.store.update_job_progress(
+                {
+                    "total": max(total_roots, 1),
+                    "completed": completed,
+                    "indexed_folders": int(event.get("total_indexed_folders", 0) or 0),
+                }
+            )
+            self.store.append_job_log(
+                level="info",
+                message=f"Finished root {completed}/{max(total_roots, 1)} for {provider}: {event.get('root_label')}",
+                details={
+                    "path": event.get("root_path"),
+                    "indexed_folders": int(event.get("indexed_folders", 0) or 0),
+                    "total_indexed_folders": int(event.get("total_indexed_folders", 0) or 0),
+                },
+            )
+            return
+        if event_name == "search_completed":
+            self.store.update_job_progress(
+                {
+                    "results": int(event.get("result_count", 0) or 0),
+                    "candidates": int(event.get("candidate_count", 0) or 0),
+                }
+            )
+            self.store.append_job_log(
+                level="info",
+                message="Finished scoring indexed folders against the movie title.",
+                details={
+                    "provider": provider,
+                    "query": event.get("query"),
+                    "candidates": int(event.get("candidate_count", 0) or 0),
+                    "results": int(event.get("result_count", 0) or 0),
                 },
             )
 

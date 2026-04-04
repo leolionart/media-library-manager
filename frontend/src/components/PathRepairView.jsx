@@ -15,8 +15,15 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { DeleteOutlined, LinkOutlined, SearchOutlined } from "@ant-design/icons";
-import { deletePathRepairProviderItem, request, runPathRepairScan, searchPathRepairFolders, updateProviderPath } from "../api";
+import { DeleteOutlined, LinkOutlined, SearchOutlined, StopOutlined } from "@ant-design/icons";
+import {
+  deletePathRepairProviderItem,
+  fetchCurrentProcess,
+  request,
+  runPathRepairScan,
+  searchPathRepairFolders,
+  updateProviderPath,
+} from "../api";
 import { MediaLibraryLogPanel } from "./MediaLibraryLogPanel";
 
 const { Text } = Typography;
@@ -30,6 +37,46 @@ const emptySearchState = {
 };
 
 const PATH_REPAIR_REPORT_STORAGE_KEY = "media-library-manager.path-repair-report";
+
+function formatSearchLogTime(value) {
+  if (!value) return "--:--:--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--:--";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+function buildSearchLogDetailSummary(details) {
+  return Object.entries(details || {})
+    .map(([key, value]) => {
+      if (value === null || value === undefined || value === "") return null;
+      return `${String(key).replaceAll("_", " ")}: ${Array.isArray(value) ? value.join(", ") : String(value)}`;
+    })
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function isSearchProcessJob(job) {
+  return String(job?.kind || "").toLowerCase() === "path-repair" && String(job?.details?.action || "") === "search-path-repair";
+}
+
+function renderAnimatedStatusLabel(job) {
+  const status = String(job?.status || "").toLowerCase();
+  if (status === "running") {
+    return (
+      <span className="path-repair-running-status">
+        <span className="path-repair-running-dot" aria-hidden="true" />
+        <span className="path-repair-running-text">Scanning</span>
+        <span className="path-repair-running-ellipsis" aria-hidden="true">
+          <span>.</span>
+          <span>.</span>
+          <span>.</span>
+        </span>
+      </span>
+    );
+  }
+  if (!status) return "Starting";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
 
 function loadStoredPathRepairReport() {
   if (typeof window === "undefined") return { summary: {}, issues: [], errors: [] };
@@ -71,6 +118,7 @@ export function PathRepairView() {
   const [payload, setPayload] = useState(() => loadStoredPathRepairReport());
   const [selectedIssueIds, setSelectedIssueIds] = useState([]);
   const [searchState, setSearchState] = useState(emptySearchState);
+  const [searchProcessJob, setSearchProcessJob] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +162,28 @@ export function PathRepairView() {
     setSelectedIssueIds((current) => current.filter((id) => validIssueIds.has(String(id))));
   }, [filteredIssues]);
 
+  useEffect(() => {
+    if (!searchState.open || !searchState.loading) return undefined;
+    let cancelled = false;
+
+    const loadProcess = async () => {
+      try {
+        const process = await fetchCurrentProcess();
+        if (cancelled) return;
+        setSearchProcessJob(isSearchProcessJob(process.current_job) ? process.current_job : null);
+      } catch {
+        if (!cancelled) setSearchProcessJob(null);
+      }
+    };
+
+    void loadProcess();
+    const intervalId = window.setInterval(loadProcess, 700);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [searchState.loading, searchState.open]);
+
   const selectedIssues = useMemo(
     () => filteredIssues.filter((issue) => selectedIssueIds.includes(String(issue.id))),
     [filteredIssues, selectedIssueIds]
@@ -143,6 +213,30 @@ export function PathRepairView() {
       await refreshState();
       message.success(
         issuesToRemove.length === 1 ? "Provider item removed." : `${issuesToRemove.length} provider items removed.`
+      );
+    } catch (error) {
+      message.error(error.message);
+    } finally {
+      setUpdatingKey("");
+    }
+  }
+
+  async function handleRemoveAndBlockIssues(issuesToRemove) {
+    if (!issuesToRemove.length) return;
+    setUpdatingKey("__bulk-block__");
+    try {
+      for (const issue of issuesToRemove) {
+        await deletePathRepairProviderItem({
+          provider: issue.provider,
+          itemId: issue.item_id,
+          addImportExclusion: true,
+        });
+      }
+      await refreshState();
+      message.success(
+        issuesToRemove.length === 1
+          ? "Provider item removed and blocked."
+          : `${issuesToRemove.length} provider items removed and blocked.`
       );
     } catch (error) {
       message.error(error.message);
@@ -228,15 +322,19 @@ export function PathRepairView() {
       loading: true,
       items: [],
     });
+    setSearchProcessJob(null);
     try {
       const result = await searchPathRepairFolders({ provider: issue.provider, query: initialQuery });
+      const process = await fetchCurrentProcess();
       setSearchState((current) => ({
         ...current,
         loading: false,
         items: result.items || [],
       }));
+      setSearchProcessJob(isSearchProcessJob(process.current_job) ? process.current_job : null);
     } catch (error) {
       setSearchState((current) => ({ ...current, loading: false }));
+      setSearchProcessJob(null);
       message.error(error.message);
     }
   }
@@ -341,6 +439,42 @@ export function PathRepairView() {
                 loading={updatingKey === `${issue.id}:delete`}
               />
             </Tooltip>
+            <Tooltip title="Remove and block auto re-import">
+              <Button
+                danger
+                type="primary"
+                icon={<StopOutlined />}
+                aria-label={`Remove and block ${issue.title} from provider`}
+                onClick={() =>
+                  modal.confirm({
+                    title: "Remove and block this item?",
+                    content: "This removes the item from Radarr or Sonarr and adds import exclusion so it is not automatically added again.",
+                    okText: "Remove and Block",
+                    okButtonProps: { danger: true },
+                    onOk: async () => {
+                      const actionKey = `${issue.id}:block`;
+                      setUpdatingKey(actionKey);
+                      try {
+                        await deletePathRepairProviderItem({
+                          provider: issue.provider,
+                          itemId: issue.item_id,
+                          addImportExclusion: true,
+                        });
+                        const nextPayload = pruneIssueFromReport(payload, issue.provider, issue.item_id);
+                        setPayload(nextPayload);
+                        persistPathRepairReport(nextPayload);
+                        message.success("Provider item removed and blocked.");
+                      } catch (error) {
+                        message.error(error.message);
+                      } finally {
+                        setUpdatingKey("");
+                      }
+                    },
+                  })
+                }
+                loading={updatingKey === `${issue.id}:block`}
+              />
+            </Tooltip>
           </Space>
         );
       },
@@ -389,6 +523,25 @@ export function PathRepairView() {
                 }
               >
                 Remove Selected Items
+              </Button>
+              <Button
+                danger
+                type="primary"
+                disabled={!selectedIssues.length}
+                loading={updatingKey === "__bulk-block__"}
+                onClick={() =>
+                  modal.confirm({
+                    title: `Remove and block ${selectedIssues.length} selected item${selectedIssues.length === 1 ? "" : "s"}?`,
+                    content: "This removes the selected items from Radarr or Sonarr and adds import exclusion so they are not automatically added again.",
+                    okText: "Remove and Block",
+                    okButtonProps: { danger: true },
+                    onOk: async () => {
+                      await handleRemoveAndBlockIssues(selectedIssues);
+                    },
+                  })
+                }
+              >
+                Remove and Block
               </Button>
               <Button disabled={!selectedIssueIds.length} onClick={() => setSelectedIssueIds([])}>
                 Clear Selection
@@ -449,7 +602,10 @@ export function PathRepairView() {
         title={searchState.issue ? `Search Folder: ${searchState.issue.title}` : "Search Folder"}
         footer={null}
         width={920}
-        onCancel={() => setSearchState(emptySearchState)}
+        onCancel={() => {
+          setSearchState(emptySearchState);
+          setSearchProcessJob(null);
+        }}
       >
         <Flex vertical gap={16}>
           <Input.Search
@@ -462,23 +618,82 @@ export function PathRepairView() {
               const issue = searchState.issue;
               if (!issue || !String(value || "").trim()) return;
               setSearchState((current) => ({ ...current, loading: true, query: value }));
+              setSearchProcessJob(null);
               try {
                 const result = await searchPathRepairFolders({ provider: issue.provider, query: value });
+                const process = await fetchCurrentProcess();
                 setSearchState((current) => ({
                   ...current,
                   loading: false,
                   items: result.items || [],
                 }));
+                setSearchProcessJob(isSearchProcessJob(process.current_job) ? process.current_job : null);
               } catch (error) {
                 setSearchState((current) => ({ ...current, loading: false }));
+                setSearchProcessJob(null);
                 message.error(error.message);
               }
             }}
           />
 
           {searchState.loading ? (
-            <div className="card-loading">
-              <Spin size="large" />
+            <div className="path-repair-search-progress">
+              <Space wrap>
+                <Tag>{searchState.issue?.provider || "provider"}</Tag>
+                <Tag color="processing">Query: {searchState.query || "..."}</Tag>
+                {searchProcessJob?.summary?.indexed_folders ? (
+                  <Tag>Indexed folders: {searchProcessJob.summary.indexed_folders}</Tag>
+                ) : null}
+                {searchProcessJob?.summary?.total ? (
+                  <Tag>
+                    Roots: {Number(searchProcessJob?.summary?.completed || 0)}/{Number(searchProcessJob?.summary?.total || 0)}
+                  </Tag>
+                ) : null}
+              </Space>
+
+              <div className="process-log-shell path-repair-search-log-shell">
+                <div className="process-log-shell-head">
+                  <div className="process-log-shell-lights" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="process-log-shell-title">
+                    <Text className="process-log-shell-title-main">Folder Search Progress</Text>
+                    <Text className="process-log-shell-title-sub">
+                      {searchProcessJob?.message || "Waiting for backend search logs..."}
+                    </Text>
+                  </div>
+                  <Text className="process-log-shell-state">{renderAnimatedStatusLabel(searchProcessJob)}</Text>
+                </div>
+                <div className="process-log-viewport path-repair-search-log-viewport">
+                  <div className="process-log-lines">
+                    {(searchProcessJob?.logs || []).length ? (
+                      searchProcessJob.logs.map((entry) => {
+                        const level = String(entry?.level || "info").toLowerCase();
+                        const tone = level.includes("error") ? "tone-error" : level.includes("warning") ? "tone-warning" : "tone-info";
+                        const detailSummary = buildSearchLogDetailSummary(entry?.details || {});
+                        return (
+                          <div key={`${entry?.ts}-${entry?.message}`} className={`process-log-line ${tone}`}>
+                            <div className="process-log-line-meta">
+                              <Text className="process-log-line-time">{formatSearchLogTime(entry?.ts)}</Text>
+                              <Tag className={`process-log-line-level ${tone}`}>{entry?.level || "info"}</Tag>
+                            </div>
+                            <div className="process-log-line-body">
+                              <Text className="process-log-line-message">{entry?.message}</Text>
+                              {detailSummary ? <Text className="process-log-line-summary">{detailSummary}</Text> : null}
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="card-loading path-repair-search-log-loading">
+                        <Spin size="large" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : searchState.items.length ? (
             <Table

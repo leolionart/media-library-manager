@@ -6,8 +6,12 @@ Thư mục `docs/` mô tả trạng thái hiện tại của dự án sau khi:
 - backend chuyển mạnh sang SMB-native
 - folder inventory có cả list và tree
 - current job có log chi tiết, cancel request, và persist qua refresh
+- dashboard có 5 màn chính và dùng chung log component cho các flow dài
 
 ## Danh mục
+
+- [ai-project-map.md](./ai-project-map.md)
+  Tài liệu AI-first: bản đồ tính năng, workflow, state, artifact, API, và những điểm cần biết trước khi đọc code.
 
 - [architecture.md](./architecture.md)
   Kiến trúc tổng thể, module chính, và luồng dữ liệu.
@@ -37,13 +41,15 @@ Thư mục `docs/` mô tả trạng thái hiện tại của dự án sau khi:
 
 Nếu cần nắm dự án hiện tại:
 
-1. đọc `current-features.md`
-2. đọc `architecture.md`
-3. đọc `dashboard-and-api.md`
+1. đọc `ai-project-map.md`
+2. đọc `current-features.md`
+3. đọc `architecture.md`
+4. đọc `dashboard-and-api.md`
 
 Nếu cần backend behavior:
 
-1. đọc `scanning-and-detection.md`
-2. đọc `planning-and-apply.md`
-3. đọc `integrations.md`
-4. đọc `state-and-artifacts.md`
+1. đọc `ai-project-map.md`
+2. đọc `scanning-and-detection.md`
+3. đọc `planning-and-apply.md`
+4. đọc `integrations.md`
+5. đọc `state-and-artifacts.md`

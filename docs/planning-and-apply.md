@@ -21,7 +21,7 @@ Hiện có hai nhóm thao tác filesystem:
 
 `operations.apply_plan()` hỗ trợ:
 
-- dry-run
+- preview (`execute=false`, trong UI thường gọi là `Preview`)
 - execute
 - prune empty dirs
 - progress callback
@@ -56,7 +56,7 @@ Hiện hỗ trợ:
 
 Hành vi:
 
-- dry-run hoặc execute
+- preview hoặc execute
 - move từng child entry vào destination
 - thử remove source folder nếu rỗng
 

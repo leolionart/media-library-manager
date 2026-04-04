@@ -18,14 +18,22 @@ Backend vừa:
 
 ## 2. Product shape hiện tại
 
-UI hiện tại có 3 view:
+UI hiện tại có 5 view:
 
 - `Overview`
-- `Operations`
+- `Media Management`
+- `Duplication Clean`
+- `Library Path Repair`
 - `Settings`
 
-Trọng tâm nghiệp vụ nằm ở `Operations`.
-`Settings` chỉ giữ phần kết nối và provider setup.
+Trọng tâm nghiệp vụ nằm ở ba màn:
+
+- `Media Management`
+- `Duplication Clean`
+- `Library Path Repair`
+
+`Overview` là màn tổng hợp số liệu và process state.
+`Settings` giữ phần kết nối, roots, và provider setup.
 
 ## 3. Module chính
 
@@ -40,6 +48,8 @@ Chịu trách nhiệm:
 - scan / plan / apply
 - provider APIs
 - operations inventory và tree
+- cleanup scan
+- path repair scan / search / update / delete
 - current job logs và cancel
 
 ### `state.py`
@@ -55,6 +65,7 @@ Lưu:
 - current_job
 - timestamps
 - report / plan / apply / sync artifacts
+- cleanup / path repair artifacts
 
 ### `lan_connections.py`
 
@@ -112,17 +123,28 @@ Chứa:
 - `move_folder()`
 - `move_folder_contents()`
 - `delete_folder()`
+- `delete_file()`
 
 Hiện hỗ trợ cả local path và SMB path.
 
-### `providers/`
+### `cleanup_scan.py`
 
-Client cho:
+Giữ logic cleanup theo provider library:
 
-- Radarr
-- Sonarr
+- load item từ Radarr / Sonarr
+- validate provider path
+- scan trực tiếp folder provider đang quản lý
+- build `cleanup_report`
 
-Base client hiện gửi `User-Agent` browser-like để tránh reverse proxy chặn API request.
+### `path_repair.py`
+
+Giữ logic path repair:
+
+- scan item provider có path lỗi
+- index connected roots
+- rank candidate folders theo title/year similarity
+- update provider path
+- remove provider item
 
 ### `sync_integrations.py`
 
@@ -133,6 +155,17 @@ Giữ logic:
 - list provider items
 - refresh provider item
 - sync sau apply
+
+Chỉ các action `move` apply thành công mới đi vào sync.
+
+### `providers/`
+
+Client cho:
+
+- Radarr
+- Sonarr
+
+Base client hiện gửi `User-Agent` browser-like để tránh reverse proxy chặn API request.
 
 ## 4. Luồng dữ liệu chính
 
@@ -148,9 +181,11 @@ Giữ logic:
 
 `roots -> recursive storage walk -> /api/operations/folders/tree`
 
+`tree node expand -> /api/operations/folders/children`
+
 ### Scan
 
-`roots -> scanner_storage -> scanner.scan_roots() -> last-report.json`
+`selected folders -> scanner_storage -> scanner.scan_roots() -> last-report.json`
 
 ### Plan
 
@@ -160,13 +195,29 @@ Giữ logic:
 
 `last-plan.json -> operations.apply_plan() -> last-apply.json`
 
+Nếu `execute=true`:
+
+`last-plan.json -> apply -> sync_after_apply() -> last-sync.json`
+
+Sau apply execute, backend clear `last-plan.json`.
+
 ### Provider move
 
-`Operations -> provider items -> move_folder_contents() -> provider refresh`
+`Media Management -> provider items -> move_folder_contents() -> provider refresh`
 
-### Sync
+### Cleanup
 
-`plan + apply_result + integrations -> sync_after_apply() -> last-sync.json`
+`enabled providers -> cleanup_scan.scan_provider_cleanup() -> last-cleanup-scan.json`
+
+### Path repair
+
+`enabled providers -> path_repair.scan_provider_path_issues() -> last-path-repair-scan.json`
+
+`selected issue -> path_repair.search_library_paths() -> ranked candidates`
+
+`selected candidate -> path_repair.update_provider_item_path() -> prune saved issue`
+
+`remove action -> path_repair.delete_provider_item() -> prune saved issue`
 
 ## 5. Current job model
 
@@ -181,11 +232,24 @@ Mỗi job có:
 
 Frontend chỉ cần poll `GET /api/process`.
 
+Kinds hiện có trong runtime thực tế:
+
+- `scan`
+- `plan`
+- `apply`
+- `cleanup-scan`
+- `path-repair`
+
 Cancel hoạt động theo cooperative model:
 
 - `POST /api/process/cancel`
 - state ghi `cancel_requested`
 - engine dừng ở safe point tiếp theo
+
+UI hiện dùng chung `MediaLibraryLogPanel` để đọc:
+
+- live `current_job.logs`
+- filtered `activity_log`
 
 ## 6. Nguyên tắc thiết kế hiện tại
 
@@ -197,6 +261,7 @@ SMB roots được truy cập trực tiếp qua `smbclient`.
 ### Persisted runtime state
 
 Refresh trang không được làm mất `current_job`.
+Artifacts mới nhất cũng được giữ lại để overview, cleanup, path repair và logs có thể restore sau refresh.
 
 ### Provider là layer bổ trợ
 
@@ -206,6 +271,8 @@ Chúng chỉ tham gia ở:
 - provider item lookup
 - provider refresh
 - sync sau apply
+- cleanup scan
+- path repair
 
 ### UI mới không dùng mọi state cũ
 

@@ -128,6 +128,119 @@ pre {
   word-break: break-word;
 }
 
+.overview-panel-row {
+  align-items: stretch;
+}
+
+.overview-panel-col {
+  display: flex;
+}
+
+.overview-panel-card.ant-card,
+.overview-metric-card.ant-card {
+  width: 100%;
+  height: 100%;
+}
+
+.overview-metric-card.ant-card .ant-card-body {
+  display: grid;
+  gap: 12px;
+}
+
+.overview-metric-card.ant-card .ant-statistic {
+  min-height: 76px;
+}
+
+.overview-metric-card.ant-card .ant-statistic-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.overview-metric-card.ant-card .ant-statistic-content-prefix {
+  color: var(--plex-accent);
+  font-size: 28px;
+}
+
+.overview-metric-card.ant-card .ant-statistic-content-value {
+  font-size: 42px;
+  line-height: 1;
+}
+
+.overview-metric-note.ant-typography {
+  margin: 0;
+  color: var(--plex-text-secondary);
+  line-height: 1.55;
+}
+
+.overview-metric-tags {
+  row-gap: 8px;
+}
+
+.overview-metric-tags .ant-tag {
+  margin-inline-end: 0;
+}
+
+.overview-stat-list .ant-list-items {
+  display: grid;
+  gap: 12px;
+}
+
+.overview-stat-item.ant-list-item {
+  align-items: center;
+  padding: 14px 0;
+}
+
+.overview-stat-item.ant-list-item .ant-list-item-meta {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.overview-stat-item.ant-list-item .ant-list-item-meta-title {
+  margin-bottom: 4px;
+}
+
+.overview-stat-item.ant-list-item .ant-list-item-meta-description {
+  color: var(--plex-text-secondary);
+  line-height: 1.55;
+}
+
+.overview-stat-value.ant-typography {
+  margin: 0;
+  min-width: 40px;
+  color: var(--plex-text-primary);
+  font-size: 22px;
+  line-height: 1;
+  text-align: right;
+}
+
+.overview-process-message.ant-typography {
+  margin: 0;
+  color: var(--plex-text-primary);
+  font-size: 24px;
+  line-height: 1.35;
+}
+
+.overview-process-progress.ant-progress .ant-progress-outer {
+  margin-inline-end: 0;
+}
+
+.overview-process-progress.ant-progress .ant-progress-text {
+  color: var(--plex-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.overview-descriptions.ant-descriptions .ant-descriptions-item-label {
+  width: 42%;
+  color: var(--plex-text-secondary);
+}
+
+.overview-descriptions.ant-descriptions .ant-descriptions-item-content {
+  color: var(--plex-text-primary);
+  font-weight: 600;
+}
+
 .process-log-card .ant-card-body {
   display: grid;
   gap: var(--plex-space-md);
@@ -274,6 +387,86 @@ pre {
 
 .cleanup-path-text {
   word-break: break-all;
+}
+
+.path-repair-search-progress {
+  display: grid;
+  gap: var(--plex-space-md);
+}
+
+.path-repair-search-log-shell {
+  min-height: 360px;
+}
+
+.path-repair-search-log-viewport {
+  max-height: 420px;
+}
+
+.path-repair-search-log-loading {
+  min-height: 260px;
+}
+
+.path-repair-running-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--plex-warning);
+  font-weight: 600;
+}
+
+.path-repair-running-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--plex-warning);
+  box-shadow: 0 0 0 rgba(245, 192, 76, 0.45);
+  animation: path-repair-pulse 1.4s ease-out infinite;
+}
+
+.path-repair-running-ellipsis {
+  display: inline-flex;
+  min-width: 16px;
+}
+
+.path-repair-running-ellipsis span {
+  opacity: 0.2;
+  animation: path-repair-ellipsis 1.2s steps(1, end) infinite;
+}
+
+.path-repair-running-ellipsis span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.path-repair-running-ellipsis span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes path-repair-pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(245, 192, 76, 0.42);
+  }
+
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 10px rgba(245, 192, 76, 0);
+  }
+
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(245, 192, 76, 0);
+  }
+}
+
+@keyframes path-repair-ellipsis {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .process-log-filter-segmented.ant-segmented {
@@ -733,6 +926,10 @@ pre {
 }
 
 @media (max-width: 1180px) {
+  .overview-stat-value.ant-typography {
+    text-align: left;
+  }
+
   .cleanup-toolbar,
   .process-log-summary,
   .process-log-toolbar {
@@ -750,6 +947,22 @@ pre {
   .content-react {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .overview-metric-card.ant-card .ant-statistic-content-value {
+    font-size: 34px;
+  }
+
+  .overview-process-message.ant-typography {
+    font-size: 20px;
+  }
+
+  .overview-stat-item.ant-list-item {
+    align-items: flex-start;
+  }
+
+  .overview-descriptions.ant-descriptions .ant-descriptions-item-label {
+    width: auto;
   }
 
   .process-log-summary-stats {

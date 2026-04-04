@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -14,6 +15,40 @@ from .sync_integrations import build_provider_config, normalize_title
 
 
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
+TITLE_STOPWORDS = {"the", "a", "an", "of", "and", "for", "to", "in"}
+RELEASE_NOISE_TOKENS = {
+    "2160p",
+    "1080p",
+    "720p",
+    "480p",
+    "4k",
+    "uhd",
+    "hdr",
+    "dv",
+    "dovi",
+    "bluray",
+    "brrip",
+    "bdrip",
+    "webrip",
+    "webdl",
+    "web",
+    "remux",
+    "x264",
+    "x265",
+    "h264",
+    "h265",
+    "hevc",
+    "av1",
+    "aac",
+    "dts",
+    "atmos",
+    "proper",
+    "repack",
+    "extended",
+    "internal",
+    "readnfo",
+}
 
 
 def scan_provider_path_issues(
@@ -56,29 +91,47 @@ def scan_provider_path_issues(
                 )
             continue
 
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "provider_items_loaded",
+                    "provider": provider,
+                    "index": index,
+                    "total_providers": total_providers,
+                    "items": len(items),
+                }
+            )
+
         issues_before = len(issues)
-        for item in items:
+        total_items = len(items)
+        for item_index, item in enumerate(items, start=1):
             raw_path = str(item.get("path") or "").strip()
             if not raw_path:
                 issues.append(_build_issue(provider, item, reason="missing_path", suggestions=[]))
-                continue
-            resolved = Path(raw_path).expanduser().resolve()
-            if resolved.exists() and resolved.is_dir():
-                continue
-            suggestions = find_path_repair_suggestions(
-                provider=provider,
-                item=item,
-                roots=roots,
-                manager=manager,
-            )
-            issues.append(
-                _build_issue(
-                    provider,
-                    item,
-                    reason="path_not_found" if not resolved.exists() else "path_not_directory",
-                    suggestions=suggestions,
+            else:
+                resolved = Path(raw_path).expanduser().resolve()
+                if not (resolved.exists() and resolved.is_dir()):
+                    issues.append(
+                        _build_issue(
+                            provider,
+                            item,
+                            reason="path_not_found" if not resolved.exists() else "path_not_directory",
+                            suggestions=[],
+                        )
+                    )
+
+            if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
+                progress_callback(
+                    {
+                        "event": "provider_item_progress",
+                        "provider": provider,
+                        "index": index,
+                        "total_providers": total_providers,
+                        "item_index": item_index,
+                        "total_items": total_items,
+                        "total_issues": len(issues),
+                    }
                 )
-            )
         if progress_callback is not None:
             progress_callback(
                 {
@@ -155,7 +208,13 @@ def update_provider_item_path(integrations: dict[str, Any], *, provider: str, it
     }
 
 
-def delete_provider_item(integrations: dict[str, Any], *, provider: str, item_id: int) -> dict[str, Any]:
+def delete_provider_item(
+    integrations: dict[str, Any],
+    *,
+    provider: str,
+    item_id: int,
+    add_import_exclusion: bool = False,
+) -> dict[str, Any]:
     config = build_provider_config(integrations.get(provider, {}))
     if not config.enabled:
         return {"status": "error", "message": f"{provider} is disabled"}
@@ -163,10 +222,10 @@ def delete_provider_item(integrations: dict[str, Any], *, provider: str, item_id
     try:
         if provider == "radarr":
             client = RadarrClient(config)
-            result = client.delete_movie(item_id, delete_files=False, add_import_exclusion=False)
+            result = client.delete_movie(item_id, delete_files=False, add_import_exclusion=add_import_exclusion)
         elif provider == "sonarr":
             client = SonarrClient(config)
-            result = client.delete_series(item_id, delete_files=False, add_import_exclusion=False)
+            result = client.delete_series(item_id, delete_files=False, add_import_exclusion=add_import_exclusion)
         else:
             return {"status": "error", "message": f"unsupported provider: {provider}"}
     except ProviderError as exc:
@@ -177,6 +236,7 @@ def delete_provider_item(integrations: dict[str, Any], *, provider: str, item_id
         "provider": provider,
         "item_id": item_id,
         "delete_files": False,
+        "add_import_exclusion": add_import_exclusion,
         "result": result,
     }
 
@@ -192,24 +252,8 @@ def find_path_repair_suggestions(
 ) -> list[dict[str, Any]]:
     aliases = _build_search_aliases(item)
     year = int(item.get("year") or 0) or None
-    ranked: list[tuple[int, dict[str, Any]]] = []
-
-    for root in _iter_provider_roots(provider, roots):
-        root_storage_path = _root_to_storage_path(root)
-        ranked.extend(_collect_root_matches(manager, root, root_storage_path, aliases=aliases, year=year, max_depth=max_depth))
-
-    ranked.sort(key=lambda item: (-item[0], item[1]["path"].lower()))
-    suggestions: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for score, candidate in ranked:
-        path = candidate["path"]
-        if path in seen:
-            continue
-        seen.add(path)
-        suggestions.append({**candidate, "score": score})
-        if len(suggestions) >= max_suggestions:
-            break
-    return suggestions
+    candidates = _index_provider_candidates(provider=provider, roots=roots, manager=manager, max_depth=max_depth)
+    return _rank_candidates(candidates, aliases=aliases, year=year, max_suggestions=max_suggestions)
 
 
 def search_library_paths(
@@ -220,6 +264,7 @@ def search_library_paths(
     lan_connections: dict[str, Any],
     max_depth: int = 8,
     max_results: int = 20,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_query = normalize_title(query)
     if not normalized_query:
@@ -227,27 +272,92 @@ def search_library_paths(
     aliases = [normalized_query]
 
     manager = default_storage_manager(lan_connections=lan_connections)
-    ranked: list[tuple[int, dict[str, Any]]] = []
-    for root in _iter_provider_roots(provider, roots):
-        root_storage_path = _root_to_storage_path(root)
-        ranked.extend(_collect_root_matches(manager, root, root_storage_path, aliases=aliases, year=None, max_depth=max_depth))
-
-    ranked.sort(key=lambda item: (-item[0], item[1]["path"].lower()))
-    results: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for score, candidate in ranked:
-        path = candidate["path"]
-        if path in seen:
-            continue
-        seen.add(path)
-        results.append({**candidate, "score": score})
-        if len(results) >= max_results:
-            break
+    provider_roots = _iter_provider_roots(provider, roots)
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "search_started",
+                "provider": provider,
+                "query": query,
+                "normalized_query": normalized_query,
+                "root_count": len(provider_roots),
+                "max_depth": max_depth,
+            }
+        )
+    candidates = _index_provider_candidates(
+        provider=provider,
+        roots=roots,
+        manager=manager,
+        max_depth=max_depth,
+        progress_callback=progress_callback,
+        provider_index=1,
+        total_providers=1,
+    )
+    results = _rank_candidates(candidates, aliases=aliases, year=None, max_suggestions=max_results)
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "search_completed",
+                "provider": provider,
+                "query": query,
+                "candidate_count": len(candidates),
+                "result_count": len(results),
+            }
+        )
     return results
 
 
-def _collect_root_matches(manager: Any, root: RootConfig, current: StoragePath, *, aliases: list[str], year: int | None, max_depth: int) -> list[tuple[int, dict[str, Any]]]:
-    matches: list[tuple[int, dict[str, Any]]] = []
+def _index_provider_candidates(
+    *,
+    provider: str,
+    roots: list[RootConfig],
+    manager: Any,
+    max_depth: int = 8,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    provider_index: int | None = None,
+    total_providers: int | None = None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    provider_roots = _iter_provider_roots(provider, roots)
+    total_roots = len(provider_roots)
+
+    for root_index, root in enumerate(provider_roots, start=1):
+        root_storage_path = _root_to_storage_path(root)
+        indexed_before = len(candidates)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "root_index_started",
+                    "provider": provider,
+                    "provider_index": provider_index,
+                    "total_providers": total_providers,
+                    "root_index": root_index,
+                    "total_roots": total_roots,
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                }
+            )
+        candidates.extend(_collect_root_matches(manager, root, root_storage_path, max_depth=max_depth))
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "root_index_completed",
+                    "provider": provider,
+                    "provider_index": provider_index,
+                    "total_providers": total_providers,
+                    "root_index": root_index,
+                    "total_roots": total_roots,
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                    "indexed_folders": len(candidates) - indexed_before,
+                    "total_indexed_folders": len(candidates),
+                }
+            )
+    return candidates
+
+
+def _collect_root_matches(manager: Any, root: RootConfig, current: StoragePath, *, max_depth: int) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
     pending: list[tuple[StoragePath, int]] = [(current, 0)]
     while pending:
         path, depth = pending.pop()
@@ -261,37 +371,65 @@ def _collect_root_matches(manager: Any, root: RootConfig, current: StoragePath, 
             if not entry.is_dir:
                 continue
             candidate_name = entry.name
-            score = _score_candidate(candidate_name, aliases=aliases, year=year, root_kind=root.kind)
-            if score > 0:
-                matches.append(
-                    (
-                        score,
-                        {
-                            "label": candidate_name,
-                            "path": entry.path.normalized_path(),
-                            "storage_uri": entry.path.to_uri(),
-                            "root_label": root.label,
-                            "root_path": str(root.path),
-                            "kind": root.kind,
-                            "depth": depth + 1,
-                        },
-                    )
-                )
+            matches.append(
+                {
+                    "label": candidate_name,
+                    "normalized_name": normalize_title(candidate_name),
+                    "path": entry.path.normalized_path(),
+                    "storage_uri": entry.path.to_uri(),
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                    "kind": root.kind,
+                    "depth": depth + 1,
+                }
+            )
             pending.append((entry.path, depth + 1))
     return matches
 
 
+def _rank_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    aliases: list[str],
+    year: int | None,
+    max_suggestions: int = 6,
+    min_score: int = 70,
+) -> list[dict[str, Any]]:
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for candidate in candidates:
+        score = _score_candidate(candidate.get("normalized_name", ""), aliases=aliases, year=year, root_kind=str(candidate.get("kind") or "mixed"))
+        if score >= min_score:
+            ranked.append((score, candidate))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]["path"].lower()))
+    suggestions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for score, candidate in ranked:
+        path = candidate["path"]
+        if path in seen:
+            continue
+        seen.add(path)
+        suggestions.append({k: v for k, v in candidate.items() if k != "normalized_name"} | {"score": score})
+        if len(suggestions) >= max_suggestions:
+            break
+    return suggestions
+
+
 def _score_candidate(name: str, *, aliases: list[str], year: int | None, root_kind: str) -> int:
-    normalized_name = normalize_title(name)
+    normalized_name = name if " " in str(name) else normalize_title(name)
     aliases = [alias for alias in aliases if alias]
     if not normalized_name or not aliases:
         return 0
     score = max(_score_alias(normalized_name, alias) for alias in aliases)
-    if year and str(year) in normalized_name:
-        score += 15
+    if year:
+        matched_year = YEAR_RE.search(normalized_name)
+        if matched_year and matched_year.group(1) == str(year):
+            score += 15
+        elif matched_year:
+            score -= 20
     if root_kind != "mixed":
         score += 5
-    return score
+    return max(score, 0)
 
 
 def _build_issue(provider: str, item: dict[str, Any], *, reason: str, suggestions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -350,23 +488,49 @@ def _build_search_aliases(item: dict[str, Any]) -> list[str]:
 
 
 def _score_alias(normalized_name: str, alias: str) -> int:
-    if normalized_name == alias:
-        return 100
-    if normalized_name.startswith(alias):
-        return 85
-    if alias in normalized_name:
-        return 65
-
-    alias_tokens = [token for token in alias.split() if token]
-    overlap = sum(1 for token in alias_tokens if token in normalized_name)
-    if not overlap:
+    candidate_tokens = _meaningful_title_tokens(normalized_name)
+    alias_tokens = _meaningful_title_tokens(alias)
+    if not candidate_tokens or not alias_tokens:
         return 0
 
-    coverage = overlap / max(1, len(alias_tokens))
-    if coverage >= 0.8:
-        return 48 + overlap * 6
-    if coverage >= 0.6:
-        return 34 + overlap * 5
-    if overlap >= 2:
-        return 20 + overlap * 4
-    return 0
+    if candidate_tokens == alias_tokens:
+        return 120
+
+    alias_token_set = set(alias_tokens)
+    candidate_token_set = set(candidate_tokens)
+    if not alias_token_set.issubset(candidate_token_set):
+        return 0
+
+    match_positions: list[int] = []
+    search_start = 0
+    for token in alias_tokens:
+        try:
+            position = candidate_tokens.index(token, search_start)
+        except ValueError:
+            position = candidate_tokens.index(token)
+        match_positions.append(position)
+        search_start = position + 1
+
+    ordered = match_positions == sorted(match_positions)
+    contiguous = ordered and match_positions[-1] - match_positions[0] + 1 == len(match_positions)
+    alias_text = " ".join(alias_tokens)
+    candidate_text = " ".join(candidate_tokens)
+    ratio = SequenceMatcher(None, candidate_text, alias_text).ratio()
+
+    if contiguous and candidate_tokens[: len(alias_tokens)] == alias_tokens:
+        return 112 + int(ratio * 8)
+    if contiguous:
+        return 102 + int(ratio * 8)
+    if ordered:
+        return 92 + int(ratio * 10)
+    return 82 + int(ratio * 10)
+
+
+def _meaningful_title_tokens(value: str) -> list[str]:
+    tokens = TITLE_TOKEN_RE.findall(str(value).lower())
+    filtered = [
+        token
+        for token in tokens
+        if token not in TITLE_STOPWORDS and token not in RELEASE_NOISE_TOKENS and not YEAR_RE.fullmatch(token)
+    ]
+    return filtered or [token for token in tokens if token not in RELEASE_NOISE_TOKENS and not YEAR_RE.fullmatch(token)]

@@ -11,10 +11,20 @@ Trọng tâm hiện tại của dự án là:
 1. kết nối nhiều root SMB hoặc local vào app
 2. duyệt folder theo dạng inventory và tree để thao tác
 3. scan tìm duplicate
-4. build plan và apply
+4. build plan và preview/apply thay đổi
 5. move folder vào đúng path mà Radarr hoặc Sonarr đang quản lý
+6. dọn duplicate trong provider-managed folders
+7. sửa các item provider bị hỏng path
 
 Ứng dụng không thay Radarr hoặc Sonarr. Nó là lớp điều phối filesystem và vận hành library.
+
+## Documentation
+
+Nếu cần nắm dự án nhanh mà chưa muốn đọc code, bắt đầu từ:
+
+1. [docs/ai-project-map.md](/Volumes/DATA/Coding Projects/media-library-manager/docs/ai-project-map.md)
+2. [docs/current-features.md](/Volumes/DATA/Coding Projects/media-library-manager/docs/current-features.md)
+3. [docs/architecture.md](/Volumes/DATA/Coding Projects/media-library-manager/docs/architecture.md)
 
 ## Current Product Shape
 
@@ -25,10 +35,12 @@ Frontend hiện tại là React + Ant Design, được build vào:
 
 Backend là Python HTTP server, vừa serve static frontend vừa expose API nội bộ.
 
-App hiện có 3 màn chính:
+App hiện có 5 màn chính:
 
 - `Overview`
-- `Operations`
+- `Media Management`
+- `Duplication Clean`
+- `Library Path Repair`
 - `Settings`
 
 ### Overview
@@ -38,11 +50,13 @@ Màn tổng quan để xem:
 - trạng thái runtime
 - tóm tắt root đã connect
 - duplicate summary
+- cleanup summary
+- path repair summary
 - trạng thái provider
 - current job
 - activity gần đây
 
-### Operations
+### Media Management
 
 Màn vận hành chính:
 
@@ -53,10 +67,30 @@ Màn vận hành chính:
 - move vào Radarr hoặc Sonarr
 - scan duplicate
 - build plan
-- dry-run apply
-- execute apply
+- preview changes
+- apply changes
 - xem current job logs
 - cancel job đang chạy
+
+### Duplication Clean
+
+Màn dọn duplicate trực tiếp trong library của provider:
+
+- scan folder từ Radarr hoặc Sonarr
+- nhóm các folder có nhiều candidate video file
+- chọn file cần xóa
+- refresh report sau khi delete
+- xem cleanup logs
+
+### Library Path Repair
+
+Màn sửa các item provider có path lỗi:
+
+- scan item path bị thiếu hoặc không hợp lệ
+- tìm folder phù hợp trong connected roots
+- cập nhật path trong provider
+- remove item khỏi provider mà không xóa media file
+- xem repair logs và search progress
 
 ### Settings
 
@@ -67,6 +101,7 @@ Màn cấu hình:
 - cấu hình Radarr
 - cấu hình Sonarr
 - cấu hình sync options
+- manual sync
 
 Các khối `Canonical Targets` và `Managed SMB Folders` đã bị bỏ khỏi UI mới.
 
@@ -119,8 +154,10 @@ Các API chính đang dùng:
 
 - `GET /api/state`
 - `GET /api/process`
+- `GET /api/system/mounts`
 - `POST /api/process/cancel`
 - `GET /api/operations/folders`
+- `GET /api/operations/folders/children`
 - `GET /api/operations/folders/tree?depth=...`
 - `GET /api/smb/browse`
 - `POST /api/roots`
@@ -129,6 +166,11 @@ Các API chính đang dùng:
 - `POST /api/scan`
 - `POST /api/plan`
 - `POST /api/apply`
+- `POST /api/cleanup/scan`
+- `POST /api/path-repair/scan`
+- `POST /api/path-repair/search`
+- `POST /api/path-repair/update`
+- `POST /api/path-repair/delete`
 - `GET /api/integrations/radarr/items`
 - `GET /api/integrations/sonarr/items`
 - `POST /api/integrations`
@@ -154,6 +196,11 @@ Mỗi job hiện có:
 - `finished_at`
 
 Các job dài như `scan`, `plan`, `apply` đều ghi log vào state.
+
+Ngoài ra còn có các job như:
+
+- `cleanup-scan`
+- `path-repair`
 
 Cancel hiện là cooperative:
 
