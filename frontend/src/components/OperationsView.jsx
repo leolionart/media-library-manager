@@ -193,7 +193,7 @@ function buildFolderTableData(roots, items) {
 
 function buildDuplicateScanSelection(records) {
   return (records || [])
-    .filter((record) => record && !record.is_root && !record.is_file)
+    .filter((record) => record && !record.is_file)
     .map((record) => ({
       label: record.label,
       path: record.path,
@@ -203,8 +203,8 @@ function buildDuplicateScanSelection(records) {
       connection_label: record.connection_label,
       kind: record.kind,
       priority: record.priority,
-      storage_uri: record.storage_uri,
-      root_storage_uri: record.root_storage_uri,
+      storage_uri: String(record.storage_uri || "").includes("://") ? record.storage_uri : "",
+      root_storage_uri: String(record.root_storage_uri || "").includes("://") ? record.root_storage_uri : "",
     }));
 }
 
@@ -474,7 +474,7 @@ export function OperationsView() {
   const canMoveToSonarr = Boolean(payload.integrations?.sonarr?.enabled && selectedFolder);
   const selectedPaths = selectedFolders.map((record) => record.path);
   const selectedRootPaths = selectedRoots.map((record) => record.path);
-  const duplicateScanSelection = useMemo(() => buildDuplicateScanSelection(selectedFolders), [selectedFolders]);
+  const duplicateScanSelection = useMemo(() => buildDuplicateScanSelection(selectedRecords), [selectedRecords]);
   const treeSummary = {
     roots: folderSummary.roots || payload.roots?.length || 0,
     nodes: folderItems.length || 0,
@@ -880,7 +880,7 @@ export function OperationsView() {
                     selectedRowKeys: selectedNodeKeys,
                     checkStrictly: true,
                     onChange: (keys) => setSelectedNodeKeys(keys),
-                    getCheckboxProps: (record) => ({ disabled: record.is_root || record.is_file }),
+                    getCheckboxProps: (record) => ({ disabled: record.is_file }),
                   }}
                   locale={{
                     emptyText: search

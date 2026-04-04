@@ -45100,7 +45100,7 @@ function Uz(e, t) {
 	});
 }
 function Wz(e) {
-	return (e || []).filter((e) => e && !e.is_root && !e.is_file).map((e) => ({
+	return (e || []).filter((e) => e && !e.is_file).map((e) => ({
 		label: e.label,
 		path: e.path,
 		root_path: e.root_path,
@@ -45109,8 +45109,8 @@ function Wz(e) {
 		connection_label: e.connection_label,
 		kind: e.kind,
 		priority: e.priority,
-		storage_uri: e.storage_uri,
-		root_storage_uri: e.root_storage_uri
+		storage_uri: String(e.storage_uri || "").includes("://") ? e.storage_uri : "",
+		root_storage_uri: String(e.root_storage_uri || "").includes("://") ? e.root_storage_uri : ""
 	}));
 }
 function Gz(e, t, n) {
@@ -45304,7 +45304,7 @@ function Xz() {
 			});
 		};
 		return t(M), e;
-	}, [M]), P = (0, _.useMemo)(() => qz(M, Bz(x)), [x, M]), F = (0, _.useMemo)(() => C.map((e) => N.get(e)).filter(Boolean), [N, C]), I = (0, _.useMemo)(() => F.filter((e) => !e.is_root && !e.is_file), [F]), L = (0, _.useMemo)(() => F.filter((e) => !e.is_root && e.is_file), [F]), R = (0, _.useMemo)(() => F.filter((e) => e.is_root), [F]), z = I.length === 1 && R.length === 0 && L.length === 0 ? I[0] : null, B = !!(o.integrations?.radarr?.enabled && z), V = !!(o.integrations?.sonarr?.enabled && z), H = I.map((e) => e.path), U = R.map((e) => e.path), W = (0, _.useMemo)(() => Wz(I), [I]), ee = {
+	}, [M]), P = (0, _.useMemo)(() => qz(M, Bz(x)), [x, M]), F = (0, _.useMemo)(() => C.map((e) => N.get(e)).filter(Boolean), [N, C]), I = (0, _.useMemo)(() => F.filter((e) => !e.is_root && !e.is_file), [F]), L = (0, _.useMemo)(() => F.filter((e) => !e.is_root && e.is_file), [F]), R = (0, _.useMemo)(() => F.filter((e) => e.is_root), [F]), z = I.length === 1 && R.length === 0 && L.length === 0 ? I[0] : null, B = !!(o.integrations?.radarr?.enabled && z), V = !!(o.integrations?.sonarr?.enabled && z), H = I.map((e) => e.path), U = R.map((e) => e.path), W = (0, _.useMemo)(() => Wz(F), [F]), ee = {
 		roots: m.roots || o.roots?.length || 0,
 		nodes: u.length || 0,
 		max_depth: "Unlimited"
@@ -45658,7 +45658,7 @@ function Xz() {
 										selectedRowKeys: C,
 										checkStrictly: !0,
 										onChange: (e) => w(e),
-										getCheckboxProps: (e) => ({ disabled: e.is_root || e.is_file })
+										getCheckboxProps: (e) => ({ disabled: e.is_file })
 									},
 									locale: { emptyText: x ? "No folders match the current filter." : "No connected folders yet. Add one from Settings." }
 								}) : /* @__PURE__ */ (0, $.jsx)(gb, { description: x ? "No folders match the current filter." : "No connected folders yet. Add one from Settings." })

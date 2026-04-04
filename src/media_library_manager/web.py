@@ -1136,8 +1136,10 @@ def build_selected_scan_roots(folder_payloads: list[dict[str, Any]], *, roots: l
                 if (
                     (
                         root_storage_uri_value
-                        and root.storage_uri
-                        and root.storage_uri == root_storage_uri_value
+                        and (
+                            (root.storage_uri and root.storage_uri == root_storage_uri_value)
+                            or str(root.path) == root_storage_uri_value
+                        )
                     )
                     or (not root_storage_uri_value and root_path_value and str(root.path) == root_path_value)
                 )
@@ -1147,7 +1149,11 @@ def build_selected_scan_roots(folder_payloads: list[dict[str, Any]], *, roots: l
         if matching_root is None:
             continue
 
-        effective_storage_uri = storage_uri or (path_value if path_value.startswith(("local://", "smb://")) else "")
+        effective_storage_uri = (
+            storage_uri
+            if storage_uri.startswith(("local://", "smb://"))
+            else (path_value if path_value.startswith(("local://", "smb://")) else "")
+        )
         effective_path = path_value if path_value and not path_value.startswith(("local://", "smb://")) else ""
         resolved_path = build_root_path(storage_uri=effective_storage_uri, raw_path=effective_path)
         dedupe_key = (effective_storage_uri or str(resolved_path), str(matching_root.path))
