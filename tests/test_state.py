@@ -1,0 +1,33 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from media_library_manager.models import LibraryTargets, RootConfig
+from media_library_manager.state import StateStore
+
+
+class StateStoreTests(unittest.TestCase):
+    def test_state_store_persists_roots_targets_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+            store.add_root(RootConfig(path=tmp_path, label="Local", priority=90, kind="movie"))
+            store.save_targets(LibraryTargets(movie_root=tmp_path / "Movies"))
+            store.save_integrations(
+                {
+                    "radarr": {"enabled": True, "base_url": "http://radarr.local:7878", "api_key": "abc", "root_folder_path": "/movies"},
+                    "sonarr": {"enabled": False, "base_url": "", "api_key": "", "root_folder_path": ""},
+                    "sync_options": {"sync_after_apply": True, "rescan_after_update": True, "create_root_folder_if_missing": True},
+                }
+            )
+            store.save_report({"generated_at": "2026-04-04T00:00:00+00:00", "summary": {"files": 1}})
+            store.save_apply_result({"generated_at": "2026-04-04T01:00:00+00:00", "summary": {"applied": 0}})
+            store.save_sync_result({"generated_at": "2026-04-04T01:30:00+00:00", "summary": {"updated": 1}})
+
+            payload = store.api_payload()
+            self.assertEqual(payload["roots"][0]["label"], "Local")
+            self.assertEqual(payload["targets"]["movie_root"], str(tmp_path / "Movies"))
+            self.assertTrue(payload["integrations"]["radarr"]["enabled"])
+            self.assertEqual(payload["report"]["summary"]["files"], 1)
+            self.assertEqual(payload["apply_result"]["summary"]["applied"], 0)
+            self.assertEqual(payload["sync_result"]["summary"]["updated"], 1)
