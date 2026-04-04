@@ -46,6 +46,15 @@ The dashboard should stay close to this visual language:
 
 This is not meant to be a pixel copy of Plex, but it should remain recognizably inspired by Plex and avoid drifting into unrelated design styles.
 
+## Ant Design usage
+
+- Frontend work should maximize reuse of Ant Design components before introducing custom HTML structures or bespoke interactive controls.
+- Prefer Ant Design primitives for layout, navigation, data display, forms, feedback, and status UI whenever a suitable component already exists.
+- Use custom CSS mainly to skin Ant Design components into the project visual language, not to recreate controls that Ant Design already provides.
+- Do not mix mismatched primitives when a single Ant Design component family would keep the UI more consistent. For example, prefer `Segmented`, `Tag`, `Badge`, `Input`, `Table`, `Card`, `Empty`, `Dropdown`, and `Modal` over hand-rolled equivalents.
+- Avoid deprecated Ant Design props or patterns when editing existing UI. If touching a component, prefer updating it to the current Ant Design API in the same change when practical.
+- When choosing or verifying component usage, consult the official Ant Design reference at `https://ant.design/llms-full.txt`.
+
 ## HTML and JS constraints
 
 - Avoid inline styles in `index.html` or `app.js`.

@@ -25,12 +25,14 @@ class StateStore:
         self.plan_file = self.state_file.parent / "last-plan.json"
         self.apply_file = self.state_file.parent / "last-apply.json"
         self.sync_file = self.state_file.parent / "last-sync.json"
+        self.cleanup_file = self.state_file.parent / "last-cleanup-scan.json"
+        self.path_repair_file = self.state_file.parent / "last-path-repair-scan.json"
         if not self.state_file.exists():
             self._write_state(self.default_state())
 
     def default_state(self) -> dict[str, Any]:
         return {
-            "version": 4,
+            "version": 5,
             "roots": [],
             "targets": {
                 "movie_root": None,
@@ -44,6 +46,8 @@ class StateStore:
             "last_plan_at": None,
             "last_apply_at": None,
             "last_sync_at": None,
+            "last_cleanup_at": None,
+            "last_path_repair_at": None,
             "activity_log": [],
             "current_job": None,
         }
@@ -200,6 +204,10 @@ class StateStore:
             return None
         return json.loads(self.plan_file.read_text(encoding="utf-8"))
 
+    def clear_plan(self) -> None:
+        if self.plan_file.exists():
+            self.plan_file.unlink()
+
     def save_apply_result(self, result: dict[str, Any]) -> None:
         self.apply_file.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
         state = self.load_state()
@@ -222,6 +230,28 @@ class StateStore:
             return None
         return json.loads(self.sync_file.read_text(encoding="utf-8"))
 
+    def save_cleanup_report(self, report: dict[str, Any]) -> None:
+        self.cleanup_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        state = self.load_state()
+        state["last_cleanup_at"] = report.get("generated_at")
+        self._write_state(state)
+
+    def load_cleanup_report(self) -> dict[str, Any] | None:
+        if not self.cleanup_file.exists():
+            return None
+        return json.loads(self.cleanup_file.read_text(encoding="utf-8"))
+
+    def save_path_repair_report(self, report: dict[str, Any]) -> None:
+        self.path_repair_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        state = self.load_state()
+        state["last_path_repair_at"] = report.get("generated_at")
+        self._write_state(state)
+
+    def load_path_repair_report(self) -> dict[str, Any] | None:
+        if not self.path_repair_file.exists():
+            return None
+        return json.loads(self.path_repair_file.read_text(encoding="utf-8"))
+
     def api_payload(self) -> dict[str, Any]:
         state = self.load_state()
         payload = {
@@ -235,12 +265,16 @@ class StateStore:
             "last_plan_at": state.get("last_plan_at"),
             "last_apply_at": state.get("last_apply_at"),
             "last_sync_at": state.get("last_sync_at"),
+            "last_cleanup_at": state.get("last_cleanup_at"),
+            "last_path_repair_at": state.get("last_path_repair_at"),
             "activity_log": state.get("activity_log", []),
             "current_job": state.get("current_job"),
             "report": self.load_report(),
             "plan": self.load_plan(),
             "apply_result": self.load_apply_result(),
             "sync_result": self.load_sync_result(),
+            "cleanup_report": self.load_cleanup_report(),
+            "path_repair_report": self.load_path_repair_report(),
         }
         return payload
 

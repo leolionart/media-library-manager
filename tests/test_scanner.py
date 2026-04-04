@@ -119,3 +119,88 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(len(report.files), 2)
             self.assertEqual(len(report.exact_duplicates), 1)
             self.assertEqual(len(report.media_collisions), 1)
+
+    def test_scan_detects_same_movie_files_in_same_folder(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            movie_dir = tmp_path / "Library" / "Dune Part Two (2024)"
+            movie_dir.mkdir(parents=True)
+            (movie_dir / "Dune.Part.Two.2024.2160p.REMUX.mkv").write_bytes(b"movie-a")
+            (movie_dir / "Dune.Part.Two.2024.1080p.WEB-DL.mp4").write_bytes(b"movie-b")
+            (movie_dir / "Dune.Part.Two.2024.sample.mkv").write_bytes(b"sample")
+
+            report = scan_roots([RootConfig(path=tmp_path / "Library", label="Library", priority=100)])
+
+            self.assertEqual(len(report.folder_media_duplicates), 1)
+            group = report.folder_media_duplicates[0]
+            self.assertEqual(group["canonical_name"], "Dune Part Two (2024)")
+            self.assertEqual(group["folder_path"], str(movie_dir))
+            self.assertEqual(len(group["items"]), 2)
+
+    def test_scan_detects_same_folder_movie_duplicate_groups(self) -> None:
+        root = RootConfig(path=Path("/library"), label="Library", priority=100)
+        entries = [
+            ScannedFileEntry(
+                path="/library/Dune Part Two (2024)/Dune.Part.Two.2024.2160p.REMUX.mkv",
+                relative_path="Dune Part Two (2024)/Dune.Part.Two.2024.2160p.REMUX.mkv",
+                size=20,
+                stem="Dune.Part.Two.2024.2160p.REMUX",
+                suffix=".mkv",
+                parent_name="Dune Part Two (2024)",
+            ),
+            ScannedFileEntry(
+                path="/library/Dune Part Two (2024)/Dune Part Two (2024) 1080p WEB-DL.mp4",
+                relative_path="Dune Part Two (2024)/Dune Part Two (2024) 1080p WEB-DL.mp4",
+                size=10,
+                stem="Dune Part Two (2024) 1080p WEB-DL",
+                suffix=".mp4",
+                parent_name="Dune Part Two (2024)",
+            ),
+        ]
+        backend = FakeScannerStorageBackend(
+            entries=entries,
+            hashes={
+                entries[0].path: "hash-a",
+                entries[1].path: "hash-b",
+            },
+        )
+
+        report = scan_roots([root], storage_backend=backend)
+
+        self.assertEqual(len(report.folder_media_duplicates), 1)
+        self.assertEqual(report.folder_media_duplicates[0]["canonical_name"], "Dune Part Two (2024)")
+        self.assertEqual(len(report.folder_media_duplicates[0]["items"]), 2)
+
+    def test_scan_ignores_same_folder_movie_samples_for_cleanup_groups(self) -> None:
+        root = RootConfig(path=Path("/library"), label="Library", priority=100)
+        entries = [
+            ScannedFileEntry(
+                path="/library/Dune Part Two (2024)/Dune.Part.Two.2024.2160p.REMUX.mkv",
+                relative_path="Dune Part Two (2024)/Dune.Part.Two.2024.2160p.REMUX.mkv",
+                size=20,
+                stem="Dune.Part.Two.2024.2160p.REMUX",
+                suffix=".mkv",
+                parent_name="Dune Part Two (2024)",
+            ),
+            ScannedFileEntry(
+                path="/library/Dune Part Two (2024)/Dune.Part.Two.2024.sample.mkv",
+                relative_path="Dune Part Two (2024)/Dune.Part.Two.2024.sample.mkv",
+                size=1,
+                stem="Dune.Part.Two.2024.sample",
+                suffix=".mkv",
+                parent_name="Dune Part Two (2024)",
+            ),
+        ]
+        backend = FakeScannerStorageBackend(
+            entries=entries,
+            hashes={
+                entries[0].path: "hash-a",
+                entries[1].path: "hash-b",
+            },
+        )
+
+        report = scan_roots([root], storage_backend=backend)
+
+        self.assertEqual(report.folder_media_duplicates, [])

@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .browser import browse_path, list_mounts
+from .cleanup_scan import rebuild_cleanup_report, scan_provider_cleanup
 from .lan_connections import (
     build_cd_command,
     browse_smb_path,
@@ -28,10 +29,11 @@ from .lan_connections import (
 )
 from .models import LibraryTargets, RootConfig
 from .network import discover_lan_devices
-from .operations import apply_plan, delete_folder, move_folder, move_folder_contents
+from .path_repair import delete_provider_item, scan_provider_path_issues, search_library_paths, update_provider_item_path
+from .operations import apply_plan, delete_folder, delete_media_file, move_folder, move_folder_contents
 from .operation_storage import OperationStorageRouter
-from .planner import load_report, plan_actions
-from .scanner import scan_roots
+from .planner import load_report, media_from_dict, plan_actions
+from .scanner import rebuild_scan_report, scan_roots
 from .scanner_storage import StorageManagerScannerStorage
 from .state import StateStore
 from .storage import StoragePath as ScanStoragePath, default_storage_manager
@@ -44,6 +46,50 @@ SMB_SCAN_HASH_TIMEOUT = 180
 
 class JobCancelledError(RuntimeError):
     pass
+
+
+def apply_mode_value(*, execute: bool) -> str:
+    return "apply" if execute else "preview"
+
+
+def apply_start_message(*, execute: bool) -> str:
+    return "Started applying changes." if execute else "Started previewing changes."
+
+
+def apply_cancelled_message(*, execute: bool) -> str:
+    return "Stopped while applying changes." if execute else "Preview stopped."
+
+
+def apply_completed_message(*, execute: bool) -> str:
+    return "Changes applied." if execute else "Preview finished."
+
+
+def apply_action_progress_message(action_type: Any, index: Any, total: Any) -> str:
+    action = str(action_type or "").lower()
+    if action == "move":
+        verb = "Moving"
+    elif action == "delete":
+        verb = "Deleting"
+    elif action == "review":
+        verb = "Checking"
+    else:
+        verb = "Working on"
+    return f"{verb} item {index}/{total}."
+
+
+def apply_action_finished_message(status: Any, index: Any, total: Any) -> str:
+    normalized = str(status or "").lower()
+    if normalized == "applied":
+        outcome = "done"
+    elif normalized == "dry-run":
+        outcome = "previewed"
+    elif normalized == "skipped":
+        outcome = "checked"
+    elif normalized == "error":
+        outcome = "failed"
+    else:
+        outcome = normalized or "finished"
+    return f"Item {index}/{total}: {outcome}."
 
 
 def format_root_directory_error(root: RootConfig) -> str:
@@ -488,8 +534,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/sync":
-            plan = self.store.load_plan()
             apply_result = self.store.load_apply_result()
+            plan = self.store.load_plan() or ((apply_result or {}).get("plan_snapshot") if isinstance(apply_result, dict) else None)
             if plan is None or apply_result is None:
                 self.store.append_activity(
                     kind="integration",
@@ -518,6 +564,221 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "no running job to cancel"}, status=HTTPStatus.BAD_REQUEST)
                 return
             self._send_json({"current_job": job})
+            return
+
+        if parsed.path == "/api/cleanup/scan":
+            payload = self._read_json()
+            requested_providers = [str(item).strip().lower() for item in payload.get("providers", []) if str(item).strip()]
+            integrations = self.store.load_integrations()
+            if not any(integrations.get(name, {}).get("enabled") for name in requested_providers or ["radarr", "sonarr"]):
+                self.store.append_activity(
+                    kind="scan",
+                    status="error",
+                    message="Provider cleanup scan failed because no requested provider is enabled.",
+                    details={"providers": requested_providers or ["radarr", "sonarr"]},
+                )
+                self._send_json({"error": "enable Radarr or Sonarr first"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            providers = requested_providers or [name for name in ["radarr", "sonarr"] if integrations.get(name, {}).get("enabled")]
+            job_details = {"providers": providers}
+            self.store.start_job(
+                kind="cleanup-scan",
+                message="Started provider library duplicate cleanup scan.",
+                summary={"total": 0, "completed": 0},
+                details=job_details,
+            )
+            self.store.append_activity(
+                kind="scan",
+                status="running",
+                message="Started provider library duplicate cleanup scan.",
+                details=job_details,
+            )
+
+            try:
+                cleanup_report = scan_provider_cleanup(
+                    integrations,
+                    providers=providers,
+                    progress_callback=self._scan_progress_callback,
+                    should_cancel=self.store.is_current_job_cancel_requested,
+                )
+            except JobCancelledError:
+                cancel_details = {**job_details, "cancel_requested": True}
+                self.store.finish_job(status="cancelled", message="Provider cleanup scan cancelled.", details=cancel_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="cancelled",
+                    message="Provider cleanup scan cancelled.",
+                    details=cancel_details,
+                )
+                self._send_json({"error": "cleanup scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+                return
+            except Exception as exc:
+                error_details = {"error": str(exc), **job_details}
+                self.store.finish_job(status="error", message="Provider cleanup scan failed.", details=error_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="error",
+                    message="Provider cleanup scan failed.",
+                    details=error_details,
+                )
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+            cleanup_report["generated_at"] = now_iso()
+            self.store.save_cleanup_report(cleanup_report)
+            success_details = {"providers": providers, "summary": cleanup_report.get("summary", {})}
+            self.store.finish_job(
+                status="success",
+                message="Provider cleanup scan completed.",
+                details=success_details,
+                summary={
+                    "total": cleanup_report.get("summary", {}).get("roots_scanned", 0),
+                    "completed": cleanup_report.get("summary", {}).get("roots_scanned", 0),
+                    "indexed_files": cleanup_report.get("summary", {}).get("indexed_files", 0),
+                },
+            )
+            self.store.append_activity(
+                kind="scan",
+                status="success",
+                message="Provider cleanup scan completed.",
+                details=success_details,
+            )
+            self._send_json(cleanup_report)
+            return
+
+        if parsed.path == "/api/path-repair/scan":
+            roots = self.store.list_roots()
+            if not roots:
+                self._send_json({"error": "no connected roots available for path repair"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            result = scan_provider_path_issues(
+                self.store.load_integrations(),
+                roots,
+                self.store.load_lan_connections(),
+            )
+            result["generated_at"] = now_iso()
+            self.store.save_path_repair_report(result)
+            self._send_json(result)
+            return
+
+        if parsed.path == "/api/path-repair/update":
+            payload = self._read_json()
+            provider = str(payload.get("provider") or "").strip().lower()
+            item_id = int(payload.get("item_id") or 0)
+            new_path = str(payload.get("path") or "").strip()
+            if provider not in {"radarr", "sonarr"} or item_id <= 0 or not new_path:
+                self._send_json({"error": "provider, item_id, and path are required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.start_job(
+                kind="path-repair",
+                message="Updating provider library path.",
+                summary={"total": 1, "completed": 0},
+                details={"provider": provider, "item_id": item_id, "path": new_path, "action": "update-path"},
+            )
+            self.store.append_job_log(level="info", message="Sending provider path update request.", details={"provider": provider, "item_id": item_id, "path": new_path})
+            result = update_provider_item_path(
+                self.store.load_integrations(),
+                provider=provider,
+                item_id=item_id,
+                new_path=new_path,
+            )
+            if result.get("status") != "success":
+                self.store.finish_job(
+                    status="error",
+                    message="Provider path repair failed.",
+                    details={"provider": provider, "item_id": item_id, "path": new_path, "error": result.get("message")},
+                    summary={"total": 1, "completed": 1},
+                )
+                self.store.append_activity(
+                    kind="integration",
+                    status="error",
+                    message="Provider path repair failed.",
+                    details={"provider": provider, "item_id": item_id, "path": new_path, "error": result.get("message")},
+                )
+                self._send_json({"error": result.get("message", "path repair failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.append_activity(
+                kind="integration",
+                status="success",
+                message="Provider path updated.",
+                details=result,
+            )
+            self.store.append_job_log(level="info", message="Provider path updated. Refreshing saved repair report.", details=result)
+            path_repair_report = self._prune_path_repair_issue(provider=provider, item_id=item_id)
+            self.store.finish_job(
+                status="success",
+                message="Provider path updated.",
+                details=result,
+                summary={"total": 1, "completed": 1},
+            )
+            self._send_json({**result, "path_repair_report": path_repair_report})
+            return
+
+        if parsed.path == "/api/path-repair/delete":
+            payload = self._read_json()
+            provider = str(payload.get("provider") or "").strip().lower()
+            item_id = int(payload.get("item_id") or 0)
+            if provider not in {"radarr", "sonarr"} or item_id <= 0:
+                self._send_json({"error": "provider and item_id are required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.start_job(
+                kind="path-repair",
+                message="Removing provider library item.",
+                summary={"total": 1, "completed": 0},
+                details={"provider": provider, "item_id": item_id, "action": "delete-provider-item"},
+            )
+            self.store.append_job_log(level="warning", message="Removing item from provider without deleting media files.", details={"provider": provider, "item_id": item_id})
+            result = delete_provider_item(
+                self.store.load_integrations(),
+                provider=provider,
+                item_id=item_id,
+            )
+            if result.get("status") != "success":
+                self.store.finish_job(
+                    status="error",
+                    message="Provider item delete failed.",
+                    details={"provider": provider, "item_id": item_id, "error": result.get("message")},
+                    summary={"total": 1, "completed": 1},
+                )
+                self.store.append_activity(
+                    kind="integration",
+                    status="error",
+                    message="Provider item delete failed.",
+                    details={"provider": provider, "item_id": item_id, "error": result.get("message")},
+                )
+                self._send_json({"error": result.get("message", "provider delete failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.store.append_activity(
+                kind="integration",
+                status="success",
+                message="Provider item removed.",
+                details=result,
+            )
+            path_repair_report = self._prune_path_repair_issue(provider=provider, item_id=item_id)
+            self.store.finish_job(
+                status="success",
+                message="Provider item removed.",
+                details=result,
+                summary={"total": 1, "completed": 1},
+            )
+            self._send_json({**result, "path_repair_report": path_repair_report})
+            return
+
+        if parsed.path == "/api/path-repair/search":
+            payload = self._read_json()
+            provider = str(payload.get("provider") or "").strip().lower()
+            query = str(payload.get("query") or "").strip()
+            if provider not in {"radarr", "sonarr"} or not query:
+                self._send_json({"error": "provider and query are required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            results = search_library_paths(
+                provider=provider,
+                query=query,
+                roots=self.store.list_roots(),
+                lan_connections=self.store.load_lan_connections(),
+            )
+            self._send_json({"items": results})
             return
 
         if parsed.path == "/api/scan":
@@ -726,7 +987,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.store.append_activity(
                     kind="apply",
                     status="error",
-                    message="Apply failed because no plan exists.",
+                    message="Could not change files because there is no saved plan yet.",
                     details={"error": "no plan available, build plan first"},
                 )
                 self._send_json({"error": "no plan available, build plan first"}, status=HTTPStatus.BAD_REQUEST)
@@ -736,20 +997,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             prune_empty_dirs = bool(payload.get("prune_empty_dirs"))
             action_count = len(plan.get("actions", []))
             job_details = {
-                "mode": "execute" if execute else "dry-run",
+                "mode": apply_mode_value(execute=execute),
                 "prune_empty_dirs": prune_empty_dirs,
                 "action_count": action_count,
             }
             self.store.start_job(
                 kind="apply",
-                message=f"Started {'execute' if execute else 'dry-run'} apply.",
+                message=apply_start_message(execute=execute),
                 summary={"total": action_count, "completed": 0, "error": 0, "skipped": 0, "applied": 0, "dry_run": 0},
                 details=job_details,
             )
             self.store.append_activity(
                 kind="apply",
                 status="running",
-                message=f"Started {'execute' if execute else 'dry-run'} apply.",
+                message=apply_start_message(execute=execute),
                 details=job_details,
             )
 
@@ -767,33 +1028,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 cancel_details = {**job_details, "cancel_requested": True}
                 self.store.finish_job(
                     status="cancelled",
-                    message=f"{'Execute' if execute else 'Dry-run'} apply cancelled.",
+                    message=apply_cancelled_message(execute=execute),
                     details=cancel_details,
                 )
                 self.store.append_activity(
                     kind="apply",
                     status="cancelled",
-                    message=f"{'Execute' if execute else 'Dry-run'} apply cancelled.",
+                    message=apply_cancelled_message(execute=execute),
                     details=cancel_details,
                 )
                 self._send_json({"error": "apply cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
                 return
             except Exception as exc:
                 error_details = {"error": str(exc), **job_details}
-                self.store.finish_job(status="error", message="Plan apply failed.", details=error_details)
+                self.store.finish_job(status="error", message="Could not finish the requested changes.", details=error_details)
                 self.store.append_activity(
                     kind="apply",
                     status="error",
-                    message="Plan apply failed.",
+                    message="Could not finish the requested changes.",
                     details=error_details,
                 )
                 self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
 
             result["generated_at"] = now_iso()
-            result["mode"] = "execute" if execute else "dry-run"
+            result["mode"] = apply_mode_value(execute=execute)
+            result["plan_generated_at"] = plan.get("generated_at")
             if execute:
-                self.store.append_job_log(level="info", message="Syncing Radarr and Sonarr after apply.")
+                result["plan_snapshot"] = plan
+            if execute:
+                self.store.append_job_log(level="info", message="Updating Radarr and Sonarr after the file changes.")
                 result["integration_sync"] = sync_after_apply(
                     plan=plan,
                     apply_result=result,
@@ -803,10 +1067,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.store.save_sync_result(result["integration_sync"])
                 self.store.append_job_log(
                     level="info" if result["integration_sync"].get("status") != "error" else "error",
-                    message="Integration sync finished.",
+                    message="Provider update finished.",
                     details={"status": result["integration_sync"].get("status"), "summary": result["integration_sync"].get("summary", {})},
                 )
             self.store.save_apply_result(result)
+            if execute:
+                self.store.clear_plan()
             success_details = {
                 "mode": result["mode"],
                 "prune_empty_dirs": prune_empty_dirs,
@@ -816,14 +1082,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             }
             self.store.finish_job(
                 status="success",
-                message=f"{'Execute' if execute else 'Dry-run'} apply completed.",
+                message=apply_completed_message(execute=execute),
                 details=success_details,
                 summary={"total": action_count, **summarize_apply_job(result.get("results", []))},
             )
             self.store.append_activity(
                 kind="apply",
                 status="success",
-                message=f"{'Execute' if execute else 'Dry-run'} apply completed.",
+                message=apply_completed_message(execute=execute),
                 details=success_details,
             )
             self._send_json(result)
@@ -836,6 +1102,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _do_delete(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/files":
+            params = parse_qs(parsed.query)
+            path_value = params.get("path", [None])[0]
+            storage_uri = params.get("storage_uri", [""])[0]
+            root_path = params.get("root_path", [None])[0]
+            root_storage_uri = params.get("root_storage_uri", [""])[0]
+            prune_empty_dirs = params.get("prune_empty_dirs", ["true"])[0].lower() == "true"
+            execute = params.get("execute", ["false"])[0].lower() == "true"
+            target = storage_uri or path_value
+            if not target:
+                self._send_json({"error": "missing path or storage_uri query parameter"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            result = delete_media_file(
+                path_value or target,
+                storage_uri=storage_uri,
+                root_path=root_path,
+                root_storage_uri=root_storage_uri,
+                execute=execute,
+                prune_empty_dirs=prune_empty_dirs,
+                storage_router=self._operation_storage_router(),
+            )
+            if result.get("status") == "error":
+                self.store.append_activity(
+                    kind="folder",
+                    status="error",
+                    message="File delete failed.",
+                    details={
+                        "path": path_value,
+                        "storage_uri": storage_uri or None,
+                        "root_path": root_path,
+                        "root_storage_uri": root_storage_uri or None,
+                        "error": result.get("message"),
+                    },
+                )
+                self._send_json({"error": result.get("message", "file delete failed")}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if result.get("status") == "applied":
+                self._prune_deleted_file_from_report(path_value=path_value or "", storage_uri=storage_uri)
+            self.store.append_activity(
+                kind="folder",
+                status="success" if result.get("status") == "applied" else "running",
+                message="File delete preview created." if result.get("status") == "dry-run" else "File deleted.",
+                details=result,
+            )
+            self._send_json(result)
+            return
         if parsed.path == "/api/folders":
             params = parse_qs(parsed.query)
             path_value = params.get("path", [None])[0]
@@ -994,6 +1306,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         return json.loads(raw.decode("utf-8"))
 
+    def _prune_deleted_file_from_report(self, *, path_value: str, storage_uri: str) -> None:
+        report_data = self.store.load_report()
+        if report_data is None:
+            cleanup_data = self.store.load_cleanup_report()
+            if cleanup_data is None:
+                return
+        else:
+            roots = [RootConfig(path=Path(root["path"]), label=root["label"], priority=int(root.get("priority", 50)), kind=root.get("kind", "mixed"), connection_id=str(root.get("connection_id", "") or ""), connection_label=str(root.get("connection_label", "") or ""), storage_uri=str(root.get("storage_uri", "") or ""), share_name=str(root.get("share_name", "") or "")) for root in report_data.get("roots", [])]
+            remaining_files = [
+                media_from_dict(item)
+                for item in report_data.get("files", [])
+                if str(item.get("path") or "") != path_value and str(item.get("storage_uri") or "") != storage_uri
+            ]
+            refreshed_report = rebuild_scan_report(roots, remaining_files).to_dict()
+            refreshed_report["generated_at"] = now_iso()
+            self.store.save_report(refreshed_report)
+
+        cleanup_data = self.store.load_cleanup_report()
+        if cleanup_data is None:
+            return
+        remaining_cleanup_files = [
+            media_from_dict(item)
+            for item in cleanup_data.get("files", [])
+            if str(item.get("path") or "") != path_value and str(item.get("storage_uri") or "") != storage_uri
+        ]
+        refreshed_cleanup = rebuild_cleanup_report(cleanup_data, remaining_cleanup_files)
+        refreshed_cleanup["generated_at"] = now_iso()
+        self.store.save_cleanup_report(refreshed_cleanup)
+
+    def _prune_path_repair_issue(self, *, provider: str, item_id: int) -> dict[str, Any] | None:
+        report = self.store.load_path_repair_report()
+        if report is None:
+            return None
+        issues = [
+            issue
+            for issue in report.get("issues", [])
+            if not (str(issue.get("provider") or "").lower() == provider and int(issue.get("item_id") or 0) == int(item_id))
+        ]
+        refreshed = {
+            **report,
+            "issues": issues,
+            "summary": {
+                **(report.get("summary", {}) or {}),
+                "issues": len(issues),
+                "with_suggestions": sum(1 for issue in issues if issue.get("suggestions")),
+                "errors": len(report.get("errors", []) or []),
+            },
+            "generated_at": now_iso(),
+        }
+        self.store.save_path_repair_report(refreshed)
+        return refreshed
+
     def _scan_progress_callback(self, event: dict[str, object]) -> None:
         self._raise_if_cancel_requested()
         event_name = event.get("event")
@@ -1031,6 +1395,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "indexed_files": int(event.get("total_indexed_files", 0)),
                     "exact_duplicate_groups": int(event.get("exact_duplicate_groups", 0)),
                     "media_collision_groups": int(event.get("media_collision_groups", 0)),
+                    "folder_media_duplicate_groups": int(event.get("folder_media_duplicate_groups", 0)),
                 },
             )
 
@@ -1042,7 +1407,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if event_name == "action_started":
             self.store.append_job_log(
                 level="info",
-                message=f"Processing {event.get('action_type')} {event.get('index')}/{event.get('total')}",
+                message=apply_action_progress_message(event.get("action_type"), event.get("index"), event.get("total")),
                 details={
                     "source": event.get("source"),
                     "destination": event.get("destination"),
@@ -1056,7 +1421,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             result = event.get("result", {})
             self.store.append_job_log(
                 level="error" if result.get("status") == "error" else "info",
-                message=f"Finished {event.get('action_type')} {event.get('index')}/{event.get('total')} with status {result.get('status')}",
+                message=apply_action_finished_message(result.get("status"), event.get("index"), event.get("total")),
                 details={
                     "source": result.get("source"),
                     "destination": result.get("destination"),
@@ -1225,16 +1590,15 @@ def summarize_apply_job(results: list[dict[str, Any]]) -> dict[str, int]:
     summary = {"completed": 0, "error": 0, "skipped": 0, "applied": 0, "dry_run": 0}
     for result in results:
         status = result.get("status")
+        summary["completed"] += 1
         if status == "error":
             summary["error"] += 1
         elif status == "skipped":
             summary["skipped"] += 1
         elif status == "applied":
             summary["applied"] += 1
-            summary["completed"] += 1
         elif status == "dry-run":
             summary["dry_run"] += 1
-            summary["completed"] += 1
     return summary
 
 

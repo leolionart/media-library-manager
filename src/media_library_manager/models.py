@@ -69,19 +69,22 @@ class ScanReport:
     files: list[MediaFile]
     exact_duplicates: list[dict[str, Any]] = field(default_factory=list)
     media_collisions: list[dict[str, Any]] = field(default_factory=list)
+    folder_media_duplicates: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "version": 1,
+            "version": 2,
             "roots": [root.to_dict() for root in self.roots],
             "summary": {
                 "files": len(self.files),
                 "exact_duplicate_groups": len(self.exact_duplicates),
                 "media_collision_groups": len(self.media_collisions),
+                "folder_media_duplicate_groups": len(self.folder_media_duplicates),
             },
             "files": [item.to_dict() for item in self.files],
             "exact_duplicates": self.exact_duplicates,
             "media_collisions": self.media_collisions,
+            "folder_media_duplicates": self.folder_media_duplicates,
         }
 
 

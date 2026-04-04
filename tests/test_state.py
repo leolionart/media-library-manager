@@ -7,6 +7,19 @@ from media_library_manager.state import StateStore
 
 
 class StateStoreTests(unittest.TestCase):
+    def test_state_store_can_clear_saved_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+            store.save_plan({"generated_at": "2026-04-04T00:30:00+00:00", "summary": {"move": 1}, "actions": [{"type": "move"}]})
+
+            self.assertIsNotNone(store.load_plan())
+
+            store.clear_plan()
+
+            self.assertIsNone(store.load_plan())
+            self.assertIsNone(store.api_payload()["plan"])
+
     def test_state_store_persists_roots_targets_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)

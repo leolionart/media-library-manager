@@ -36,3 +36,12 @@ class RadarrClient(JsonApiClient):
 
     def refresh_movie(self, movie_id: int) -> dict[str, Any]:
         return self.post("/api/v3/command", {"name": "RefreshMovie", "movieIds": [movie_id]})
+
+    def delete_movie(self, movie_id: int, *, delete_files: bool = False, add_import_exclusion: bool = False) -> dict[str, Any]:
+        return self.delete(
+            f"/api/v3/movie/{movie_id}",
+            query={
+                "deleteFiles": str(delete_files).lower(),
+                "addImportExclusion": str(add_import_exclusion).lower(),
+            },
+        )

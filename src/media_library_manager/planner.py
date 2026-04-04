@@ -234,4 +234,5 @@ def load_report(report_path: str | Path) -> ScanReport:
         files=files,
         exact_duplicates=data["exact_duplicates"],
         media_collisions=data["media_collisions"],
+        folder_media_duplicates=data.get("folder_media_duplicates", []),
     )

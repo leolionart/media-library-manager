@@ -5,10 +5,36 @@ from pathlib import Path
 from unittest.mock import patch
 
 from media_library_manager.operation_storage import OperationStorageRouter
-from media_library_manager.operations import apply_plan, delete_folder, move_folder, move_folder_contents
+from media_library_manager.operations import apply_plan, delete_file, delete_folder, delete_media_file, move_folder, move_folder_contents
 
 
 class OperationTests(unittest.TestCase):
+    def test_apply_plan_counts_review_actions_as_completed(self) -> None:
+        plan = {
+            "version": 1,
+            "summary": {"move": 0, "delete": 0, "review": 2},
+            "actions": [
+                {
+                    "type": "review",
+                    "source": "/tmp/source-a.mkv",
+                    "details": {},
+                },
+                {
+                    "type": "review",
+                    "source": "/tmp/source-b.mkv",
+                    "details": {},
+                },
+            ],
+        }
+        events: list[dict[str, object]] = []
+
+        result = apply_plan(plan, execute=False, progress_callback=events.append)
+
+        self.assertEqual(result["summary"]["completed"], 2)
+        self.assertEqual(result["summary"]["skipped"], 2)
+        self.assertEqual(events[-1]["summary"]["completed"], 2)
+        self.assertEqual(events[-1]["summary"]["skipped"], 2)
+
     def test_apply_plan_moves_and_deletes(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)
@@ -115,6 +141,45 @@ class OperationTests(unittest.TestCase):
             result = delete_folder(tmp_path / "DeleteMe", execute=True)
             self.assertEqual(result["status"], "applied")
             self.assertFalse((tmp_path / "DeleteMe").exists())
+
+    def test_delete_file_removes_single_file_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            target = tmp_path / "Movie (2024).mkv"
+            sidecar = tmp_path / "Movie (2024).srt"
+            target.write_bytes(b"movie")
+            sidecar.write_text("sub", encoding="utf-8")
+
+            preview = delete_file(target, execute=False)
+            self.assertEqual(preview["status"], "dry-run")
+            self.assertTrue(target.exists())
+            self.assertTrue(sidecar.exists())
+
+            result = delete_file(target, execute=True)
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(target.exists())
+            self.assertTrue(sidecar.exists())
+
+    def test_delete_media_file_removes_sidecars_and_prunes_empty_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            root = tmp_path / "Library"
+            movie_dir = root / "Movie (2024)"
+            movie_dir.mkdir(parents=True)
+            target = movie_dir / "Movie (2024).mkv"
+            sidecar = movie_dir / "Movie (2024).srt"
+            target.write_bytes(b"movie")
+            sidecar.write_text("sub", encoding="utf-8")
+
+            preview = delete_media_file(target, root_path=root, execute=False)
+            self.assertEqual(preview["status"], "dry-run")
+            self.assertEqual(len(preview["operations"]), 2)
+
+            result = delete_media_file(target, root_path=root, execute=True, prune_empty_dirs=True)
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(target.exists())
+            self.assertFalse(sidecar.exists())
+            self.assertFalse(movie_dir.exists())
 
     @patch("media_library_manager.operation_storage.run_smbclient_command")
     def test_move_folder_supports_same_share_smb_rename(self, run_smbclient_mock) -> None:

@@ -38,6 +38,9 @@ class JsonApiClient:
     def put(self, path: str, payload: dict[str, Any]) -> Any:
         return self._request("PUT", path, payload=payload)
 
+    def delete(self, path: str, query: dict[str, Any] | None = None) -> Any:
+        return self._request("DELETE", path, query=query)
+
     def _request(
         self,
         method: str,

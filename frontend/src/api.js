@@ -51,6 +51,17 @@ export async function fetchOperationsData() {
   };
 }
 
+export function fetchCurrentProcess() {
+  return request("/api/process");
+}
+
+export function cancelCurrentProcess() {
+  return request("/api/process/cancel", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
 export function fetchOperationsFolderChildren({ storageUri, rootStorageUri, timeoutMs = 8000 }) {
   const params = new URLSearchParams({
     storage_uri: storageUri,
@@ -179,4 +190,60 @@ export function removeRoot(path) {
 
 export function deleteFolder(path) {
   return request(`/api/folders?path=${encodeURIComponent(path)}&execute=true`, { method: "DELETE" });
+}
+
+export function runProviderCleanupScan(providers) {
+  return request("/api/cleanup/scan", {
+    method: "POST",
+    body: JSON.stringify({ providers: providers || [] })
+  });
+}
+
+export const runCleanupScan = runProviderCleanupScan;
+
+export function runPathRepairScan() {
+  return request("/api/path-repair/scan", {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function updateProviderPath({ provider, itemId, path }) {
+  return request("/api/path-repair/update", {
+    method: "POST",
+    body: JSON.stringify({ provider, item_id: itemId, path }),
+  });
+}
+
+export function deletePathRepairProviderItem({ provider, itemId }) {
+  return request("/api/path-repair/delete", {
+    method: "POST",
+    body: JSON.stringify({ provider, item_id: itemId }),
+  });
+}
+
+export function searchPathRepairFolders({ provider, query }) {
+  return request("/api/path-repair/search", {
+    method: "POST",
+    body: JSON.stringify({ provider, query }),
+  });
+}
+
+export function deleteMovieFile({ path, storageUri, rootPath, rootStorageUri, pruneEmptyDirs = true }) {
+  const params = new URLSearchParams({
+    execute: "true",
+    prune_empty_dirs: pruneEmptyDirs ? "true" : "false",
+  });
+  if (path) params.set("path", path);
+  if (storageUri) params.set("storage_uri", storageUri);
+  if (rootPath) params.set("root_path", rootPath);
+  if (rootStorageUri) params.set("root_storage_uri", rootStorageUri);
+  return request(`/api/files?${params.toString()}`, { method: "DELETE" });
+}
+
+export function deleteMediaFile({ path, storageUri }) {
+  const params = new URLSearchParams({ execute: "true" });
+  if (path) params.set("path", path);
+  if (storageUri) params.set("storage_uri", storageUri);
+  return request(`/api/files?${params.toString()}`, { method: "DELETE" });
 }

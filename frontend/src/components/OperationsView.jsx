@@ -16,7 +16,6 @@ import {
   Select,
   Space,
   Spin,
-  Statistic,
   Switch,
   Table,
   Tag,
@@ -27,22 +26,24 @@ import {
   FolderOpenOutlined,
   LoadingOutlined,
   MoreOutlined,
-  PlayCircleOutlined,
   ReloadOutlined,
-  SyncOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import {
   applyPlan,
   buildPlan,
+  cancelCurrentProcess,
   deleteFolder,
   executeMoveToProvider,
   fetchOperationsData,
+  fetchCurrentProcess,
   fetchOperationsFolderChildren,
   fetchProviderItems,
   previewMoveToProvider,
   removeRoot,
   runScan,
 } from "../api";
+import { MediaLibraryLogPanel } from "./MediaLibraryLogPanel";
 
 const { Text } = Typography;
 
@@ -77,19 +78,6 @@ const emptyProviderModal = {
 function formatDate(value) {
   if (!value) return "Never";
   return new Date(value).toLocaleString();
-}
-
-function formatBytes(value) {
-  if (!value) return "0 B";
-  if (value < 1024) return `${value} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let size = value;
-  let unitIndex = -1;
-  do {
-    size /= 1024;
-    unitIndex += 1;
-  } while (size >= 1024 && unitIndex < units.length - 1);
-  return `${size.toFixed(size >= 100 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function normalizeSearchText(value) {
@@ -131,6 +119,98 @@ function scoreProviderItem(item, query) {
   const queryTokens = normalizedQuery.split(" ").filter(Boolean);
   const titleTokens = new Set(normalizedTitle.split(" ").filter(Boolean));
   return queryTokens.filter((token) => titleTokens.has(token)).length * 10;
+}
+
+function getReadableActionTypeLabel(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "move") return "Move";
+  if (normalized === "delete") return "Delete";
+  if (normalized === "review") return "Check";
+  return value || "Action";
+}
+
+function humanizeActionReason(value) {
+  return String(value || "unknown_action").replaceAll("_", " ");
+}
+
+function decodePathPreview(value) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function formatActionHeadline(action) {
+  const canonicalName = String(action?.details?.canonical_name || "").trim();
+  if (canonicalName) {
+    return canonicalName;
+  }
+  const preferredPath = decodePathPreview(action?.keep_path || action?.destination || action?.source || "");
+  const withoutQuery = preferredPath.split("?")[0];
+  const segments = withoutQuery.split("/").filter(Boolean);
+  return segments[segments.length - 1] || preferredPath || "Upcoming change";
+}
+
+function buildPlanPreviewLines(action) {
+  const rows = [];
+
+  if (action.source) {
+    rows.push({
+      key: `source-${action.source}`,
+      tone: "remove",
+      sign: "-",
+      label: action.type === "move" ? "from" : action.type === "delete" ? "remove" : "check",
+      path: decodePathPreview(action.source),
+    });
+  }
+
+  if (action.destination) {
+    rows.push({
+      key: `destination-${action.destination}`,
+      tone: "add",
+      sign: "+",
+      label: action.type === "review" ? "suggested folder" : "to",
+      path: decodePathPreview(action.destination),
+    });
+  }
+
+  if (action.keep_path && action.keep_path !== action.destination) {
+    rows.push({
+      key: `keep-${action.keep_path}`,
+      tone: "keep",
+      sign: "+",
+      label: "keep",
+      path: decodePathPreview(action.keep_path),
+    });
+  }
+
+  return rows;
+}
+
+function isRealApplyMode(value) {
+  return ["apply", "execute"].includes(String(value || "").toLowerCase());
+}
+
+function getPendingPlan(plan, applyResult, lastPlanAt, lastApplyAt) {
+  if (!plan) return null;
+  if (!applyResult || !isRealApplyMode(applyResult.mode)) return plan;
+
+  const appliedPlanGeneratedAt = String(applyResult.plan_generated_at || "").trim();
+  const planGeneratedAt = String(plan.generated_at || "").trim();
+  if (appliedPlanGeneratedAt && planGeneratedAt) {
+    return appliedPlanGeneratedAt === planGeneratedAt ? null : plan;
+  }
+
+  const planTime = Date.parse(planGeneratedAt || lastPlanAt || "") || 0;
+  const applyTime = Date.parse(applyResult.generated_at || lastApplyAt || "") || 0;
+  if (planTime && applyTime && applyTime >= planTime) {
+    return null;
+  }
+
+  return plan;
 }
 
 function buildFolderTableData(roots, items) {
@@ -262,17 +342,6 @@ function filterFolderTableData(rows, query) {
     .filter(Boolean);
 }
 
-function StatusTag({ value }) {
-  const status = String(value || "").toLowerCase();
-  let color = "default";
-
-  if (["success", "applied", "running", "info"].includes(status)) color = "success";
-  if (["error", "failed"].includes(status)) color = "error";
-  if (["dry-run", "review"].includes(status)) color = "processing";
-
-  return <Tag color={color}>{value || "unknown"}</Tag>;
-}
-
 function ProviderMoveModal({
   modalState,
   rankedItems,
@@ -394,6 +463,133 @@ function ProviderMoveModal({
   );
 }
 
+function PlanReviewModal({
+  open,
+  plan,
+  deleteLowerQuality,
+  pruneEmptyDirs,
+  actionLoading,
+  onClose,
+  onDeleteLowerQualityChange,
+  onPruneEmptyDirsChange,
+  onDryRun,
+  onExecute,
+}) {
+  const summary = plan?.summary || {};
+  const actions = plan?.actions || [];
+
+  return (
+    <Modal
+      open={open}
+      title="Preview Changes"
+      onCancel={onClose}
+      footer={null}
+      width={960}
+    >
+      <Flex vertical gap={16}>
+        <Alert
+          type="info"
+          showIcon
+          message="Check what will happen before the app changes any files."
+          description="Preview only shows what would change. Apply Changes makes the real file updates."
+        />
+
+        <Descriptions
+          bordered
+          size="small"
+          column={{ xs: 1, md: 2 }}
+          items={[
+            { key: "move", label: "Move", children: Number(summary.move || 0) },
+            { key: "delete", label: "Delete", children: Number(summary.delete || 0) },
+            { key: "review", label: "Check manually", children: Number(summary.review || 0) },
+            { key: "generated", label: "Created", children: formatDate(plan?.generated_at) },
+          ]}
+        />
+
+        <List
+          itemLayout="horizontal"
+          dataSource={[
+            {
+              key: "delete-lower-quality",
+              title: "Delete lower-quality versions automatically when building plan",
+              value: deleteLowerQuality,
+              onChange: onDeleteLowerQualityChange,
+            },
+            {
+              key: "prune-empty-dirs",
+              title: "Remove empty folders after changes are applied",
+              value: pruneEmptyDirs,
+              onChange: onPruneEmptyDirsChange,
+            },
+          ]}
+          renderItem={(item) => (
+            <List.Item actions={[<Switch key={item.key} checked={item.value} onChange={item.onChange} />]}>
+              <List.Item.Meta title={item.title} />
+            </List.Item>
+          )}
+        />
+
+        {actions.length ? (
+          <div className="plan-review-list">
+            <Flex justify="space-between" align="center" gap={12} wrap className="plan-review-list-head">
+              <Text strong>Upcoming changes</Text>
+              <Tag>{actions.length} items</Tag>
+            </Flex>
+            <div className="plan-review-viewport">
+              <Flex vertical gap={10}>
+                {actions.slice(0, 80).map((action, index) => (
+                  <div key={`${action.type}-${action.reason}-${index}`} className="plan-review-entry">
+                    <div className="plan-review-entry-head">
+                      <Space wrap size={[8, 8]}>
+                        <Tag color={action.type === "delete" ? "error" : action.type === "review" ? "warning" : "processing"}>
+                          {getReadableActionTypeLabel(action.type)}
+                        </Tag>
+                        <Text strong>{humanizeActionReason(action.reason)}</Text>
+                        {action.details?.kind ? <Tag>{String(action.details.kind).toUpperCase()}</Tag> : null}
+                        {Number.isFinite(Number(action.details?.candidate_quality_rank)) ? (
+                          <Tag>Candidate Q{Number(action.details?.candidate_quality_rank)}</Tag>
+                        ) : null}
+                        {Number.isFinite(Number(action.details?.keeper_quality_rank)) ? (
+                          <Tag color="success">Keep Q{Number(action.details?.keeper_quality_rank)}</Tag>
+                        ) : null}
+                      </Space>
+                      <Text className="plan-review-entry-title">{formatActionHeadline(action)}</Text>
+                    </div>
+                    <div className="plan-review-diff">
+                      {buildPlanPreviewLines(action).map((row) => (
+                        <div key={row.key} className={`plan-review-diff-line tone-${row.tone}`}>
+                          <Text className={`plan-review-diff-sign tone-${row.tone}`}>{row.sign}</Text>
+                          <Text className="plan-review-diff-label">{row.label}</Text>
+                          <Text className="plan-review-diff-path">{row.path}</Text>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </Flex>
+            </div>
+          </div>
+        ) : (
+          <Empty description="There are no changes to make right now." />
+        )}
+
+        <Flex justify="space-between" align="center" gap={12} wrap>
+          <Text type="secondary">After you start, progress continues in Process Logs.</Text>
+          <Space wrap>
+            <Button onClick={onClose}>Close</Button>
+            <Button loading={actionLoading === "dry-run"} onClick={onDryRun}>
+              Preview Only
+            </Button>
+            <Button danger loading={actionLoading === "execute"} onClick={onExecute}>
+              Apply Changes
+            </Button>
+          </Space>
+        </Flex>
+      </Flex>
+    </Modal>
+  );
+}
+
 export function OperationsView() {
   const { message, modal } = AntApp.useApp();
   const [loading, setLoading] = useState(true);
@@ -410,6 +606,8 @@ export function OperationsView() {
   const [deleteLowerQuality, setDeleteLowerQuality] = useState(false);
   const [pruneEmptyDirs, setPruneEmptyDirs] = useState(true);
   const [providerModal, setProviderModal] = useState(emptyProviderModal);
+  const [planReviewOpen, setPlanReviewOpen] = useState(false);
+  const [processPollingEnabled, setProcessPollingEnabled] = useState(false);
 
   const refreshAll = async () => {
     const data = await fetchOperationsData();
@@ -435,6 +633,36 @@ export function OperationsView() {
       .catch((error) => message.error(error.message))
       .finally(() => setLoading(false));
   }, [message]);
+
+  useEffect(() => {
+    if (!processPollingEnabled && currentJob?.status !== "running") {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const process = await fetchCurrentProcess();
+        if (cancelled) return;
+        const nextJob = process.current_job || null;
+        setCurrentJob(nextJob);
+        if (nextJob && nextJob.status !== "running" && !processPollingEnabled) {
+          await refreshAll();
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error(error);
+        }
+      }
+    };
+
+    void poll();
+    const timerId = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timerId);
+    };
+  }, [currentJob?.id, currentJob?.status, processPollingEnabled]);
 
   const tableData = folderTreeRows;
 
@@ -499,25 +727,38 @@ export function OperationsView() {
   );
 
   const suggestedProviderItem = rankedProviderItems[0] || null;
-  const operationsSummary = payload.report?.summary || {};
-  const planSummary = payload.plan?.summary || {};
-  const exactDuplicates = payload.report?.exact_duplicates || [];
-  const collisions = payload.report?.media_collisions || [];
-  const planActions = payload.plan?.actions || [];
-  const applyResult = payload.apply_result;
-  const recentActivity = (payload.activity_log || []).slice(0, 10);
+  const activePlan = useMemo(
+    () => getPendingPlan(payload.plan, payload.apply_result, payload.last_plan_at, payload.last_apply_at),
+    [payload.plan, payload.apply_result, payload.last_plan_at, payload.last_apply_at]
+  );
+  const planActions = activePlan?.actions || [];
 
-  const runAction = async (actionKey, action, successMessage) => {
+  const runAction = async (actionKey, action, successMessage, options = {}) => {
+    const { trackProcess = false } = options;
     setActionLoading(actionKey);
+    if (trackProcess) {
+      setProcessPollingEnabled(true);
+      fetchCurrentProcess()
+        .then((process) => setCurrentJob(process.current_job || null))
+        .catch((error) => console.error(error));
+    }
     try {
       const result = await action();
       await refreshAll();
       if (successMessage) message.success(successMessage);
       return result;
     } catch (error) {
+      try {
+        await refreshAll();
+      } catch (refreshError) {
+        console.error(refreshError);
+      }
       message.error(error.message);
       return null;
     } finally {
+      if (trackProcess) {
+        setProcessPollingEnabled(false);
+      }
       setActionLoading("");
     }
   };
@@ -650,6 +891,63 @@ export function OperationsView() {
     });
   };
 
+  const handleDetectDuplicates = async () => {
+    if (!duplicateScanSelection.length) return;
+
+    const scanResult = await runAction(
+      "scan",
+      () => runScan(duplicateScanSelection),
+      duplicateScanSelection.length === 1
+        ? "Duplicate detection finished for 1 folder."
+        : `Duplicate detection finished for ${duplicateScanSelection.length} folders.`,
+      { trackProcess: true }
+    );
+    if (!scanResult) return;
+
+    const planResult = await runAction("plan", () => buildPlan(deleteLowerQuality), "Change preview is ready.", {
+      trackProcess: true,
+    });
+    if (planResult) {
+      setPlanReviewOpen(true);
+    }
+  };
+
+  const handleCancelCurrentJob = async () => {
+    if (!currentJob || currentJob.status !== "running") return;
+    setActionLoading("cancel-job");
+    try {
+      const result = await cancelCurrentProcess();
+      setCurrentJob(result.current_job || null);
+      await refreshAll();
+      message.success("Stop request sent. Waiting for the current step to end safely.");
+    } catch (error) {
+      message.error(error.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const handleDryRunFromReview = async () => {
+    setPlanReviewOpen(false);
+    await runAction("dry-run", () => applyPlan({ execute: false, pruneEmptyDirs }), "Preview finished.", {
+      trackProcess: true,
+    });
+  };
+
+  const handleExecuteFromReview = async () => {
+    modal.confirm({
+      title: "Apply these changes to your real files now?",
+      okText: "Apply Changes",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setPlanReviewOpen(false);
+        await runAction("execute", () => applyPlan({ execute: true, pruneEmptyDirs }), "Changes applied.", {
+          trackProcess: true,
+        });
+      },
+    });
+  };
+
   const renderRowActions = (record) => (
     <Dropdown
       trigger={["click"]}
@@ -700,7 +998,7 @@ export function OperationsView() {
             {record.is_file ? <FileOutlined /> : null}
             <Text strong>{record.label}</Text>
             {record.priority ? (
-              <Tag color="gold" bordered={false}>
+              <Tag color="gold" variant="filled">
                 P{record.priority}
               </Tag>
             ) : null}
@@ -731,21 +1029,6 @@ export function OperationsView() {
     },
   ];
 
-  const optionItems = [
-    {
-      key: "delete-lower-quality",
-      title: "Delete lower-quality versions automatically when building plan",
-      value: deleteLowerQuality,
-      onChange: setDeleteLowerQuality,
-    },
-    {
-      key: "prune-empty-dirs",
-      title: "Prune empty folders after apply",
-      value: pruneEmptyDirs,
-      onChange: setPruneEmptyDirs,
-    },
-  ];
-
   if (loading) {
     return (
       <div className="app-loading">
@@ -756,386 +1039,151 @@ export function OperationsView() {
 
   return (
     <Flex vertical gap={16}>
-      <Row gutter={[16, 16]} align="top">
-        <Col xs={24} xl={17}>
-          <Flex vertical gap={16}>
-            <Card
-              title={
-                <Space>
-                  <FolderOpenOutlined />
-                  <span>Folder List</span>
-                </Space>
-              }
-            >
-              <Row gutter={[12, 12]} align="middle">
-                <Col flex="auto">
-                  <Space wrap>
-                    <Button
-                      type="primary"
-                      disabled={!canMoveToRadarr}
-                      loading={actionLoading === "move-to-provider" && providerModal.provider === "radarr"}
-                      onClick={() => openProviderModal("radarr")}
-                    >
-                      Move To Radarr
-                    </Button>
-                    <Button
-                      disabled={!canMoveToSonarr}
-                      loading={actionLoading === "move-to-provider" && providerModal.provider === "sonarr"}
-                      onClick={() => openProviderModal("sonarr")}
-                    >
-                      Move To Sonarr
-                    </Button>
-                    <Button
-                      type="primary"
-                      ghost
-                      disabled={!duplicateScanSelection.length}
-                      loading={actionLoading === "scan"}
-                      onClick={() =>
-                        runAction(
-                          "scan",
-                          () => runScan(duplicateScanSelection),
-                          duplicateScanSelection.length === 1
-                            ? "Duplicate detection finished for 1 folder."
-                            : `Duplicate detection finished for ${duplicateScanSelection.length} folders.`
-                        )
-                      }
-                    >
-                      Detect Duplicates
-                    </Button>
-                    <Dropdown
-                      trigger={["click"]}
-                      menu={{
-                        items: [
-                          { key: "remove-root", label: "Remove From App", disabled: !selectedRootPaths.length },
-                          { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: !selectedPaths.length },
-                        ],
-                        onClick: async ({ key }) => {
-                          if (key === "remove-root") {
-                            await handleRemoveRoots(selectedRootPaths);
-                            return;
-                          }
-                          if (key === "delete-folder") {
-                            await handleDeleteFolders(selectedPaths);
-                          }
-                        },
-                      }}
-                    >
-                      <Button disabled={!selectedRootPaths.length && !selectedPaths.length}>More</Button>
-                    </Dropdown>
-                    <Button
-                      icon={<ReloadOutlined />}
-                      loading={actionLoading === "refresh-folders"}
-                      disabled={loadingBranchKeys.length > 0}
-                      onClick={handleRefreshFolders}
-                    >
-                      Refresh
-                    </Button>
-                  </Space>
-                </Col>
-                <Col xs={24} lg={10} xl={8}>
-                  <Input.Search
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Filter folders by name, path, source, or kind"
-                    allowClear
-                  />
-                </Col>
-              </Row>
-              <Descriptions
-                size="small"
-                column={{ xs: 1, md: 3 }}
-                style={{ marginTop: 16, marginBottom: 16 }}
-                items={[
-                  { key: "roots", label: "Roots", children: treeSummary.roots },
-                  { key: "nodes", label: "Folders", children: treeSummary.nodes },
-                  {
-                    key: "selected",
-                    label: "Selected",
-                    children: `${duplicateScanSelection.length} folder${duplicateScanSelection.length === 1 ? "" : "s"}`,
-                  },
-                ]}
-              />
-              {filteredTableData.length ? (
-                <Table
-                  rowKey="key"
-                  size="middle"
-                  pagination={false}
-                  columns={tableColumns}
-                  dataSource={filteredTableData}
-                  expandable={{
-                    childrenColumnName: "children",
-                    expandedRowKeys,
-                    onExpand: async (expanded, record) => {
-                      setExpandedRowKeys((current) =>
-                        expanded ? [...new Set([...current, record.key])] : current.filter((key) => key !== record.key)
-                      );
-                      if (expanded) {
-                        await loadBranch(record);
-                      }
-                    },
-                    rowExpandable: (record) => record.has_children !== false,
-                  }}
-                  loading={loadingBranchKeys.length > 0 && !filteredTableData.length}
-                  rowSelection={{
-                    selectedRowKeys: selectedNodeKeys,
-                    checkStrictly: true,
-                    onChange: (keys) => setSelectedNodeKeys(keys),
-                    getCheckboxProps: (record) => ({ disabled: record.is_file }),
-                  }}
-                  locale={{
-                    emptyText: search
-                      ? "No folders match the current filter."
-                      : "No connected folders yet. Add one from Settings.",
-                  }}
-                />
-              ) : (
-                <Empty description={search ? "No folders match the current filter." : "No connected folders yet. Add one from Settings."} />
-              )}
-            </Card>
-
-            <Card
-              title={
-                <Space>
-                  <PlayCircleOutlined />
-                  <span>Duplicate Detection</span>
-                </Space>
-              }
-              extra={
-                <Space wrap>
-                  <Button
-                    loading={actionLoading === "plan"}
-                    onClick={() => runAction("plan", () => buildPlan(deleteLowerQuality), "Plan created.")}
-                  >
-                    Build Plan
-                  </Button>
-                  <Button
-                    loading={actionLoading === "dry-run"}
-                    onClick={() => runAction("dry-run", () => applyPlan({ execute: false, pruneEmptyDirs }), "Dry run completed.")}
-                  >
-                    Dry Run Apply
-                  </Button>
-                  <Button
-                    danger
-                    loading={actionLoading === "execute"}
-                    onClick={() =>
-                      modal.confirm({
-                        title: "Execute the current plan on real files?",
-                        okText: "Execute",
-                        okButtonProps: { danger: true },
-                        onOk: () =>
-                          runAction(
-                            "execute",
-                            () => applyPlan({ execute: true, pruneEmptyDirs }),
-                            "Plan executed."
-                          ),
-                      })
+      <Card
+        title={
+          <Space>
+            <FolderOpenOutlined />
+            <span>Folder List</span>
+          </Space>
+        }
+      >
+        <Row gutter={[12, 12]} align="middle">
+          <Col flex="auto">
+            <Space wrap>
+              <Button
+                type="primary"
+                disabled={!canMoveToRadarr}
+                loading={actionLoading === "move-to-provider" && providerModal.provider === "radarr"}
+                onClick={() => openProviderModal("radarr")}
+              >
+                Move To Radarr
+              </Button>
+              <Button
+                disabled={!canMoveToSonarr}
+                loading={actionLoading === "move-to-provider" && providerModal.provider === "sonarr"}
+                onClick={() => openProviderModal("sonarr")}
+              >
+                Move To Sonarr
+              </Button>
+              <Button
+                type="primary"
+                ghost
+                disabled={!duplicateScanSelection.length}
+                loading={actionLoading === "scan" || actionLoading === "plan"}
+                onClick={handleDetectDuplicates}
+              >
+                Detect Duplicates
+              </Button>
+              {planActions.length ? <Button onClick={() => setPlanReviewOpen(true)}>Preview Changes</Button> : null}
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    { key: "remove-root", label: "Remove From App", disabled: !selectedRootPaths.length },
+                    { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: !selectedPaths.length },
+                  ],
+                  onClick: async ({ key }) => {
+                    if (key === "remove-root") {
+                      await handleRemoveRoots(selectedRootPaths);
+                      return;
                     }
-                  >
-                    Execute Apply
-                  </Button>
-                </Space>
-              }
-            >
-              <Row gutter={[16, 16]}>
-                <Col xs={24} sm={12} xl={6}>
-                  <Card size="small">
-                    <Statistic title="Files Indexed" value={operationsSummary.files || 0} />
-                  </Card>
-                </Col>
-                <Col xs={24} sm={12} xl={6}>
-                  <Card size="small">
-                    <Statistic title="Exact Groups" value={operationsSummary.exact_duplicate_groups || 0} />
-                  </Card>
-                </Col>
-                <Col xs={24} sm={12} xl={6}>
-                  <Card size="small">
-                    <Statistic title="Collision Groups" value={operationsSummary.media_collision_groups || 0} />
-                  </Card>
-                </Col>
-                <Col xs={24} sm={12} xl={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="Plan Actions"
-                      value={(planSummary.move || 0) + (planSummary.delete || 0) + (planSummary.review || 0)}
-                    />
-                  </Card>
-                </Col>
-              </Row>
+                    if (key === "delete-folder") {
+                      await handleDeleteFolders(selectedPaths);
+                    }
+                  },
+                }}
+              >
+                <Button disabled={!selectedRootPaths.length && !selectedPaths.length}>More</Button>
+              </Dropdown>
+              <Button
+                icon={<ReloadOutlined />}
+                loading={actionLoading === "refresh-folders"}
+                disabled={loadingBranchKeys.length > 0}
+                onClick={handleRefreshFolders}
+              >
+                Refresh
+              </Button>
+            </Space>
+          </Col>
+          <Col xs={24} lg={10} xl={8}>
+            <Input
+              className="folder-list-search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Filter folders by name, path, source, or kind"
+              allowClear
+              prefix={<SearchOutlined />}
+            />
+          </Col>
+        </Row>
+        <Descriptions
+          size="small"
+          column={{ xs: 1, md: 3 }}
+          style={{ marginTop: 16, marginBottom: 16 }}
+          items={[
+            { key: "roots", label: "Roots", children: treeSummary.roots },
+            { key: "nodes", label: "Folders", children: treeSummary.nodes },
+            {
+              key: "selected",
+              label: "Selected",
+              children: `${duplicateScanSelection.length} folder${duplicateScanSelection.length === 1 ? "" : "s"}`,
+            },
+          ]}
+        />
+        {filteredTableData.length ? (
+          <Table
+            rowKey="key"
+            size="middle"
+            pagination={false}
+            columns={tableColumns}
+            dataSource={filteredTableData}
+            expandable={{
+              childrenColumnName: "children",
+              expandedRowKeys,
+              onExpand: async (expanded, record) => {
+                setExpandedRowKeys((current) =>
+                  expanded ? [...new Set([...current, record.key])] : current.filter((key) => key !== record.key)
+                );
+                if (expanded) {
+                  await loadBranch(record);
+                }
+              },
+              rowExpandable: (record) => record.has_children !== false,
+            }}
+            loading={loadingBranchKeys.length > 0 && !filteredTableData.length}
+            rowSelection={{
+              selectedRowKeys: selectedNodeKeys,
+              checkStrictly: true,
+              onChange: (keys) => setSelectedNodeKeys(keys),
+              getCheckboxProps: (record) => ({ disabled: record.is_file }),
+            }}
+            locale={{
+              emptyText: search
+                ? "No folders match the current filter."
+                : "No connected folders yet. Add one from Settings.",
+            }}
+          />
+        ) : (
+          <Empty description={search ? "No folders match the current filter." : "No connected folders yet. Add one from Settings."} />
+        )}
+      </Card>
 
-              <List
-                itemLayout="horizontal"
-                dataSource={optionItems}
-                renderItem={(item) => (
-                  <List.Item actions={[<Switch key={item.key} checked={item.value} onChange={item.onChange} />]}>
-                    <List.Item.Meta title={item.title} />
-                  </List.Item>
-                )}
-              />
-              <Alert
-                style={{ marginTop: 16 }}
-                type="info"
-                showIcon
-                message="Duplicate detection runs on the folders currently selected in Folder List."
-              />
-            </Card>
-
-            <Row gutter={[16, 16]}>
-              <Col xs={24} xl={12}>
-                <Card title="Exact Duplicates" extra={<Tag>{exactDuplicates.length}</Tag>}>
-                  {exactDuplicates.length ? (
-                    <List
-                      itemLayout="horizontal"
-                      dataSource={exactDuplicates.slice(0, 20)}
-                      renderItem={(group) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={`${formatBytes(group.size)} • ${group.items.length} copies`}
-                            description={group.items.map((item) => item.path).join(" • ")}
-                          />
-                        </List.Item>
-                      )}
-                    />
-                  ) : (
-                    <Empty description="No exact duplicate groups yet." />
-                  )}
-                </Card>
-              </Col>
-              <Col xs={24} xl={12}>
-                <Card title="Media Collisions" extra={<Tag>{collisions.length}</Tag>}>
-                  {collisions.length ? (
-                    <List
-                      itemLayout="horizontal"
-                      dataSource={collisions.slice(0, 20)}
-                      renderItem={(group) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={group.canonical_name}
-                            description={group.items.map((item) => `${item.path} (Q${item.quality_rank})`).join(" • ")}
-                          />
-                        </List.Item>
-                      )}
-                    />
-                  ) : (
-                    <Empty description="No collision groups yet." />
-                  )}
-                </Card>
-              </Col>
-            </Row>
-
-            <Row gutter={[16, 16]}>
-              <Col xs={24} xl={12}>
-                <Card title="Action Plan" extra={<Tag>{planActions.length}</Tag>}>
-                  {planActions.length ? (
-                    <List
-                      itemLayout="horizontal"
-                      dataSource={planActions.slice(0, 50)}
-                      renderItem={(action) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={`${String(action.type || "").toUpperCase()} • ${action.reason}`}
-                            description={[action.source, action.destination, action.keep_path].filter(Boolean).join(" • ")}
-                          />
-                        </List.Item>
-                      )}
-                    />
-                  ) : (
-                    <Empty description="No action plan yet." />
-                  )}
-                </Card>
-              </Col>
-              <Col xs={24} xl={12}>
-                <Card title="Apply Result" extra={<Tag>{applyResult?.mode || "No run"}</Tag>}>
-                  {applyResult ? (
-                    <List
-                      itemLayout="horizontal"
-                      dataSource={[
-                        `Applied: ${applyResult.summary?.applied || 0}`,
-                        `Dry Run: ${applyResult.summary?.["dry-run"] || 0}`,
-                        `Skipped: ${applyResult.summary?.skipped || 0}`,
-                        `Errors: ${applyResult.summary?.error || 0}`,
-                      ]}
-                      renderItem={(item) => <List.Item>{item}</List.Item>}
-                    />
-                  ) : (
-                    <Empty description="No apply result yet." />
-                  )}
-                </Card>
-              </Col>
-            </Row>
-          </Flex>
-        </Col>
-
-        <Col xs={24} xl={7}>
-          <Flex vertical gap={16}>
-            <Card
-              title={
-                <Space>
-                  <SyncOutlined />
-                  <span>Process Logs</span>
-                </Space>
-              }
-            >
-              {currentJob ? (
-                <Flex vertical gap={16}>
-                  <Card size="small">
-                    <Flex vertical gap={12}>
-                      <Space wrap>
-                        <StatusTag value={currentJob.status || "running"} />
-                        <Tag>{currentJob.kind || "process"}</Tag>
-                      </Space>
-                      <Text strong>{currentJob.message}</Text>
-                      <Text type="secondary">Started {formatDate(currentJob.started_at)}</Text>
-                    </Flex>
-                  </Card>
-                  <List
-                    itemLayout="horizontal"
-                    dataSource={(currentJob.logs || []).slice().reverse()}
-                    renderItem={(entry) => (
-                      <List.Item>
-                        <List.Item.Meta
-                          title={
-                            <Space>
-                              <StatusTag value={entry.level} />
-                              <span>{entry.message}</span>
-                            </Space>
-                          }
-                          description={formatDate(entry.ts)}
-                        />
-                      </List.Item>
-                    )}
-                  />
-                </Flex>
-              ) : (
-                <Empty description="No active process right now." />
-              )}
-            </Card>
-
-            <Card title="Recent Activity">
-              {recentActivity.length ? (
-                <List
-                  itemLayout="horizontal"
-                  dataSource={recentActivity}
-                  renderItem={(entry) => (
-                    <List.Item>
-                      <List.Item.Meta
-                        title={
-                          <Space>
-                            <StatusTag value={entry.status} />
-                            <span>{entry.message}</span>
-                          </Space>
-                        }
-                        description={`${entry.kind} • ${formatDate(entry.created_at)}`}
-                      />
-                    </List.Item>
-                  )}
-                />
-              ) : (
-                <Empty description="No activity yet." />
-              )}
-            </Card>
-          </Flex>
-        </Col>
-      </Row>
+      <MediaLibraryLogPanel
+        scope="operations"
+        title="Process Logs"
+        stateData={payload}
+        currentJobData={currentJob}
+        extra={
+          <Space wrap>
+            {currentJob?.status === "running" ? (
+              <Button danger loading={actionLoading === "cancel-job"} onClick={handleCancelCurrentJob}>
+                Stop Job
+              </Button>
+            ) : null}
+            {planActions.length ? <Button onClick={() => setPlanReviewOpen(true)}>Open Change Preview</Button> : null}
+          </Space>
+        }
+      />
 
       <ProviderMoveModal
         modalState={providerModal}
@@ -1177,6 +1225,18 @@ export function OperationsView() {
           );
           if (result) closeProviderModal();
         }}
+      />
+      <PlanReviewModal
+        open={planReviewOpen}
+        plan={activePlan}
+        deleteLowerQuality={deleteLowerQuality}
+        pruneEmptyDirs={pruneEmptyDirs}
+        actionLoading={actionLoading}
+        onClose={() => setPlanReviewOpen(false)}
+        onDeleteLowerQualityChange={setDeleteLowerQuality}
+        onPruneEmptyDirsChange={setPruneEmptyDirs}
+        onDryRun={handleDryRunFromReview}
+        onExecute={handleExecuteFromReview}
       />
     </Flex>
   );

@@ -6,7 +6,6 @@ import {
   Descriptions,
   Empty,
   Flex,
-  List,
   Row,
   Space,
   Spin,
@@ -16,6 +15,7 @@ import {
 } from "antd";
 import { CloudServerOutlined, FolderOpenOutlined, LinkOutlined, SyncOutlined } from "@ant-design/icons";
 import { request } from "../api";
+import { MediaLibraryLogPanel } from "./MediaLibraryLogPanel";
 
 const { Text } = Typography;
 
@@ -41,13 +41,58 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
+function getReadableStatusLabel(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "running") return "In progress";
+  if (normalized === "success") return "Done";
+  if (normalized === "error") return "Error";
+  if (normalized === "cancelled") return "Stopped";
+  if (normalized === "dry-run") return "Preview";
+  if (normalized === "review") return "Check";
+  if (normalized === "applied") return "Applied";
+  if (normalized === "info") return "Info";
+  return value || "unknown";
+}
+
+function getReadableJobKindLabel(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "scan") return "Scan";
+  if (normalized === "plan") return "Change plan";
+  if (normalized === "apply") return "File changes";
+  if (normalized === "cleanup-scan") return "Cleanup scan";
+  return value || "Process";
+}
+
+function isRealApplyMode(value) {
+  return ["apply", "execute"].includes(String(value || "").toLowerCase());
+}
+
+function getPendingPlan(plan, applyResult, lastPlanAt, lastApplyAt) {
+  if (!plan) return null;
+  if (!applyResult || !isRealApplyMode(applyResult.mode)) return plan;
+
+  const appliedPlanGeneratedAt = String(applyResult.plan_generated_at || "").trim();
+  const planGeneratedAt = String(plan.generated_at || "").trim();
+  if (appliedPlanGeneratedAt && planGeneratedAt) {
+    return appliedPlanGeneratedAt === planGeneratedAt ? null : plan;
+  }
+
+  const planTime = Date.parse(planGeneratedAt || lastPlanAt || "") || 0;
+  const applyTime = Date.parse(applyResult.generated_at || lastApplyAt || "") || 0;
+  if (planTime && applyTime && applyTime >= planTime) {
+    return null;
+  }
+
+  return plan;
+}
+
 function StatusTag({ value }) {
   const status = String(value || "").toLowerCase();
   let color = "default";
   if (["success", "applied", "running", "info"].includes(status)) color = "success";
   if (["error", "failed"].includes(status)) color = "error";
   if (["dry-run", "review"].includes(status)) color = "processing";
-  return <Tag color={color}>{value || "unknown"}</Tag>;
+  return <Tag color={color}>{getReadableStatusLabel(value)}</Tag>;
 }
 
 export function OverviewView() {
@@ -67,13 +112,20 @@ export function OverviewView() {
   }, [message]);
 
   const reportSummary = state.report?.summary || {};
-  const planSummary = state.plan?.summary || {};
-  const duplicateGroups = (reportSummary.exact_duplicate_groups || 0) + (reportSummary.media_collision_groups || 0);
+  const cleanupSummary = state.cleanup_report?.summary || {};
+  const activePlan = useMemo(
+    () => getPendingPlan(state.plan, state.apply_result, state.last_plan_at, state.last_apply_at),
+    [state.plan, state.apply_result, state.last_plan_at, state.last_apply_at]
+  );
+  const planSummary = activePlan?.summary || {};
+  const duplicateGroups =
+    (reportSummary.exact_duplicate_groups || 0) +
+    (reportSummary.media_collision_groups || 0) +
+    (cleanupSummary.folder_media_duplicate_groups || 0);
   const enabledIntegrations = useMemo(
     () => ["radarr", "sonarr"].filter((name) => state.integrations?.[name]?.enabled),
     [state.integrations]
   );
-  const recentActivity = (state.activity_log || []).slice(0, 8);
 
   if (loading) {
     return (
@@ -96,13 +148,14 @@ export function OverviewView() {
           <Card>
             <Statistic title="Duplicate Groups" value={duplicateGroups} prefix={<CloudServerOutlined />} />
             <Text type="secondary">
-              {reportSummary.exact_duplicate_groups || 0} exact, {reportSummary.media_collision_groups || 0} collision
+              {reportSummary.exact_duplicate_groups || 0} exact, {reportSummary.media_collision_groups || 0} collision,{" "}
+              {cleanupSummary.folder_media_duplicate_groups || 0} cleanup
             </Text>
           </Card>
         </Col>
         <Col xs={24} md={12} xl={6}>
           <Card>
-            <Statistic title="Plan Actions" value={(planSummary.move || 0) + (planSummary.delete || 0) + (planSummary.review || 0)} prefix={<SyncOutlined />} />
+            <Statistic title="Planned Changes" value={(planSummary.move || 0) + (planSummary.delete || 0) + (planSummary.review || 0)} prefix={<SyncOutlined />} />
             <Text type="secondary">Last plan: {formatDate(state.last_plan_at)}</Text>
           </Card>
         </Col>
@@ -114,26 +167,26 @@ export function OverviewView() {
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={14}>
-          <Card title="System Snapshot">
+      <Row gutter={[16, 16]} className="overview-panel-row">
+        <Col xs={24} xl={14} className="overview-panel-col">
+          <Card title="System Snapshot" className="overview-panel-card">
             <DescriptionsLike
               items={[
                 ["Latest Scan", formatDate(state.last_scan_at)],
-                ["Latest Apply", formatDate(state.last_apply_at)],
+                ["Latest Changes", formatDate(state.last_apply_at)],
                 ["Latest Sync", formatDate(state.last_sync_at)],
                 ["Connected Roots", state.roots.length || 0],
               ]}
             />
           </Card>
         </Col>
-        <Col xs={24} xl={10}>
-          <Card title="Current Process">
+        <Col xs={24} xl={10} className="overview-panel-col">
+          <Card title="Current Process" className="overview-panel-card">
             {currentJob ? (
               <Flex vertical gap={16}>
                 <Space wrap>
                   <StatusTag value={currentJob.status || "running"} />
-                  <Tag>{currentJob.kind || "process"}</Tag>
+                  <Tag>{getReadableJobKindLabel(currentJob.kind)}</Tag>
                 </Space>
                 <Text strong style={{ fontSize: 18 }}>
                   {currentJob.message}
@@ -157,25 +210,7 @@ export function OverviewView() {
         </Col>
       </Row>
 
-      <Card title="Recent Activity">
-        <List
-          dataSource={recentActivity}
-          locale={{ emptyText: <Empty description="No recent activity." /> }}
-          renderItem={(item) => (
-            <List.Item>
-              <List.Item.Meta
-                title={
-                  <SpaceTitle>
-                    <StatusTag value={item.status} />
-                    <span>{item.message}</span>
-                  </SpaceTitle>
-                }
-                description={`${item.kind} • ${formatDate(item.created_at)}`}
-              />
-            </List.Item>
-          )}
-        />
-      </Card>
+      <MediaLibraryLogPanel scope="activity" title="Recent Activity" />
     </Flex>
   );
 }
@@ -189,14 +224,6 @@ function DescriptionsLike({ items }) {
           <Text>{value}</Text>
         </Flex>
       ))}
-    </Flex>
-  );
-}
-
-function SpaceTitle({ children }) {
-  return (
-    <Flex align="center" gap={8} wrap="wrap">
-      {children}
     </Flex>
   );
 }

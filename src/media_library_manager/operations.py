@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .operation_storage import OperationStorageRouter
-from .scanner import companion_files, compute_sha256
+from .scanner import SIDECAR_EXTENSIONS, companion_files, compute_sha256
 
 
 ApplyProgressCallback = Callable[[dict[str, Any]], None]
@@ -28,6 +28,7 @@ def apply_plan(
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     total_actions = len(plan["actions"])
+    mode = "apply" if execute else "preview"
     progress_summary = {
         "total": total_actions,
         "completed": 0,
@@ -56,7 +57,7 @@ def apply_plan(
                     "source": action["source"],
                     "destination": action.get("destination"),
                     "keep_path": action.get("keep_path"),
-                    "mode": "execute" if execute else "dry-run",
+                    "mode": mode,
                     "summary": progress_summary.copy(),
                 }
             )
@@ -72,16 +73,15 @@ def apply_plan(
 
         results.append(result)
         status = result["status"]
+        progress_summary["completed"] += 1
         if status == "skipped":
             progress_summary["skipped"] += 1
         elif status == "error":
             progress_summary["error"] += 1
         elif status == "applied":
             progress_summary["applied"] += 1
-            progress_summary["completed"] += 1
         elif status == "dry-run":
             progress_summary["dry_run"] += 1
-            progress_summary["completed"] += 1
 
         if progress_callback:
             progress_callback(
@@ -93,7 +93,7 @@ def apply_plan(
                     "source": action["source"],
                     "destination": action.get("destination"),
                     "keep_path": action.get("keep_path"),
-                    "mode": "execute" if execute else "dry-run",
+                    "mode": mode,
                     "result": result,
                     "summary": progress_summary.copy(),
                 }
@@ -202,8 +202,9 @@ def prune_empty_parent_dirs(directory: Path, *, stop_at: Path) -> None:
 
 
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, int]:
-    summary = {"applied": 0, "dry-run": 0, "skipped": 0, "error": 0}
+    summary = {"completed": 0, "applied": 0, "dry-run": 0, "skipped": 0, "error": 0}
     for result in results:
+        summary["completed"] += 1
         summary[result["status"]] = summary.get(result["status"], 0) + 1
     return summary
 
@@ -543,6 +544,78 @@ def delete_folder(path: str | Path, *, execute: bool = False, storage_router: Op
     return {"status": "applied", "type": "delete-folder", "path": target_value, "operations": operations}
 
 
+def delete_media_file(
+    path: str | Path,
+    *,
+    storage_uri: str = "",
+    root_path: str | Path | None = None,
+    root_storage_uri: str = "",
+    execute: bool = False,
+    prune_empty_dirs: bool = True,
+    storage_router: OperationStorageRouter | None = None,
+) -> dict[str, Any]:
+    router = storage_router or OperationStorageRouter()
+    target_input = storage_uri or path
+    target_ref, parse_error = _parse_storage_path(router, target_input)
+    if parse_error:
+        return {"status": "error", "message": parse_error}
+    assert target_ref is not None
+
+    target_value = router.stringify(target_ref)
+    try:
+        if not router.exists(target_ref):
+            return {"status": "error", "message": f"path does not exist: {target_value}"}
+        if not router.is_file(target_ref):
+            return {"status": "error", "message": f"path is not a file: {target_value}"}
+        bundle = _collect_media_file_bundle(router, target_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    operations = [{"delete": router.stringify(item)} for item in bundle]
+    if not execute:
+        return {"status": "dry-run", "type": "delete-media-file", "path": target_value, "operations": operations}
+
+    try:
+        for item in bundle:
+            if router.exists(item):
+                router.delete_file(item)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    root_value = root_storage_uri or (str(root_path) if root_path else "")
+    if prune_empty_dirs and root_value:
+        _prune_empty_parent_dirs_with_storage_router(router, target_ref, root_value)
+
+    return {"status": "applied", "type": "delete-media-file", "path": target_value, "operations": operations}
+
+
+def delete_file(path: str | Path, *, execute: bool = False, storage_router: OperationStorageRouter | None = None) -> dict[str, Any]:
+    router = storage_router or OperationStorageRouter()
+    target_ref, parse_error = _parse_storage_path(router, path)
+    if parse_error:
+        return {"status": "error", "message": parse_error}
+    assert target_ref is not None
+
+    target_value = router.stringify(target_ref)
+    try:
+        if not router.exists(target_ref):
+            return {"status": "error", "message": f"path does not exist: {target_value}"}
+        if not router.is_file(target_ref):
+            return {"status": "error", "message": f"path is not a file: {target_value}"}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    operations = [{"delete": target_value}]
+    if not execute:
+        return {"status": "dry-run", "type": "delete-file", "path": target_value, "operations": operations}
+
+    try:
+        router.delete_file(target_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "applied", "type": "delete-file", "path": target_value, "operations": operations}
+
+
 def _uses_storage_abstraction(*values: object) -> bool:
     return any(str(value or "").strip().startswith("smb://") for value in values)
 
@@ -558,6 +631,27 @@ def _parse_storage_path(router: OperationStorageRouter, value: str | Path) -> tu
         return router.parse_storage_path(value), None
     except ValueError as exc:
         return None, str(exc)
+
+
+def _collect_media_file_bundle(storage_router: OperationStorageRouter, source_ref: Any) -> list[Any]:
+    if getattr(source_ref, "backend", "") == "local":
+        assert source_ref.local_path is not None
+        return [source_ref, *[storage_router.parse_storage_path(item) for item in companion_files(source_ref.local_path)]]
+
+    parent_ref = storage_router.parent(source_ref)
+    if parent_ref is None:
+        return [source_ref]
+    source_name = source_ref.name
+    source_stem = Path(source_name).stem
+    companions = [source_ref]
+    for item in storage_router.listdir(parent_ref):
+        if item == source_ref or not storage_router.is_file(item):
+            continue
+        if Path(item.name).stem != source_stem:
+            continue
+        if Path(item.name).suffix.lower() in SIDECAR_EXTENSIONS:
+            companions.append(item)
+    return sorted(companions, key=storage_router.stringify)
 
 
 def _perform_move_with_storage_router(

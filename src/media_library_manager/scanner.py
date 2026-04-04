@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from .models import MediaFile, RootConfig, ScanReport
@@ -75,6 +75,19 @@ NOISE_WORDS = {
     "readnfo",
     "10bit",
     "8bit",
+}
+
+FOLDER_DUPLICATE_EXCLUDED_TOKENS = {
+    "sample",
+    "trailer",
+    "featurette",
+    "extras",
+    "bonus",
+    "behind",
+    "scene",
+    "scenes",
+    "deleted",
+    "interview",
 }
 
 SOURCE_RANKS = {
@@ -174,6 +187,7 @@ def scan_roots(
         sha256_for=lambda item: backend.compute_sha256(hash_entries[id(item)]) if id(item) in hash_entries else compute_sha256(item.path),
     )
     media_groups = build_media_collision_groups(files)
+    folder_media_groups = build_folder_media_duplicate_groups(files)
     if progress_callback:
         progress_callback(
             {
@@ -182,9 +196,26 @@ def scan_roots(
                 "total_indexed_files": total_files,
                 "exact_duplicate_groups": len(exact_groups),
                 "media_collision_groups": len(media_groups),
+                "folder_media_duplicate_groups": len(folder_media_groups),
             }
         )
-    return ScanReport(roots=roots, files=files, exact_duplicates=exact_groups, media_collisions=media_groups)
+    return ScanReport(
+        roots=roots,
+        files=files,
+        exact_duplicates=exact_groups,
+        media_collisions=media_groups,
+        folder_media_duplicates=folder_media_groups,
+    )
+
+
+def rebuild_scan_report(roots: list[RootConfig], files: list[MediaFile]) -> ScanReport:
+    return ScanReport(
+        roots=roots,
+        files=files,
+        exact_duplicates=build_exact_duplicate_groups_from_files(files),
+        media_collisions=build_media_collision_groups(files),
+        folder_media_duplicates=build_folder_media_duplicate_groups(files),
+    )
 
 
 def inspect_media_file(entry: ScannedFileEntry, root: RootConfig) -> MediaFile:
@@ -262,6 +293,61 @@ def build_media_collision_groups(files: list[MediaFile]) -> list[dict[str, objec
         )
     groups.sort(key=lambda group: group["media_key"])
     return groups
+
+
+def build_exact_duplicate_groups_from_files(files: list[MediaFile]) -> list[dict[str, object]]:
+    size_groups: dict[int, list[MediaFile]] = defaultdict(list)
+    for item in files:
+        if item.sha256:
+            size_groups[item.size].append(item)
+    return build_exact_duplicate_groups(size_groups, sha256_for=lambda item: item.sha256 or "")
+
+
+def build_folder_media_duplicate_groups(files: list[MediaFile]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str, str], list[MediaFile]] = defaultdict(list)
+    for item in files:
+        if _is_excluded_folder_duplicate_candidate(item):
+            continue
+        folder_relative = str(PurePosixPath(item.relative_path).parent)
+        group_key = (str(item.root_path), folder_relative, item.media_key)
+        grouped[group_key].append(item)
+
+    groups: list[dict[str, object]] = []
+    for (_root_path, folder_relative, media_key), items in grouped.items():
+        if len(items) < 2:
+            continue
+        ordered_items = sorted(items, key=lambda file: file.score_tuple(), reverse=True)
+        representative = ordered_items[0]
+        groups.append(
+            {
+                "id": f"{media_key}:{str(representative.root_path)}:{folder_relative}",
+                "media_key": media_key,
+                "kind": representative.kind,
+                "canonical_name": representative.canonical_name,
+                "folder_path": _folder_display_path(representative, folder_relative),
+                "folder_relative_path": "." if folder_relative in {"", "."} else folder_relative,
+                "root_label": representative.root_label,
+                "root_path": str(representative.root_path),
+                "suggested_keep_path": str(representative.path),
+                "suggested_keep_storage_uri": representative.storage_uri,
+                "items": [item.to_dict() for item in ordered_items],
+            }
+        )
+
+    groups.sort(key=lambda group: (str(group["canonical_name"]).lower(), str(group["folder_path"]).lower()))
+    return groups
+
+
+def _is_excluded_folder_duplicate_candidate(item: MediaFile) -> bool:
+    stem = PurePosixPath(item.relative_path).stem
+    normalized = {token.lower() for token in clean_text(stem).split()}
+    return any(token in normalized for token in FOLDER_DUPLICATE_EXCLUDED_TOKENS)
+
+
+def _folder_display_path(item: MediaFile, folder_relative: str) -> str:
+    if folder_relative in {"", "."}:
+        return str(item.root_path)
+    return str(item.root_path / Path(folder_relative))
 
 
 def parse_media_details(path: Path | str) -> dict[str, object]:

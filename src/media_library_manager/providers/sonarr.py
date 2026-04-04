@@ -39,3 +39,12 @@ class SonarrClient(JsonApiClient):
             return self.post("/api/v3/command", {"name": "RefreshSeries", "seriesId": series_id})
         except ProviderError:
             return self.post("/api/v3/command", {"name": "RefreshSeries", "seriesIds": [series_id]})
+
+    def delete_series(self, series_id: int, *, delete_files: bool = False, add_import_exclusion: bool = False) -> dict[str, Any]:
+        return self.delete(
+            f"/api/v3/series/{series_id}",
+            query={
+                "deleteFiles": str(delete_files).lower(),
+                "addImportExclusion": str(add_import_exclusion).lower(),
+            },
+        )
