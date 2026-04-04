@@ -3,6 +3,24 @@ from pathlib import Path
 
 from media_library_manager.models import RootConfig
 from media_library_manager.scanner import parse_media_details, scan_roots
+from media_library_manager.scanner_storage import ScannedFileEntry, StorageManagerScannerStorage
+from media_library_manager.storage import default_storage_manager
+
+
+class FakeScannerStorageBackend:
+    def __init__(self, entries: list[ScannedFileEntry], hashes: dict[str, str]) -> None:
+        self.entries = entries
+        self.hashes = hashes
+        self.hash_calls = 0
+
+    def iter_video_files(self, root: RootConfig, *, allowed_suffixes: set[str]):
+        for entry in self.entries:
+            if entry.suffix in allowed_suffixes:
+                yield entry
+
+    def compute_sha256(self, entry: ScannedFileEntry) -> str:
+        self.hash_calls += 1
+        return self.hashes[entry.path]
 
 
 class ScannerTests(unittest.TestCase):
@@ -49,3 +67,55 @@ class ScannerTests(unittest.TestCase):
                 self.assertEqual(len(report.files), 2)
                 self.assertEqual(len(report.exact_duplicates), 1)
                 self.assertEqual(len(report.media_collisions), 1)
+
+    def test_scan_supports_custom_storage_backend(self) -> None:
+        root = RootConfig(path=Path("/virtual/root"), label="SMB", priority=100)
+        entries = [
+            ScannedFileEntry(
+                path="smb://nas/Movies/Dune.Part.Two.2024.2160p.REMUX.mkv",
+                relative_path="Dune.Part.Two.2024.2160p.REMUX.mkv",
+                size=10,
+                stem="Dune.Part.Two.2024.2160p.REMUX",
+                suffix=".mkv",
+                parent_name="Movies",
+            ),
+            ScannedFileEntry(
+                path="smb://nas/Backup/Dune Part Two (2024).mkv",
+                relative_path="Dune Part Two (2024).mkv",
+                size=10,
+                stem="Dune Part Two (2024)",
+                suffix=".mkv",
+                parent_name="Backup",
+            ),
+        ]
+        backend = FakeScannerStorageBackend(
+            entries=entries,
+            hashes={
+                "smb://nas/Movies/Dune.Part.Two.2024.2160p.REMUX.mkv": "same-hash",
+                "smb://nas/Backup/Dune Part Two (2024).mkv": "same-hash",
+            },
+        )
+
+        report = scan_roots([root], storage_backend=backend)
+
+        self.assertEqual(len(report.files), 2)
+        self.assertEqual(len(report.exact_duplicates), 1)
+        self.assertEqual(len(report.media_collisions), 1)
+        self.assertEqual(backend.hash_calls, 2)
+
+    def test_scan_supports_storage_manager_backend_for_local_roots(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            root_dir = tmp_path / "Library"
+            root_dir.mkdir()
+            (root_dir / "Dune.Part.Two.2024.2160p.REMUX.mkv").write_bytes(b"same-bytes")
+            (root_dir / "Dune Part Two (2024).mkv").write_bytes(b"same-bytes")
+
+            manager_backend = StorageManagerScannerStorage(default_storage_manager())
+            report = scan_roots([RootConfig(path=root_dir, label="Library", priority=100)], storage_backend=manager_backend)
+
+            self.assertEqual(len(report.files), 2)
+            self.assertEqual(len(report.exact_duplicates), 1)
+            self.assertEqual(len(report.media_collisions), 1)

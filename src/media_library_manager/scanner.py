@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import MediaFile, RootConfig, ScanReport
+from .scanner_storage import LocalPathScannerStorage, ScannedFileEntry, ScannerStorageBackend
 
 VIDEO_EXTENSIONS = {
     ".mkv",
@@ -117,12 +118,17 @@ ScanProgressCallback = Callable[[dict[str, object]], None]
 
 
 def scan_roots(
-    roots: list[RootConfig], *, progress_callback: ScanProgressCallback | None = None
+    roots: list[RootConfig],
+    *,
+    progress_callback: ScanProgressCallback | None = None,
+    storage_backend: ScannerStorageBackend | None = None,
 ) -> ScanReport:
     files: list[MediaFile] = []
     size_groups: dict[int, list[MediaFile]] = defaultdict(list)
+    hash_entries: dict[int, ScannedFileEntry] = {}
     total_roots = len(roots)
     total_files = 0
+    backend = storage_backend or LocalPathScannerStorage()
 
     for index, root in enumerate(roots, start=1):
         root_file_count = 0
@@ -137,12 +143,11 @@ def scan_roots(
                     "total_indexed_files": total_files,
                 }
             )
-        for path in root.path.rglob("*"):
-            if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
-                continue
-            media = inspect_media_file(path, root)
+        for entry in backend.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS):
+            media = inspect_media_file(entry, root)
             files.append(media)
             size_groups[media.size].append(media)
+            hash_entries[id(media)] = entry
             root_file_count += 1
             total_files += 1
         if progress_callback:
@@ -158,7 +163,10 @@ def scan_roots(
                 }
             )
 
-    exact_groups = build_exact_duplicate_groups(size_groups)
+    exact_groups = build_exact_duplicate_groups(
+        size_groups,
+        sha256_for=lambda item: backend.compute_sha256(hash_entries[id(item)]) if id(item) in hash_entries else compute_sha256(item.path),
+    )
     media_groups = build_media_collision_groups(files)
     if progress_callback:
         progress_callback(
@@ -173,13 +181,11 @@ def scan_roots(
     return ScanReport(roots=roots, files=files, exact_duplicates=exact_groups, media_collisions=media_groups)
 
 
-def inspect_media_file(path: Path, root: RootConfig) -> MediaFile:
-    stat = path.stat()
-    relative_path = str(path.relative_to(root.path))
-
-    details = parse_media_details(path)
+def inspect_media_file(entry: ScannedFileEntry, root: RootConfig) -> MediaFile:
+    details = parse_media_details_from_names(entry.stem, entry.parent_name)
+    storage_uri = entry.path if entry.path.startswith(("local://", "smb://")) else ""
     media = MediaFile(
-        path=path.resolve(),
+        path=Path(entry.path),
         root_path=root.path,
         root_label=root.label,
         root_priority=root.priority,
@@ -190,25 +196,31 @@ def inspect_media_file(path: Path, root: RootConfig) -> MediaFile:
         year=details["year"],
         season=details["season"],
         episode=details["episode"],
-        size=stat.st_size,
-        relative_path=relative_path,
+        size=entry.size,
+        relative_path=entry.relative_path,
         resolution=details["resolution"],
         source=details["source"],
         codec=details["codec"],
         dynamic_range=details["dynamic_range"],
         quality_rank=details["quality_rank"],
+        storage_uri=storage_uri,
+        root_storage_uri=root.storage_uri,
     )
     return media
 
 
-def build_exact_duplicate_groups(size_groups: dict[int, list[MediaFile]]) -> list[dict[str, object]]:
+def build_exact_duplicate_groups(
+    size_groups: dict[int, list[MediaFile]],
+    *,
+    sha256_for: Callable[[MediaFile], str] | None = None,
+) -> list[dict[str, object]]:
     groups: list[dict[str, object]] = []
     for size, items in size_groups.items():
         if len(items) < 2:
             continue
         hash_groups: dict[str, list[MediaFile]] = defaultdict(list)
         for item in items:
-            item.sha256 = item.sha256 or compute_sha256(item.path)
+            item.sha256 = item.sha256 or (sha256_for(item) if sha256_for else compute_sha256(item.path))
             hash_groups[item.sha256].append(item)
         for sha256, hashed_items in hash_groups.items():
             if len(hashed_items) < 2:
@@ -246,9 +258,14 @@ def build_media_collision_groups(files: list[MediaFile]) -> list[dict[str, objec
     return groups
 
 
-def parse_media_details(path: Path) -> dict[str, object]:
-    stem = path.stem
-    parent = path.parent.name
+def parse_media_details(path: Path | str) -> dict[str, object]:
+    path_obj = Path(path)
+    stem = path_obj.stem
+    parent = path_obj.parent.name
+    return parse_media_details_from_names(stem, parent)
+
+
+def parse_media_details_from_names(stem: str, parent: str) -> dict[str, object]:
     stem_clean = clean_text(stem)
     parent_clean = clean_text(parent)
 
@@ -387,9 +404,10 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", cleaned).strip("-") or "unknown"
 
 
-def compute_sha256(path: Path) -> str:
+def compute_sha256(path: Path | str) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    path_obj = Path(path)
+    with path_obj.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()

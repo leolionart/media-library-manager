@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from .operation_storage import OperationStorageRouter
 from .scanner import companion_files, compute_sha256
 
 
@@ -21,6 +22,7 @@ def apply_plan(
     execute: bool = False,
     prune_empty_dirs: bool = False,
     progress_callback: ApplyProgressCallback | None = None,
+    storage_router: OperationStorageRouter | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     total_actions = len(plan["actions"])
@@ -53,9 +55,9 @@ def apply_plan(
         if action_type == "review":
             result = {"status": "skipped", "type": action_type, "source": action["source"]}
         elif action_type == "move":
-            result = perform_move(action, execute=execute, prune_empty_dirs=prune_empty_dirs)
+            result = perform_move(action, execute=execute, prune_empty_dirs=prune_empty_dirs, storage_router=storage_router)
         elif action_type == "delete":
-            result = perform_delete(action, execute=execute, prune_empty_dirs=prune_empty_dirs)
+            result = perform_delete(action, execute=execute, prune_empty_dirs=prune_empty_dirs, storage_router=storage_router)
         else:
             result = {"status": "error", "type": action_type, "source": action["source"], "message": "unknown action"}
 
@@ -91,7 +93,17 @@ def apply_plan(
     return {"summary": summarize_results(results), "results": results}
 
 
-def perform_move(action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool) -> dict[str, Any]:
+def perform_move(
+    action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter | None = None
+) -> dict[str, Any]:
+    if _uses_storage_abstraction(action.get("source"), action.get("destination")):
+        return _perform_move_with_storage_router(
+            action,
+            execute=execute,
+            prune_empty_dirs=prune_empty_dirs,
+            storage_router=storage_router or OperationStorageRouter(),
+        )
+
     source = Path(action["source"])
     destination = Path(action["destination"])
     bundle = [source, *companion_files(source)]
@@ -126,7 +138,17 @@ def perform_move(action: dict[str, Any], *, execute: bool, prune_empty_dirs: boo
     return {"status": "applied", "type": "move", "source": str(source), "destination": str(destination), "operations": operations}
 
 
-def perform_delete(action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool) -> dict[str, Any]:
+def perform_delete(
+    action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter | None = None
+) -> dict[str, Any]:
+    if _uses_storage_abstraction(action.get("source")):
+        return _perform_delete_with_storage_router(
+            action,
+            execute=execute,
+            prune_empty_dirs=prune_empty_dirs,
+            storage_router=storage_router or OperationStorageRouter(),
+        )
+
     source = Path(action["source"])
     bundle = [source, *companion_files(source)]
     if not execute:
@@ -177,46 +199,63 @@ def move_folder(
     destination_parent: str | Path,
     *,
     execute: bool = False,
+    storage_router: OperationStorageRouter | None = None,
 ) -> dict[str, Any]:
-    source_path = Path(source).expanduser().resolve()
-    destination_parent_path = Path(destination_parent).expanduser().resolve()
+    router = storage_router or OperationStorageRouter()
+    source_ref, source_error = _parse_storage_path(router, source)
+    if source_error:
+        return {"status": "error", "message": source_error}
+    destination_parent_ref, destination_error = _parse_storage_path(router, destination_parent)
+    if destination_error:
+        return {"status": "error", "message": destination_error}
+    assert source_ref is not None and destination_parent_ref is not None
 
-    if not source_path.exists():
-        return {"status": "error", "message": f"source does not exist: {source_path}"}
-    if not source_path.is_dir():
-        return {"status": "error", "message": f"source is not a directory: {source_path}"}
-    if not destination_parent_path.exists():
-        return {"status": "error", "message": f"destination does not exist: {destination_parent_path}"}
-    if not destination_parent_path.is_dir():
-        return {"status": "error", "message": f"destination is not a directory: {destination_parent_path}"}
+    source_value = router.stringify(source_ref)
+    destination_parent_value = router.stringify(destination_parent_ref)
 
-    destination_path = destination_parent_path / source_path.name
-    if destination_path.exists():
-        return {"status": "error", "message": f"destination already exists: {destination_path}"}
     try:
-        source_path.relative_to(destination_parent_path)
-        return {"status": "error", "message": "destination cannot contain the source folder"}
-    except ValueError:
-        pass
+        if not router.exists(source_ref):
+            return {"status": "error", "message": f"source does not exist: {source_value}"}
+        if not router.is_dir(source_ref):
+            return {"status": "error", "message": f"source is not a directory: {source_value}"}
+        if not router.exists(destination_parent_ref):
+            return {"status": "error", "message": f"destination does not exist: {destination_parent_value}"}
+        if not router.is_dir(destination_parent_ref):
+            return {"status": "error", "message": f"destination is not a directory: {destination_parent_value}"}
+        if not router.same_backend_namespace(source_ref, destination_parent_ref):
+            return {"status": "error", "message": "cross-backend move is not supported yet"}
 
-    operations = [{"move_dir": str(source_path), "to_parent": str(destination_parent_path), "destination": str(destination_path)}]
+        destination_ref = router.join(destination_parent_ref, source_ref.name)
+        destination_value = router.stringify(destination_ref)
+        if router.exists(destination_ref):
+            return {"status": "error", "message": f"destination already exists: {destination_value}"}
+        if router.is_relative_to(destination_parent_ref, source_ref):
+            return {"status": "error", "message": "destination cannot contain the source folder"}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    operations = [{"move_dir": source_value, "to_parent": destination_parent_value, "destination": destination_value}]
     if not execute:
         return {
             "status": "dry-run",
             "type": "move-folder",
-            "source": str(source_path),
-            "destination_parent": str(destination_parent_path),
-            "destination": str(destination_path),
+            "source": source_value,
+            "destination_parent": destination_parent_value,
+            "destination": destination_value,
             "operations": operations,
         }
 
-    shutil.move(str(source_path), str(destination_path))
+    try:
+        router.rename(source_ref, destination_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
     return {
         "status": "applied",
         "type": "move-folder",
-        "source": str(source_path),
-        "destination_parent": str(destination_parent_path),
-        "destination": str(destination_path),
+        "source": source_value,
+        "destination_parent": destination_parent_value,
+        "destination": destination_value,
         "operations": operations,
     }
 
@@ -226,65 +265,206 @@ def move_folder_contents(
     destination: str | Path,
     *,
     execute: bool = False,
+    storage_router: OperationStorageRouter | None = None,
 ) -> dict[str, Any]:
-    source_path = Path(source).expanduser().resolve()
-    destination_path = Path(destination).expanduser().resolve()
+    router = storage_router or OperationStorageRouter()
+    source_ref, source_error = _parse_storage_path(router, source)
+    if source_error:
+        return {"status": "error", "message": source_error}
+    destination_ref, destination_error = _parse_storage_path(router, destination)
+    if destination_error:
+        return {"status": "error", "message": destination_error}
+    assert source_ref is not None and destination_ref is not None
 
-    if not source_path.exists():
-        return {"status": "error", "message": f"source does not exist: {source_path}"}
-    if not source_path.is_dir():
-        return {"status": "error", "message": f"source is not a directory: {source_path}"}
-    if not destination_path.exists():
-        return {"status": "error", "message": f"destination does not exist: {destination_path}"}
-    if not destination_path.is_dir():
-        return {"status": "error", "message": f"destination is not a directory: {destination_path}"}
+    source_value = router.stringify(source_ref)
+    destination_value = router.stringify(destination_ref)
+
     try:
-        destination_path.relative_to(source_path)
-        return {"status": "error", "message": "destination cannot be inside the source folder"}
-    except ValueError:
-        pass
+        if not router.exists(source_ref):
+            return {"status": "error", "message": f"source does not exist: {source_value}"}
+        if not router.is_dir(source_ref):
+            return {"status": "error", "message": f"source is not a directory: {source_value}"}
+        if not router.exists(destination_ref):
+            return {"status": "error", "message": f"destination does not exist: {destination_value}"}
+        if not router.is_dir(destination_ref):
+            return {"status": "error", "message": f"destination is not a directory: {destination_value}"}
+        if not router.same_backend_namespace(source_ref, destination_ref):
+            return {"status": "error", "message": "cross-backend move is not supported yet"}
+        if router.is_relative_to(destination_ref, source_ref):
+            return {"status": "error", "message": "destination cannot be inside the source folder"}
 
-    items = sorted(source_path.iterdir(), key=lambda item: item.name.lower())
-    operations = [{"move": str(item), "destination": str(destination_path / item.name)} for item in items]
-    for item in items:
-        if (destination_path / item.name).exists():
-            return {"status": "error", "message": f"destination entry exists: {destination_path / item.name}"}
+        items = router.listdir(source_ref)
+        operations = [{"move": router.stringify(item), "destination": router.stringify(router.join(destination_ref, item.name))} for item in items]
+        for item in items:
+            destination_item = router.join(destination_ref, item.name)
+            if router.exists(destination_item):
+                return {"status": "error", "message": f"destination entry exists: {router.stringify(destination_item)}"}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
 
     if not execute:
         return {
             "status": "dry-run",
             "type": "move-folder-contents",
-            "source": str(source_path),
-            "destination": str(destination_path),
+            "source": source_value,
+            "destination": destination_value,
             "operations": operations,
         }
 
-    for item in items:
-        shutil.move(str(item), str(destination_path / item.name))
     try:
-        source_path.rmdir()
-    except OSError:
-        pass
+        for item in items:
+            router.rename(item, router.join(destination_ref, item.name))
+        router.remove_dir_if_empty(source_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
 
     return {
         "status": "applied",
         "type": "move-folder-contents",
-        "source": str(source_path),
-        "destination": str(destination_path),
+        "source": source_value,
+        "destination": destination_value,
         "operations": operations,
     }
 
 
-def delete_folder(path: str | Path, *, execute: bool = False) -> dict[str, Any]:
-    target = Path(path).expanduser().resolve()
-    if not target.exists():
-        return {"status": "error", "message": f"path does not exist: {target}"}
-    if not target.is_dir():
-        return {"status": "error", "message": f"path is not a directory: {target}"}
+def delete_folder(path: str | Path, *, execute: bool = False, storage_router: OperationStorageRouter | None = None) -> dict[str, Any]:
+    router = storage_router or OperationStorageRouter()
+    target_ref, parse_error = _parse_storage_path(router, path)
+    if parse_error:
+        return {"status": "error", "message": parse_error}
+    assert target_ref is not None
 
-    operations = [{"delete_dir": str(target)}]
+    target_value = router.stringify(target_ref)
+    try:
+        if not router.exists(target_ref):
+            return {"status": "error", "message": f"path does not exist: {target_value}"}
+        if not router.is_dir(target_ref):
+            return {"status": "error", "message": f"path is not a directory: {target_value}"}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    operations = [{"delete_dir": target_value}]
     if not execute:
-        return {"status": "dry-run", "type": "delete-folder", "path": str(target), "operations": operations}
+        return {"status": "dry-run", "type": "delete-folder", "path": target_value, "operations": operations}
 
-    shutil.rmtree(target)
-    return {"status": "applied", "type": "delete-folder", "path": str(target), "operations": operations}
+    try:
+        router.delete_tree(target_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "applied", "type": "delete-folder", "path": target_value, "operations": operations}
+
+
+def _uses_storage_abstraction(*values: object) -> bool:
+    return any(str(value or "").strip().startswith("smb://") for value in values)
+
+
+def _parse_storage_path(router: OperationStorageRouter, value: str | Path) -> tuple[Any | None, str | None]:
+    try:
+        return router.parse_storage_path(value), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def _perform_move_with_storage_router(
+    action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter
+) -> dict[str, Any]:
+    source_ref, source_error = _parse_storage_path(storage_router, str(action["source"]))
+    if source_error:
+        return {"status": "error", "type": "move", "source": str(action["source"]), "message": source_error}
+    destination_ref, destination_error = _parse_storage_path(storage_router, str(action["destination"]))
+    if destination_error:
+        return {"status": "error", "type": "move", "source": str(action["source"]), "message": destination_error}
+    assert source_ref is not None and destination_ref is not None
+
+    source_value = storage_router.stringify(source_ref)
+    destination_value = storage_router.stringify(destination_ref)
+    try:
+        if not storage_router.same_backend_namespace(source_ref, destination_ref):
+            return {
+                "status": "error",
+                "type": "move",
+                "source": source_value,
+                "destination": destination_value,
+                "message": "cross-backend move is not supported yet",
+            }
+
+        destination_parent = storage_router.parent(destination_ref)
+        if destination_parent is not None and not storage_router.exists(destination_parent):
+            storage_router.mkdir_parents(destination_parent)
+    except ValueError as exc:
+        return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": str(exc)}
+
+    operations = [{"from": source_value, "to": destination_value}]
+    if not execute:
+        return {"status": "dry-run", "type": "move", "source": source_value, "destination": destination_value, "operations": operations}
+
+    try:
+        if storage_router.exists(destination_ref):
+            return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": f"destination exists: {destination_value}"}
+    except ValueError as exc:
+        return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": str(exc)}
+
+    try:
+        storage_router.rename(source_ref, destination_ref)
+    except ValueError as exc:
+        return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": str(exc)}
+
+    if prune_empty_dirs:
+        root_value = action.get("root_path")
+        if root_value:
+            _prune_empty_parent_dirs_with_storage_router(storage_router, source_ref, str(root_value))
+
+    return {"status": "applied", "type": "move", "source": source_value, "destination": destination_value, "operations": operations}
+
+
+def _perform_delete_with_storage_router(
+    action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter
+) -> dict[str, Any]:
+    source_ref, source_error = _parse_storage_path(storage_router, str(action["source"]))
+    if source_error:
+        return {"status": "error", "type": "delete", "source": str(action["source"]), "message": source_error}
+    assert source_ref is not None
+    source_value = storage_router.stringify(source_ref)
+
+    try:
+        if not storage_router.exists(source_ref):
+            return {
+                "status": "applied" if execute else "dry-run",
+                "type": "delete",
+                "source": source_value,
+                "keep_path": action.get("keep_path"),
+                "operations": [{"delete": source_value}],
+            }
+    except ValueError as exc:
+        return {"status": "error", "type": "delete", "source": source_value, "message": str(exc)}
+
+    operations = [{"delete": source_value}]
+    if not execute:
+        return {"status": "dry-run", "type": "delete", "source": source_value, "keep_path": action.get("keep_path"), "operations": operations}
+
+    try:
+        if storage_router.is_dir(source_ref):
+            storage_router.delete_tree(source_ref)
+        else:
+            storage_router.delete_file(source_ref)
+    except ValueError as exc:
+        return {"status": "error", "type": "delete", "source": source_value, "message": str(exc)}
+
+    if prune_empty_dirs:
+        root_value = action.get("root_path")
+        if root_value:
+            _prune_empty_parent_dirs_with_storage_router(storage_router, source_ref, str(root_value))
+
+    return {"status": "applied", "type": "delete", "source": source_value, "keep_path": action.get("keep_path"), "operations": operations}
+
+
+def _prune_empty_parent_dirs_with_storage_router(router: OperationStorageRouter, source_ref: Any, root_value: str) -> None:
+    root_ref, root_error = _parse_storage_path(router, root_value)
+    if root_error or root_ref is None:
+        return
+    current = router.parent(source_ref)
+    while current is not None and router.same_backend_namespace(current, root_ref) and current != root_ref:
+        removed = router.remove_dir_if_empty(current)
+        if not removed:
+            break
+        current = router.parent(current)

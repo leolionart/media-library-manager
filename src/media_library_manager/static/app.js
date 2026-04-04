@@ -5,7 +5,10 @@ const state = {
   payload: null,
   lanDevices: null,
   lanDevicesLoading: false,
+  pendingRequests: 0,
+  loadingRegions: {},
   mounts: [],
+  operationsFolders: [],
   selectedLanConnectionId: "",
   addFolderMode: "smb",
   currentJob: null,
@@ -16,10 +19,16 @@ const state = {
   movePreview: null,
   providerItems: [],
   providerMovePreview: null,
+  providerMoveQuery: "",
   processPoller: null,
+  rootsSearchQuery: "",
+  selectedRootPaths: {},
+  openFolderMenuKey: "",
   runtimePathAutoValue: "",
   runtimePathManualOverride: false,
   manualConnectionRequested: false,
+  smbBrowser: null,
+  selectedSmbEntries: {},
 };
 
 const viewMeta = {
@@ -76,35 +85,74 @@ function defaultPayload() {
 }
 
 async function request(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  const contentType = response.headers.get("Content-Type") || "";
-  const rawBody = await response.text();
-  let payload = null;
+  state.pendingRequests += 1;
+  renderGlobalLoadingState();
+  try {
+    const response = await fetch(url, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+    const contentType = response.headers.get("Content-Type") || "";
+    const rawBody = await response.text();
+    let payload = null;
 
-  if (rawBody) {
-    if (contentType.includes("application/json")) {
-      try {
-        payload = JSON.parse(rawBody);
-      } catch {
-        throw new Error(`Server returned invalid JSON for ${url}.`);
+    if (rawBody) {
+      if (contentType.includes("application/json")) {
+        try {
+          payload = JSON.parse(rawBody);
+        } catch {
+          throw new Error(`Server returned invalid JSON for ${url}.`);
+        }
+      } else {
+        if (url.startsWith("/api/")) {
+          throw new Error(`API returned ${contentType || "an unexpected response"} for ${url}. Restart the dashboard server and try again.`);
+        }
+        throw new Error(`Server returned ${contentType || "an unexpected response"} for ${url}.`);
       }
     } else {
-      if (url.startsWith("/api/")) {
-        throw new Error(`API returned ${contentType || "an unexpected response"} for ${url}. Restart the dashboard server and try again.`);
-      }
-      throw new Error(`Server returned ${contentType || "an unexpected response"} for ${url}.`);
+      payload = {};
     }
-  } else {
-    payload = {};
-  }
 
-  if (!response.ok) {
-    throw new Error(payload?.error || `Request failed with status ${response.status}`);
+    if (!response.ok) {
+      throw new Error(payload?.error || `Request failed with status ${response.status}`);
+    }
+    return payload;
+  } finally {
+    state.pendingRequests = Math.max(0, state.pendingRequests - 1);
+    renderGlobalLoadingState();
   }
-  return payload;
+}
+
+function renderGlobalLoadingState() {
+  const busy = state.pendingRequests > 0;
+  document.body.classList.toggle("app-busy", busy);
+  const indicator = document.querySelector("#globalLoadingIndicator");
+  if (!indicator) return;
+  indicator.hidden = !busy;
+}
+
+function setLoadingRegion(regionId, active, label = "Loading...") {
+  const next = { ...state.loadingRegions };
+  if (active) {
+    next[regionId] = label;
+  } else {
+    delete next[regionId];
+  }
+  state.loadingRegions = next;
+  renderLoadingRegions();
+}
+
+function renderLoadingRegions() {
+  document.querySelectorAll("[data-loading]").forEach((node) => {
+    delete node.dataset.loading;
+    delete node.dataset.loadingLabel;
+  });
+  Object.entries(state.loadingRegions).forEach(([regionId, label]) => {
+    const node = document.querySelector(regionId);
+    if (!node) return;
+    node.dataset.loading = "true";
+    node.dataset.loadingLabel = label;
+  });
 }
 
 function escapeHtml(value) {
@@ -185,6 +233,32 @@ function formatBytes(value) {
   return `${size.toFixed(size >= 100 ? 0 : 1)} ${units[index]}`;
 }
 
+function getBasename(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : String(path || "");
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replaceAll(/[\._()-]+/g, " ")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+}
+
+function scoreProviderItem(item, query) {
+  const normalizedQuery = normalizeSearchText(query);
+  const title = normalizeSearchText(item.title || "");
+  if (!normalizedQuery) return 0;
+  if (title === normalizedQuery) return 100;
+  if (title.startsWith(normalizedQuery)) return 80;
+  if (title.includes(normalizedQuery)) return 60;
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  const titleTokens = new Set(title.split(" ").filter(Boolean));
+  const tokenMatches = queryTokens.filter((token) => titleTokens.has(token)).length;
+  return tokenMatches ? tokenMatches * 10 : 0;
+}
+
 function getPayload() {
   return state.payload || defaultPayload();
 }
@@ -209,6 +283,74 @@ function getMounts() {
   return state.mounts || [];
 }
 
+function getOperationsFolders() {
+  return state.operationsFolders || [];
+}
+
+function getSelectedRootPaths() {
+  return Object.keys(state.selectedRootPaths || {});
+}
+
+function syncRootSelection() {
+  const availablePaths = new Set(getOperationsFolders().map((item) => item.path));
+  state.selectedRootPaths = Object.fromEntries(
+    getSelectedRootPaths()
+      .filter((path) => availablePaths.has(path))
+      .map((path) => [path, true])
+  );
+  if (state.openFolderMenuKey === "bulk" && !getSelectedRootPaths().length) {
+    state.openFolderMenuKey = "";
+  }
+  if (state.openFolderMenuKey && state.openFolderMenuKey !== "bulk" && !availablePaths.has(state.openFolderMenuKey)) {
+    state.openFolderMenuKey = "";
+  }
+}
+
+function setRootSelection(path, selected) {
+  if (!path) return;
+  if (selected) {
+    state.selectedRootPaths[path] = true;
+  } else {
+    delete state.selectedRootPaths[path];
+  }
+}
+
+function toggleRootSelection(path) {
+  setRootSelection(path, !state.selectedRootPaths[path]);
+}
+
+function setFilteredRootsSelected(selected) {
+  const filteredRoots = getFilteredRoots();
+  filteredRoots.forEach((root) => setRootSelection(root.path, selected));
+}
+
+function closeFolderActionMenu() {
+  state.openFolderMenuKey = "";
+}
+
+function toggleFolderActionMenu(key) {
+  state.openFolderMenuKey = state.openFolderMenuKey === key ? "" : key;
+}
+
+function getFilteredRoots() {
+  const roots = getOperationsFolders();
+  const searchQuery = state.rootsSearchQuery.trim().toLowerCase();
+  return searchQuery
+    ? roots.filter((root) =>
+        [root.label, root.path, root.display_path, root.connection_label, root.kind, root.root_label]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(searchQuery))
+      )
+    : roots;
+}
+
+function getFolderActionTargets(action, triggerPath = "") {
+  if (triggerPath) {
+    return [triggerPath];
+  }
+  return getSelectedRootPaths();
+}
+
 function chooseDefaultLanConnection() {
   const connections = getLanConnections();
   if (state.selectedLanConnectionId) {
@@ -218,6 +360,14 @@ function chooseDefaultLanConnection() {
     return connections[0];
   }
   return null;
+}
+
+function createSmbEntryKey(entry) {
+  return [entry.type || "directory", entry.share_name || "", entry.path || "", entry.name || ""].join("::");
+}
+
+function getSelectedSmbEntries() {
+  return Object.values(state.selectedSmbEntries || {});
 }
 
 function applySavedConnection(connection, { forcePath = true, announce = false } = {}) {
@@ -321,6 +471,10 @@ function setAddFolderMode(mode) {
   if (mode !== "manual") {
     state.manualConnectionRequested = false;
   }
+  if (mode === "direct") {
+    state.smbBrowser = null;
+    state.selectedSmbEntries = {};
+  }
   renderConnectionSetupVisibility();
   renderConnectionSummary();
   renderFolderStep();
@@ -397,7 +551,8 @@ function scoreMountSuggestion(connection, mount) {
   const mountLabel = normalizeShareToken(mount.label || "");
   const mountPointName = normalizeShareToken((mount.mount_point || "").split("/").filter(Boolean).pop() || "");
   const mountSourceText = normalizeHostToken(mount.source);
-  let score = mount.is_network ? 2 : 0;
+  if (!mount.is_network) return 0;
+  let score = 2;
 
   if (connectionShare) {
     if (connectionShare === mountSource.share) score += 8;
@@ -424,7 +579,8 @@ function buildRuntimePathSuggestions(connection) {
   }
   if (!connection) return [];
 
-  const suggestions = mounts
+  const networkMounts = mounts.filter((mount) => mount.is_network);
+  const suggestions = networkMounts
     .map((mount) => ({
       mount,
       score: scoreMountSuggestion(connection, mount),
@@ -444,8 +600,7 @@ function buildRuntimePathSuggestions(connection) {
     );
   }
 
-  return mounts
-    .filter((mount) => mount.is_network)
+  return networkMounts
     .slice(0, 8)
     .map((mount) => ({
       path: mount.mount_point,
@@ -482,6 +637,9 @@ function syncRuntimePathSuggestions({ force = false } = {}) {
 function renderRuntimePathAssist() {
   const node = document.querySelector("#runtimePathAssist");
   const runtimePathField = document.querySelector("#runtimePathField");
+  if (!node || !runtimePathField) {
+    return;
+  }
   const pathValue = document.querySelector('#addFolderForm [name="path"]').value.trim();
   const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId);
   const suggestions = buildRuntimePathSuggestions(state.addFolderMode === "direct" ? null : connection);
@@ -630,9 +788,170 @@ function renderSystemSummary() {
 
 }
 
+async function startProviderMove(provider, sourcePath) {
+  const items = await runAction(
+    `Loading ${provider} library items...`,
+    () => request(`/api/integrations/${provider}/items`),
+    null
+  );
+  if (!items) return;
+  state.providerItems = items.items || [];
+  state.providerMovePreview = null;
+  state.providerMoveQuery = getBasename(sourcePath);
+  const form = document.querySelector("#providerMoveForm");
+  form.querySelector('[name="provider"]').value = provider;
+  form.querySelector('[name="source"]').value = sourcePath;
+  form.querySelector('[name="item_id"]').value = "";
+  document.querySelector("#providerMoveModalTitle").textContent = provider === "radarr" ? "Choose Radarr Movie" : "Choose Sonarr Series";
+  document.querySelector("#providerMoveModalDescription").textContent = provider === "radarr"
+    ? "Find the movie already managed by Radarr. The folder will be moved into Radarr's managed movie path."
+    : "Find the series already managed by Sonarr. The folder will be moved into Sonarr's managed series path.";
+  renderProviderMoveModal();
+  openModal("#providerMoveModal");
+}
+
+async function handleFolderAction(action, paths) {
+  const targets = [...new Set((paths || []).filter(Boolean))];
+  if (!targets.length) {
+    showMessage("Select one or more folders first.", true);
+    return;
+  }
+
+  closeFolderActionMenu();
+
+  if (action === "move-radarr" || action === "move-sonarr") {
+    if (targets.length !== 1) {
+      showMessage("Choose exactly one folder before moving into a provider path.", true);
+      return;
+    }
+    const provider = action === "move-radarr" ? "radarr" : "sonarr";
+    await startProviderMove(provider, targets[0]);
+    return;
+  }
+
+  if (action === "remove-root") {
+    await runAction(
+      targets.length === 1 ? "Removing connected folder..." : "Removing connected folders...",
+      async () => {
+        for (const path of targets) {
+          await request(`/api/roots?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+        }
+        return { removed: targets.length };
+      },
+      targets.length === 1 ? "Connected folder removed." : `${targets.length} connected folders removed.`
+    );
+    return;
+  }
+
+  if (action === "delete-folder") {
+    const confirmation = targets.length === 1
+      ? `Delete folder ${targets[0]} recursively?`
+      : `Delete ${targets.length} folders recursively?`;
+    if (!window.confirm(confirmation)) return;
+    state.movePreview = await runAction(
+      targets.length === 1 ? "Deleting folder..." : "Deleting folders...",
+      async () => {
+        let result = null;
+        for (const path of targets) {
+          result = await request(`/api/folders?path=${encodeURIComponent(path)}&execute=true`, { method: "DELETE" });
+        }
+        return result;
+      },
+      targets.length === 1 ? "Folder deleted." : `${targets.length} folders deleted.`
+    );
+  }
+}
+
 function renderRoots() {
   const roots = getPayload().roots || [];
-  const html = roots.length
+  const operationsFolders = getOperationsFolders();
+  const filteredRoots = getFilteredRoots();
+  syncRootSelection();
+  const selectedPaths = getSelectedRootPaths();
+  const visibleSelectionCount = filteredRoots.filter((root) => state.selectedRootPaths[root.path]).length;
+  const hasVisibleRoots = filteredRoots.length > 0;
+  const allVisibleSelected = hasVisibleRoots && visibleSelectionCount === filteredRoots.length;
+  document.querySelector("#toggleFolderBulkMenuButton").disabled = !selectedPaths.length;
+
+  const selectAllCheckbox = document.querySelector("#operationsRootsSelectAll");
+  selectAllCheckbox.checked = allVisibleSelected;
+  selectAllCheckbox.indeterminate = visibleSelectionCount > 0 && !allVisibleSelected;
+  selectAllCheckbox.disabled = !hasVisibleRoots;
+
+  const bulkMenu = document.querySelector("#folderBulkMenu");
+  const bulkMenuButton = document.querySelector("#toggleFolderBulkMenuButton");
+  const bulkMenuOpen = state.openFolderMenuKey === "bulk" && selectedPaths.length > 0;
+  bulkMenu.hidden = !bulkMenuOpen;
+  bulkMenuButton.setAttribute("aria-expanded", bulkMenuOpen ? "true" : "false");
+  document.querySelectorAll("[data-bulk-folder-action='move-radarr'], [data-bulk-folder-action='move-sonarr']").forEach((item) => {
+    item.disabled = selectedPaths.length !== 1;
+  });
+
+  document.querySelector("#operationsRootsCount").textContent = `${filteredRoots.length} folder${filteredRoots.length === 1 ? "" : "s"}`;
+  document.querySelector("#operationsRootsFilterSummary").textContent = !operationsFolders.length
+    ? "No folders discovered inside connected roots yet."
+    : state.rootsSearchQuery.trim()
+      ? `Showing ${filteredRoots.length} of ${operationsFolders.length} folders inside connected roots.`
+      : `${operationsFolders.length} folders discovered inside connected roots.`;
+  document.querySelector("#folderSelectionActions").hidden = !operationsFolders.length;
+  document.querySelector("#folderSelectionStatus").textContent = `${selectedPaths.length} selected`;
+  document.querySelector("#useSelectedAsSourceButton").disabled = selectedPaths.length !== 1;
+  document.querySelector("#useSelectedAsDestinationButton").disabled = selectedPaths.length !== 1;
+
+  const operationsHtml = filteredRoots.length
+    ? filteredRoots
+        .map(
+          (root) => {
+            const isSelected = Boolean(state.selectedRootPaths[root.path]);
+            const isMenuOpen = state.openFolderMenuKey === root.path;
+            return `
+            <div class="folder-list-item ${isSelected ? "is-selected" : ""}">
+              <sl-checkbox
+                class="folder-library-checkbox folder-list-select"
+                data-root-selection-checkbox="${escapeHtml(root.path)}"
+                aria-label="Select ${escapeHtml(root.label)}"
+                ${isSelected ? "checked" : ""}
+              ></sl-checkbox>
+              <button class="folder-list-main folder-list-main-button" type="button" data-toggle-root-selection="${escapeHtml(root.path)}">
+                <span class="folder-row-name">${escapeHtml(root.label)}</span>
+                <span class="folder-row-badges">
+                  <span class="pill small">P${root.priority}</span>
+                </span>
+              </button>
+              <div class="folder-path">${escapeHtml(root.display_path || root.path)}</div>
+              <div class="folder-row-profile">${escapeHtml(root.connection_label || root.root_label || "Direct path")}</div>
+              <div class="folder-row-kind"><span class="pill small">${escapeHtml(root.kind)}</span></div>
+              <div class="folder-list-actions">
+                <div class="folder-action-menu-shell">
+                  <button
+                    class="btn btn-small btn-icon"
+                    type="button"
+                    data-open-folder-menu="${escapeHtml(root.path)}"
+                    aria-haspopup="menu"
+                    aria-expanded="${isMenuOpen ? "true" : "false"}"
+                  >
+                    ⋯
+                  </button>
+                  <div class="folder-action-menu" role="menu" ${isMenuOpen ? "" : "hidden"}>
+                    <button class="folder-action-menu-item" type="button" role="menuitem" data-folder-menu-action="move-radarr" data-folder-menu-path="${escapeHtml(root.path)}">
+                      Move To Radarr...
+                    </button>
+                    <button class="folder-action-menu-item" type="button" role="menuitem" data-folder-menu-action="move-sonarr" data-folder-menu-path="${escapeHtml(root.path)}">
+                      Move To Sonarr...
+                    </button>
+                    <button class="folder-action-menu-item danger" type="button" role="menuitem" data-folder-menu-action="delete-folder" data-folder-menu-path="${escapeHtml(root.path)}">
+                      Delete Folder...
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+          }
+        )
+        .join("")
+    : `<div class="empty-state">${operationsFolders.length ? "No folders match the current filter." : "No folders discovered inside connected roots yet. Add a root in Settings, then scan or browse that root."}</div>`;
+
+  const settingsHtml = roots.length
     ? roots
         .map(
           (root) => `
@@ -647,24 +966,15 @@ function renderRoots() {
               <div class="muted">${escapeHtml(root.path)}</div>
               <div class="sub-row"><span>Profile</span><span>${escapeHtml(root.connection_label || "Direct path")}</span></div>
               <div class="item-meta network-profile-actions">
-                <select class="action-select" data-folder-action-select="${escapeHtml(root.path)}">
-                  <option value="">Actions</option>
-                  <option value="use-source">Use As Move Source</option>
-                  <option value="use-destination">Use As Move Destination</option>
-                  <option value="move-radarr">Move To Radarr...</option>
-                  <option value="move-sonarr">Move To Sonarr...</option>
-                  <option value="delete-folder">Delete Folder...</option>
-                  <option value="remove-root">Remove From App</option>
-                </select>
-                <button class="btn btn-small" data-run-folder-action="${escapeHtml(root.path)}">Run</button>
+                <button class="btn btn-small" data-remove-root="${escapeHtml(root.path)}">Remove</button>
               </div>
             </div>`
         )
         .join("")
     : `<div class="empty-state">No connected folders yet. Add one from Settings.</div>`;
 
-  document.querySelector("#operationsRootsList").innerHTML = html;
-  document.querySelector("#settingsRootsList").innerHTML = html;
+  document.querySelector("#operationsRootsList").innerHTML = operationsHtml;
+  document.querySelector("#settingsRootsList").innerHTML = settingsHtml;
 }
 
 function renderAddFolderConnectionOptions() {
@@ -764,15 +1074,225 @@ function renderConnectionSummary() {
 
   if (!connection) {
     connectionSummary.innerHTML = "";
-    renderRuntimePathAssist();
     return;
   }
 
   const html = `<div class="connection-inline-summary">Using <strong>${escapeHtml(connection.label)}</strong> • //${escapeHtml(
     connection.host
-  )}/${escapeHtml(connection.share_name)} • base path ${escapeHtml(connection.base_path || "/")}</div>`;
+  )}${connection.share_name ? `/${escapeHtml(connection.share_name)}` : ""}</div>`;
   connectionSummary.innerHTML = html;
-  renderRuntimePathAssist();
+}
+
+function createVirtualConnectionForBrowserEntry(connection, browser, entry) {
+  if (!connection || !browser || !entry) return null;
+  if (entry.type === "share") {
+    return {
+      ...connection,
+      share_name: entry.share_name || entry.name || "",
+      base_path: "/",
+    };
+  }
+  return {
+    ...connection,
+    share_name: entry.share_name || browser.connection?.share_name || connection.share_name,
+    base_path: entry.path || "/",
+  };
+}
+
+function normalizeSmbRootPath(pathValue) {
+  const clean = String(pathValue || "").trim();
+  if (!clean || clean === ".") return "/";
+  return `/${clean.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+}
+
+function getSmbShareNameForEntry(connection, browser, entry) {
+  if (!entry) return "";
+  if (entry.type === "share") {
+    return String(entry.share_name || entry.name || "").trim().replace(/^\/+|\/+$/g, "");
+  }
+  return String(entry.share_name || browser?.connection?.share_name || connection?.share_name || "").trim().replace(/^\/+|\/+$/g, "");
+}
+
+function encodeSmbUriPath(pathValue) {
+  const normalized = normalizeSmbRootPath(pathValue);
+  if (normalized === "/") return "/";
+  return `/${normalized
+    .slice(1)
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/")}`;
+}
+
+function createSmbStorageUri(connection, browser, entry) {
+  const connectionId = String(connection?.id || "").trim();
+  const shareName = getSmbShareNameForEntry(connection, browser, entry);
+  if (!connectionId || !shareName) return "";
+  const entryPath = entry?.type === "share" ? "/" : entry?.path || "/";
+  const encodedShare = encodeURIComponent(shareName);
+  const encodedPath = encodeSmbUriPath(entryPath);
+  return `smb://${encodedShare}${encodedPath}?connection_id=${encodeURIComponent(connectionId)}`;
+}
+
+function toSmbPseudoSegment(value, fallback = "unknown") {
+  const text = String(value || "").trim().replaceAll("/", "_");
+  return text || fallback;
+}
+
+function createSmbPseudoRootPath(connection, browser, entry) {
+  const connectionSegment = toSmbPseudoSegment(connection?.id, "connection");
+  const shareSegment = toSmbPseudoSegment(getSmbShareNameForEntry(connection, browser, entry), "share");
+  const rootPath = normalizeSmbRootPath(entry?.type === "share" ? "/" : entry?.path || "/");
+  const base = `/smb/${connectionSegment}/${shareSegment}`;
+  if (rootPath === "/") return base;
+  return `${base}${rootPath}`.replace(/\/{2,}/g, "/");
+}
+
+function createSmbRootPayload(connection, browser, entry, form) {
+  const shareName = getSmbShareNameForEntry(connection, browser, entry);
+  const storageUri = createSmbStorageUri(connection, browser, entry);
+  if (!shareName || !storageUri) return null;
+  return {
+    path: createSmbPseudoRootPath(connection, browser, entry),
+    storage_uri: storageUri,
+    share_name: shareName,
+    label: entry.name,
+    priority: form.querySelector('[name="priority"]').value.trim(),
+    kind: form.querySelector('[name="kind"]').value,
+    connection_id: connection.id,
+    connection_label: connection?.label || "",
+  };
+}
+
+function getRuntimeSuggestionForSmbEntry(connection, browser, entry) {
+  const virtualConnection = createVirtualConnectionForBrowserEntry(connection, browser, entry);
+  if (!virtualConnection) return "";
+  return buildRuntimePathSuggestions(virtualConnection)[0]?.path || "";
+}
+
+function formatSmbRuntimeStatus(runtimePath) {
+  return runtimePath || "Not mounted (optional for SMB-native root)";
+}
+
+async function loadSmbBrowser({ shareName = "", path = "/" } = {}) {
+  const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId);
+  if (!connection) return null;
+  const params = new URLSearchParams({ connection_id: connection.id });
+  if (shareName) params.set("share_name", shareName);
+  if (path && path !== "/") params.set("path", path);
+  setLoadingRegion("#smbFolderBrowser", true, "Loading SMB folders...");
+  setLoadingRegion("#smbSelectionSummary", true, "Refreshing selection...");
+  try {
+    const result = await request(`/api/smb/browse?${params.toString()}`);
+    state.smbBrowser = result;
+    renderFolderStep();
+    return result;
+  } finally {
+    setLoadingRegion("#smbFolderBrowser", false);
+    setLoadingRegion("#smbSelectionSummary", false);
+  }
+}
+
+function renderSmbBrowser() {
+  const browserNode = document.querySelector("#smbFolderBrowser");
+  const crumbsNode = document.querySelector("#smbBrowserBreadcrumbs");
+  const summaryNode = document.querySelector("#smbSelectionSummary");
+  const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId) || null;
+  const browser = state.smbBrowser;
+
+  if (!browserNode || !crumbsNode || !summaryNode) return;
+
+  if (!connection || !browser) {
+    browserNode.innerHTML = `<div class="empty-state">Select or save an SMB profile above, then load shares or folders for this host.</div>`;
+    crumbsNode.innerHTML = "";
+    summaryNode.innerHTML = `<div class="empty-state">Choose one or more SMB shares or folders to add them together.</div>`;
+    return;
+  }
+
+  crumbsNode.innerHTML = (browser.breadcrumbs || [])
+    .map(
+      (crumb, index) => `
+        <button
+          class="crumb"
+          type="button"
+          data-browse-smb-crumb="true"
+          data-browse-smb-share="${escapeHtml(crumb.share_name || "")}"
+          data-browse-smb-path="${escapeHtml(crumb.path || "/")}"
+          ${index === browser.breadcrumbs.length - 1 ? "aria-current='page'" : ""}
+        >
+          ${escapeHtml(crumb.name || "/")}
+        </button>`
+    )
+    .join("");
+
+  browserNode.innerHTML = browser.entries?.length
+    ? browser.entries
+        .map((entry) => {
+          const key = createSmbEntryKey(entry);
+          const checked = Boolean(state.selectedSmbEntries[key]);
+          const runtimePath = getRuntimeSuggestionForSmbEntry(connection, browser, entry);
+          const canBrowse = entry.type === "share" || entry.type === "directory";
+          const selectable = Boolean(getSmbShareNameForEntry(connection, browser, entry));
+          return `
+            <div class="collection-item vertical smb-browser-item ${selectable ? "" : "is-unavailable"}">
+              <div class="row split">
+                <label class="row smb-browser-select">
+                  <sl-checkbox
+                    class="folder-library-checkbox"
+                    data-toggle-smb-entry="${escapeHtml(key)}"
+                    ${checked ? "checked" : ""}
+                    ${selectable ? "" : "disabled"}
+                  ></sl-checkbox>
+                  <strong>${escapeHtml(entry.name)}</strong>
+                </label>
+                <span class="pill small ${selectable ? (entry.type === "directory" ? "accent" : "") : ""}">${
+                  selectable ? escapeHtml(entry.type) : "unavailable"
+                }</span>
+              </div>
+              ${entry.comment ? `<div class="muted">${escapeHtml(entry.comment)}</div>` : ""}
+              <div class="sub-row"><span>Runtime (optional)</span><span>${escapeHtml(formatSmbRuntimeStatus(runtimePath))}</span></div>
+              ${
+                canBrowse
+                  ? `<div class="field-row">
+                      <button
+                        class="btn btn-small"
+                        type="button"
+                        data-browse-smb-entry="true"
+                        data-browse-smb-share="${escapeHtml(entry.share_name || browser.connection?.share_name || "")}"
+                        data-browse-smb-path="${escapeHtml(entry.path || "/")}"
+                      >
+                        Browse
+                      </button>
+                    </div>`
+                  : ""
+              }
+            </div>`;
+        })
+        .join("")
+    : `<div class="empty-state">No SMB shares or folders found at this level.</div>`;
+
+  const selections = getSelectedSmbEntries();
+  const availableCount = (browser.entries || []).filter((entry) => Boolean(getSmbShareNameForEntry(connection, browser, entry))).length;
+  summaryNode.innerHTML = selections.length
+    ? selections
+        .map((entry) => {
+          const runtimePath = getRuntimeSuggestionForSmbEntry(connection, browser, entry);
+          return `
+            <div class="collection-item vertical">
+              <div class="row split">
+                <strong>${escapeHtml(entry.name)}</strong>
+                <button class="btn btn-small" type="button" data-remove-smb-entry="${escapeHtml(createSmbEntryKey(entry))}">Remove</button>
+              </div>
+              <div class="muted">${escapeHtml(entry.share_name || browser.connection?.share_name || "")}</div>
+              <div class="sub-row"><span>Runtime (optional)</span><span>${escapeHtml(formatSmbRuntimeStatus(runtimePath))}</span></div>
+            </div>`;
+        })
+        .join("")
+    : `<div class="empty-state">${
+        availableCount
+          ? "Choose one or more SMB shares or folders to add them together."
+          : "No addable SMB folders at this level yet. Browse into a share and choose folders there."
+      }</div>`;
 }
 
 function renderFolderStep() {
@@ -780,8 +1300,13 @@ function renderFolderStep() {
   const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId);
   const ready = state.addFolderMode === "direct" || Boolean(connection);
   folderStepCard.hidden = !ready;
-  if (ready) {
+  document.querySelector("#smbFolderPicker").hidden = state.addFolderMode === "direct";
+  document.querySelector("#directFolderFields").hidden = state.addFolderMode !== "direct";
+  if (ready && state.addFolderMode === "direct") {
     renderRuntimePathAssist();
+  }
+  if (ready && state.addFolderMode !== "direct") {
+    renderSmbBrowser();
   }
 }
 
@@ -823,6 +1348,7 @@ function renderLanDevices() {
 
 async function refreshLanDevices(showToast = true) {
   state.lanDevicesLoading = true;
+  setLoadingRegion("#lanDevicesList", true, "Scanning LAN...");
   renderLanDevices();
   try {
     const result = await request("/api/lan/discover");
@@ -836,6 +1362,7 @@ async function refreshLanDevices(showToast = true) {
     return null;
   } finally {
     state.lanDevicesLoading = false;
+    setLoadingRegion("#lanDevicesList", false);
     renderLanDevices();
   }
 }
@@ -883,42 +1410,52 @@ function renderIntegrations() {
     : `<div class="empty-state">No manual sync has been run yet.</div>`;
 }
 
-function renderMovePreview() {
-  const preview = state.movePreview;
-  document.querySelector("#moveFolderSummary").innerHTML = preview
-    ? `
-      <div class="collection-item vertical">
-        <div class="row split">
-          <strong>${escapeHtml(preview.status === "applied" ? "Folder moved" : "Move preview")}</strong>
-          <span class="pill small ${preview.status === "applied" ? "accent" : ""}">${escapeHtml(preview.status)}</span>
-        </div>
-        <div class="sub-row"><span>Source</span><span>${escapeHtml(preview.source || "-")}</span></div>
-        <div class="sub-row"><span>Destination Parent</span><span>${escapeHtml(preview.destination_parent || "-")}</span></div>
-        <div class="sub-row"><span>Destination</span><span>${escapeHtml(preview.destination || "-")}</span></div>
-      </div>`
-    : `<div class="empty-state">No move preview yet.</div>`;
-}
-
 function renderProviderMoveModal() {
+  const form = document.querySelector("#providerMoveForm");
   const select = document.querySelector("#providerItemSelect");
-  const options = ['<option value="">Select provider item</option>']
+  const searchInput = document.querySelector("#providerItemSearchInput");
+  const currentValue = form.querySelector('[name="item_id"]').value;
+  if (searchInput && searchInput.value !== state.providerMoveQuery) {
+    searchInput.value = state.providerMoveQuery;
+  }
+
+  const rankedItems = state.providerItems
+    .map((item) => ({ item, score: scoreProviderItem(item, state.providerMoveQuery) }))
+    .filter(({ item, score }) => {
+      if (!state.providerMoveQuery.trim()) return true;
+      return score > 0 || normalizeSearchText(item.title).includes(normalizeSearchText(state.providerMoveQuery));
+    })
+    .sort((left, right) => right.score - left.score || String(left.item.title).localeCompare(String(right.item.title)));
+
+  const visibleItems = rankedItems.map(({ item }) => item);
+  const selectedValue = visibleItems.some((item) => String(item.id) === currentValue)
+    ? currentValue
+    : visibleItems[0]
+      ? String(visibleItems[0].id)
+      : "";
+
+  const options = ['<option value="">Select destination item</option>']
     .concat(
-      state.providerItems.map(
+      visibleItems.map(
         (item) =>
           `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.title)}${item.year ? ` (${escapeHtml(String(item.year))})` : ""}</option>`
       )
     )
     .join("");
   select.innerHTML = options;
+  form.querySelector('[name="item_id"]').value = selectedValue;
+  select.value = selectedValue;
+  document.querySelector("#previewProviderMoveButton").disabled = !selectedValue;
+  form.querySelector('[type="submit"]').disabled = !selectedValue;
 
-  const selected = state.providerItems.find((item) => String(item.id) === select.value);
+  const selected = state.providerItems.find((item) => String(item.id) === selectedValue);
   const preview = state.providerMovePreview;
   document.querySelector("#providerItemMeta").innerHTML = selected
     ? `
       <div class="collection-item vertical">
         <div class="row split">
           <strong>${escapeHtml(selected.title)}${selected.year ? ` (${escapeHtml(String(selected.year))})` : ""}</strong>
-          <span class="pill small">${escapeHtml(selected.id)}</span>
+          <span class="pill small">${escapeHtml(form.querySelector('[name="provider"]').value || "provider")}</span>
         </div>
         <div class="sub-row"><span>Managed Path</span><span>${escapeHtml(selected.path || "-")}</span></div>
         ${
@@ -927,7 +1464,7 @@ function renderProviderMoveModal() {
             : ""
         }
       </div>`
-    : `<div class="empty-state">Select a provider item to preview the destination path.</div>`;
+    : `<div class="empty-state">${state.providerMoveQuery.trim() ? "No matching provider item found for that title." : "Type a movie or series name to narrow the destination list."}</div>`;
 }
 
 function renderOperationsSummary() {
@@ -1104,7 +1641,6 @@ function render() {
   renderLanDevices();
   renderFolderStep();
   renderIntegrations();
-  renderMovePreview();
   renderProviderMoveModal();
   renderOperationsSummary();
   renderReport();
@@ -1140,21 +1676,39 @@ function stopProcessPolling() {
 }
 
 async function refreshAll() {
-  const [payload, processPayload, lanPayload, mountsPayload] = await Promise.all([
-    request("/api/state"),
-    request("/api/process"),
-    request("/api/lan/discover"),
-    request("/api/system/mounts"),
-  ]);
-  state.payload = payload;
-  state.currentJob = processPayload.current_job || payload.current_job || null;
-  state.lanDevices = lanPayload;
-  state.mounts = mountsPayload.mounts || [];
-  render();
-  if (state.currentJob) {
-    startProcessPolling();
-  } else {
-    stopProcessPolling();
+  const regions = [
+    "#operationsRootsList",
+    "#settingsRootsList",
+    "#recentActivityList",
+    "#currentJobLogs",
+    "#exactDuplicatesList",
+    "#reportList",
+    "#planList",
+    "#applySummary",
+  ];
+  regions.forEach((regionId) => setLoadingRegion(regionId, true, "Loading..."));
+  try {
+    const [payload, processPayload, lanPayload, mountsPayload, operationsFoldersPayload] = await Promise.all([
+      request("/api/state"),
+      request("/api/process"),
+      request("/api/lan/discover"),
+      request("/api/system/mounts"),
+      request("/api/operations/folders"),
+    ]);
+    state.payload = payload;
+    state.currentJob = processPayload.current_job || payload.current_job || null;
+    state.lanDevices = lanPayload;
+    state.mounts = mountsPayload.mounts || [];
+    state.operationsFolders = operationsFoldersPayload.items || [];
+    syncRootSelection();
+    render();
+    if (state.currentJob) {
+      startProcessPolling();
+    } else {
+      stopProcessPolling();
+    }
+  } finally {
+    regions.forEach((regionId) => setLoadingRegion(regionId, false));
   }
 }
 
@@ -1193,11 +1747,17 @@ document.querySelector("#openAddFolderModalButton").addEventListener("click", ()
   state.manualConnectionRequested = false;
   state.selectedLanConnectionId = "";
   state.addFolderMode = "smb";
+  state.smbBrowser = null;
+  state.selectedSmbEntries = {};
   document.querySelector("#lanConnectionForm").hidden = true;
   renderAddFolderConnectionOptions();
   const autoConnection = chooseDefaultLanConnection();
   if (autoConnection) {
+    state.selectedSmbEntries = {};
     applySavedConnection(autoConnection, { forcePath: true, announce: false });
+    loadSmbBrowser({ shareName: autoConnection.share_name || "", path: autoConnection.base_path || "/" }).catch((error) =>
+      showMessage(error.message, true)
+    );
   } else {
     renderConnectionSummary();
     renderFolderStep();
@@ -1209,24 +1769,63 @@ document.querySelector("#openAddFolderModalButton").addEventListener("click", ()
 document.querySelector("#addFolderForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  if (state.addFolderMode === "direct") {
+    const payload = {
+      path: form.querySelector('[name="path"]').value.trim(),
+      label: form.querySelector('[name="label"]').value.trim(),
+      priority: form.querySelector('[name="direct_priority"]').value.trim(),
+      kind: form.querySelector('[name="direct_kind"]').value,
+      connection_id: "",
+      connection_label: "",
+    };
+    const result = await runAction(
+      "Adding connected folder...",
+      () =>
+        request("/api/roots", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+      "Connected folder added."
+    );
+    if (!result) return;
+    closeModal("#addFolderModal");
+    return;
+  }
+
   const profileId = form.querySelector('[name="connection_id"]').value;
   const connection = getLanConnections().find((item) => item.id === profileId);
-  const payload = {
-    path: form.querySelector('[name="path"]').value.trim(),
-    label: form.querySelector('[name="label"]').value.trim(),
-    priority: form.querySelector('[name="priority"]').value.trim(),
-    kind: form.querySelector('[name="kind"]').value,
-    connection_id: profileId,
-    connection_label: connection?.label || "",
-  };
+  const browser = state.smbBrowser;
+  const selectedEntries = getSelectedSmbEntries();
+  if (!connection || !browser) {
+    showMessage("Select an SMB profile and load shares or folders first.", true);
+    return;
+  }
+  if (!selectedEntries.length) {
+    showMessage("Choose one or more SMB shares or folders first.", true);
+    return;
+  }
+
+  const roots = selectedEntries.map((entry) => ({
+    payload: createSmbRootPayload(connection, browser, entry, form),
+    label: entry.name,
+  }));
+  const unresolved = roots.filter((item) => !item.payload).map((item) => item.label);
+  if (unresolved.length) {
+    const label = unresolved.slice(0, 3).join(", ");
+    const suffix = unresolved.length > 3 ? ` and ${unresolved.length - 3} more` : "";
+    showMessage(`Cannot determine SMB share/path for ${label}${suffix}. Browse into a share and try again.`, true);
+    return;
+  }
+  const rootPayload = roots.map((item) => item.payload);
+
   const result = await runAction(
-    "Adding connected folder...",
+    "Adding connected folders...",
     () =>
-      request("/api/roots", {
+      request("/api/roots/bulk", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ roots: rootPayload }),
       }),
-    "Connected folder added."
+    selectedEntries.length === 1 ? "Connected folder added." : `${selectedEntries.length} connected folders added.`
   );
   if (!result) return;
   closeModal("#addFolderModal");
@@ -1237,11 +1836,15 @@ document.querySelector("#savedLanConnectionSelect").addEventListener("change", (
   if (!connection) {
     state.manualConnectionRequested = false;
     state.selectedLanConnectionId = "";
+    state.smbBrowser = null;
+    state.selectedSmbEntries = {};
     renderConnectionSummary();
     renderFolderStep();
     return;
   }
+  state.selectedSmbEntries = {};
   applySavedConnection(connection, { forcePath: true, announce: false });
+  loadSmbBrowser({ shareName: connection.share_name || "", path: connection.base_path || "/" }).catch((error) => showMessage(error.message, true));
 });
 
 document.querySelector("#deleteSelectedLanConnectionButton").addEventListener("click", async () => {
@@ -1314,7 +1917,9 @@ document.querySelector("#lanConnectionForm").addEventListener("submit", async (e
     ) ||
     result.smb?.[0];
   if (saved) {
+    state.selectedSmbEntries = {};
     applySavedConnection(saved, { forcePath: true, announce: false });
+    loadSmbBrowser({ shareName: saved.share_name || "", path: saved.base_path || "/" }).catch((error) => showMessage(error.message, true));
   }
   resetLanConnectionForm({ clearSelection: false });
   renderAddFolderConnectionOptions();
@@ -1343,11 +1948,15 @@ document.querySelector("#resetLanConnectionButton").addEventListener("click", ()
 document.querySelector("#addFolderConnectionSelect").addEventListener("change", (event) => {
   const connection = getLanConnections().find((item) => item.id === event.currentTarget.value);
   if (!connection) {
+    state.smbBrowser = null;
+    state.selectedSmbEntries = {};
     renderConnectionSummary();
     renderFolderStep();
     return;
   }
+  state.selectedSmbEntries = {};
   applySavedConnection(connection, { forcePath: true, announce: false });
+  loadSmbBrowser({ shareName: connection.share_name || "", path: connection.base_path || "/" }).catch((error) => showMessage(error.message, true));
 });
 
 document.querySelector("#refreshLanDevicesButton").addEventListener("click", async () => {
@@ -1438,45 +2047,40 @@ document.querySelector("#executePlanButton").addEventListener("click", async () 
   );
 });
 
-document.querySelector("#previewMoveButton").addEventListener("click", async () => {
-  const source = document.querySelector("#moveSourceInput").value.trim();
-  const destinationParent = document.querySelector("#moveDestinationInput").value.trim();
-  const result = await runAction(
-    "Previewing folder move...",
-    () =>
-      request("/api/folders/move", {
-        method: "POST",
-        body: JSON.stringify({ source, destination_parent: destinationParent, execute: false }),
-      }),
-    "Move preview ready."
-  );
-  if (!result) return;
-  state.movePreview = result;
-  renderMovePreview();
-});
-
-document.querySelector("#moveFolderForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const source = document.querySelector("#moveSourceInput").value.trim();
-  const destinationParent = document.querySelector("#moveDestinationInput").value.trim();
-  if (!window.confirm(`Move folder ${source} into ${destinationParent}?`)) return;
-  const result = await runAction(
-    "Moving folder...",
-    () =>
-      request("/api/folders/move", {
-        method: "POST",
-        body: JSON.stringify({ source, destination_parent: destinationParent, execute: true }),
-      }),
-    "Folder moved."
-  );
-  if (!result) return;
-  state.movePreview = result;
-  renderMovePreview();
-});
-
 document.querySelector("#providerItemSelect").addEventListener("change", () => {
   state.providerMovePreview = null;
   renderProviderMoveModal();
+});
+
+document.querySelector("#providerItemSearchInput").addEventListener("input", (event) => {
+  state.providerMoveQuery = event.currentTarget.value || "";
+  state.providerMovePreview = null;
+  renderProviderMoveModal();
+});
+
+document.querySelector("#operationsRootsSearchInput").addEventListener("input", (event) => {
+  state.rootsSearchQuery = event.currentTarget.value || "";
+  closeFolderActionMenu();
+  renderRoots();
+});
+
+document.querySelector("#operationsRootsSelectAll").addEventListener("sl-change", (event) => {
+  setFilteredRootsSelected(event.currentTarget.checked);
+  closeFolderActionMenu();
+  renderRoots();
+});
+
+document.querySelector("#moveSelectedToRadarrButton").addEventListener("click", async () => {
+  await handleFolderAction("move-radarr", getSelectedRootPaths());
+});
+
+document.querySelector("#moveSelectedToSonarrButton").addEventListener("click", async () => {
+  await handleFolderAction("move-sonarr", getSelectedRootPaths());
+});
+
+document.querySelector("#toggleFolderBulkMenuButton").addEventListener("click", () => {
+  toggleFolderActionMenu("bulk");
+  renderRoots();
 });
 
 document.querySelector("#previewProviderMoveButton").addEventListener("click", async () => {
@@ -1539,6 +2143,12 @@ document.querySelector("#providerMoveForm").addEventListener("submit", async (ev
 });
 
 document.body.addEventListener("click", async (event) => {
+  const clickedInsideFolderMenu = event.target.closest(".folder-action-menu-shell");
+  if (!clickedInsideFolderMenu) {
+    closeFolderActionMenu();
+    renderRoots();
+  }
+
   const closeModalButton = event.target.closest("[data-close-modal='add-folder']");
   if (closeModalButton) {
     closeModal("#addFolderModal");
@@ -1576,8 +2186,50 @@ document.body.addEventListener("click", async (event) => {
   const applyShareButton = event.target.closest("[data-apply-smb-share]");
   if (applyShareButton) {
     const form = document.querySelector("#lanConnectionForm");
-    form.querySelector('[name="share_name"]').value = applyShareButton.dataset.applySmbShare || "";
-    showMessage("Share name applied. Test again to preview folders in this share.");
+    const shareName = applyShareButton.dataset.applySmbShare || "";
+    form.querySelector('[name="share_name"]').value = shareName;
+    if (state.selectedLanConnectionId) {
+      state.selectedSmbEntries = {};
+      await runAction("Loading SMB folders...", () => loadSmbBrowser({ shareName, path: "/" }), null);
+      showMessage(`Loaded share ${shareName}.`);
+      return;
+    }
+    showMessage("Share name applied. Save or select this SMB profile to browse folders in that share.");
+    return;
+  }
+
+  const browseSmbEntryButton = event.target.closest("[data-browse-smb-entry]");
+  if (browseSmbEntryButton) {
+    await runAction(
+      "Loading SMB folders...",
+      () =>
+        loadSmbBrowser({
+          shareName: browseSmbEntryButton.dataset.browseSmbShare || "",
+          path: browseSmbEntryButton.dataset.browseSmbPath || "/",
+        }),
+      null
+    );
+    return;
+  }
+
+  const browseSmbCrumbButton = event.target.closest("[data-browse-smb-crumb]");
+  if (browseSmbCrumbButton) {
+    await runAction(
+      "Loading SMB folders...",
+      () =>
+        loadSmbBrowser({
+          shareName: browseSmbCrumbButton.dataset.browseSmbShare || "",
+          path: browseSmbCrumbButton.dataset.browseSmbPath || "/",
+        }),
+      null
+    );
+    return;
+  }
+
+  const removeSmbEntryButton = event.target.closest("[data-remove-smb-entry]");
+  if (removeSmbEntryButton) {
+    delete state.selectedSmbEntries[removeSmbEntryButton.dataset.removeSmbEntry];
+    renderSmbBrowser();
     return;
   }
 
@@ -1655,81 +2307,56 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
-  const useMoveSourceButton = event.target.closest("[data-use-move-source]");
-  if (useMoveSourceButton) {
-    document.querySelector("#moveSourceInput").value = useMoveSourceButton.dataset.useMoveSource;
-    setView("operations");
-    showMessage("Source folder filled from connected root.");
+  const toggleRootSelectionButton = event.target.closest("[data-toggle-root-selection]");
+  if (toggleRootSelectionButton) {
+    toggleRootSelection(toggleRootSelectionButton.dataset.toggleRootSelection);
+    renderRoots();
     return;
   }
 
-  const useMoveDestinationButton = event.target.closest("[data-use-move-destination]");
-  if (useMoveDestinationButton) {
-    document.querySelector("#moveDestinationInput").value = useMoveDestinationButton.dataset.useMoveDestination;
-    setView("operations");
-    showMessage("Destination folder filled from connected root.");
+  const openFolderMenuButton = event.target.closest("[data-open-folder-menu]");
+  if (openFolderMenuButton) {
+    toggleFolderActionMenu(openFolderMenuButton.dataset.openFolderMenu);
+    renderRoots();
     return;
   }
 
-  const runFolderActionButton = event.target.closest("[data-run-folder-action]");
-  if (runFolderActionButton) {
-    const path = runFolderActionButton.dataset.runFolderAction;
-    const select = document.querySelector(`[data-folder-action-select="${CSS.escape(path)}"]`);
-    const action = select?.value;
-    if (!action) {
-      showMessage("Select an action first.", true);
-      return;
-    }
-    if (action === "use-source") {
-      document.querySelector("#moveSourceInput").value = path;
-      setView("operations");
-      showMessage("Source folder filled from folder list.");
-      return;
-    }
-    if (action === "use-destination") {
-      document.querySelector("#moveDestinationInput").value = path;
-      setView("operations");
-      showMessage("Destination folder filled from folder list.");
-      return;
-    }
-    if (action === "remove-root") {
-      await runAction(
-        "Removing connected folder...",
-        () => request(`/api/roots?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
-        "Connected folder removed."
-      );
-      return;
-    }
-    if (action === "delete-folder") {
-      if (!window.confirm(`Delete folder ${path} recursively?`)) return;
-      state.movePreview = await runAction(
-        "Deleting folder...",
-        () => request(`/api/folders?path=${encodeURIComponent(path)}&execute=true`, { method: "DELETE" }),
-        "Folder deleted."
-      );
-      renderMovePreview();
-      return;
-    }
-    if (action === "move-radarr" || action === "move-sonarr") {
-      const provider = action === "move-radarr" ? "radarr" : "sonarr";
-      const items = await runAction(
-        `Loading ${provider} library items...`,
-        () => request(`/api/integrations/${provider}/items`),
-        null
-      );
-      if (!items) return;
-      state.providerItems = items.items || [];
-      state.providerMovePreview = null;
-      const form = document.querySelector("#providerMoveForm");
-      form.querySelector('[name="provider"]').value = provider;
-      form.querySelector('[name="source"]').value = path;
-      form.querySelector('[name="item_id"]').value = "";
-      document.querySelector("#providerMoveModalTitle").textContent = provider === "radarr" ? "Move To Radarr" : "Move To Sonarr";
-      renderProviderMoveModal();
-      openModal("#providerMoveModal");
-      return;
-    }
+  const folderMenuActionButton = event.target.closest("[data-folder-menu-action]");
+  if (folderMenuActionButton) {
+    const action = folderMenuActionButton.dataset.folderMenuAction;
+    const path = folderMenuActionButton.dataset.folderMenuPath || "";
+    await handleFolderAction(action, getFolderActionTargets(action, path));
+    return;
   }
+
+  const bulkFolderActionButton = event.target.closest("[data-bulk-folder-action]");
+  if (bulkFolderActionButton) {
+    const action = bulkFolderActionButton.dataset.bulkFolderAction;
+    const path = bulkFolderActionButton.dataset.folderMenuPath || "";
+    await handleFolderAction(action, getFolderActionTargets(action, path));
+  }
+});
+
+document.body.addEventListener("sl-change", (event) => {
+  const smbEntryToggle = event.target.closest("[data-toggle-smb-entry]");
+  if (smbEntryToggle) {
+    const key = smbEntryToggle.dataset.toggleSmbEntry;
+    const browser = state.smbBrowser;
+    const entry = browser?.entries?.find((item) => createSmbEntryKey(item) === key);
+    if (!entry) return;
+    if (smbEntryToggle.checked) {
+      state.selectedSmbEntries[key] = entry;
+    } else {
+      delete state.selectedSmbEntries[key];
+    }
+    renderSmbBrowser();
+    return;
+  }
+
+  const rootSelectionCheckbox = event.target.closest("[data-root-selection-checkbox]");
+  if (!rootSelectionCheckbox) return;
+  setRootSelection(rootSelectionCheckbox.dataset.rootSelectionCheckbox, rootSelectionCheckbox.checked);
+  renderRoots();
 });
 
 document.querySelector('#addFolderForm [name="path"]').addEventListener("input", (event) => {

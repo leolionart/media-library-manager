@@ -13,6 +13,8 @@ class RootConfig:
     kind: str = "mixed"
     connection_id: str = ""
     connection_label: str = ""
+    storage_uri: str = ""
+    share_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -22,6 +24,8 @@ class RootConfig:
             "kind": self.kind,
             "connection_id": self.connection_id,
             "connection_label": self.connection_label,
+            "storage_uri": self.storage_uri,
+            "share_name": self.share_name,
         }
 
 
@@ -46,6 +50,8 @@ class MediaFile:
     dynamic_range: str | None = None
     quality_rank: int = 0
     sha256: str | None = None
+    storage_uri: str = ""
+    root_storage_uri: str = ""
 
     def score_tuple(self) -> tuple[int, int, int, int]:
         return (self.quality_rank, self.size, self.root_priority, -len(self.relative_path))
@@ -96,6 +102,10 @@ class Action:
     root_path: Path
     keep_path: Path | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    source_uri: str = ""
+    destination_uri: str = ""
+    root_storage_uri: str = ""
+    keep_uri: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,4 +117,8 @@ class Action:
             "root_path": str(self.root_path),
             "keep_path": str(self.keep_path) if self.keep_path else None,
             "details": self.details,
+            "source_uri": self.source_uri,
+            "destination_uri": self.destination_uri,
+            "root_storage_uri": self.root_storage_uri,
+            "keep_uri": self.keep_uri,
         }

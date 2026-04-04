@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from media_library_manager.operation_storage import OperationStorageRouter
 from media_library_manager.operations import apply_plan, delete_folder, move_folder, move_folder_contents
 
 
@@ -113,3 +115,75 @@ class OperationTests(unittest.TestCase):
             result = delete_folder(tmp_path / "DeleteMe", execute=True)
             self.assertEqual(result["status"], "applied")
             self.assertFalse((tmp_path / "DeleteMe").exists())
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_move_folder_supports_same_share_smb_rename(self, run_smbclient_mock) -> None:
+        def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+            if command == "ls":
+                return {
+                    "status": "success",
+                    "stdout": "Source|0|2026-04-04|10:00:00|D\nDest|0|2026-04-04|10:00:00|D\n",
+                }
+            if command == 'cd "Dest";ls':
+                return {"status": "success", "stdout": ""}
+            if command == 'rename "Source" "Dest/Source"':
+                return {"status": "success", "stdout": ""}
+            return {"status": "error", "message": f"unexpected command: {command}"}
+
+        run_smbclient_mock.side_effect = run_side_effect
+        router = OperationStorageRouter(
+            smb_connection_resolver=lambda connection_id: {
+                "id": connection_id,
+                "label": "NAS",
+                "host": "nas.local",
+                "username": "leo",
+                "password": "secret",
+            }
+        )
+
+        result = move_folder(
+            "smb://nas-1/Media/Source",
+            "smb://nas-1/Media/Dest",
+            execute=True,
+            storage_router=router,
+        )
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["destination"], "smb://nas-1/Media/Dest/Source")
+
+    def test_move_folder_rejects_cross_backend_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source = tmp_path / "Downloads" / "Movie (2024)"
+            source.parent.mkdir(parents=True)
+            source.mkdir()
+            result = move_folder(source, "smb://nas-1/Media/Library", execute=False)
+            self.assertEqual(result["status"], "error")
+            self.assertIn("SMB operation requires a connection resolver", result["message"])
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_move_folder_rejects_cross_share_smb_move(self, run_smbclient_mock) -> None:
+        def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+            if command == "ls":
+                return {"status": "success", "stdout": "Source|0|2026-04-04|10:00:00|D\n"}
+            if command == 'cd "Library";ls':
+                return {"status": "success", "stdout": ""}
+            return {"status": "error", "message": f"unexpected command: {command}"}
+
+        run_smbclient_mock.side_effect = run_side_effect
+        router = OperationStorageRouter(
+            smb_connection_resolver=lambda connection_id: {
+                "id": connection_id,
+                "label": "NAS",
+                "host": "nas.local",
+                "username": "leo",
+                "password": "secret",
+            }
+        )
+        result = move_folder(
+            "smb://nas-1/Media/Source",
+            "smb://nas-1/Library/Library",
+            execute=False,
+            storage_router=router,
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("cross-backend move", result["message"])

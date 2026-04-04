@@ -12,9 +12,12 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/themes/light.css" />
     <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace-autoloader.js"></script>
   </head>
   <body>
+    <div id="globalLoadingIndicator" class="global-loading-indicator" hidden></div>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="sidebar-brand">
@@ -102,42 +105,59 @@
             <div class="workflow-main">
               <article class="card">
                 <div class="card-header">
-                  <div>
-                    <h3 class="title-with-icon">
-                      <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
-                      <span>Folder Move</span>
-                    </h3>
-                    <p>Use this when you want to cut a folder from source A and paste it into destination B.</p>
-                  </div>
+                  <h3 class="title-with-icon">
+                    <span class="icon-badge" data-icon="library" aria-hidden="true"></span>
+                    <span>Folder List</span>
+                  </h3>
                 </div>
-                <form id="moveFolderForm" class="form-stack">
-                  <label class="field">
-                    <span>Source Folder</span>
-                    <input id="moveSourceInput" name="source" placeholder="/mnt/downloads/Movie (2024)" required />
-                  </label>
-                  <label class="field">
-                    <span>Destination Parent Folder</span>
-                    <input id="moveDestinationInput" name="destination_parent" placeholder="/mnt/library/movies" required />
-                  </label>
-                  <div class="field-row">
-                    <button id="previewMoveButton" class="btn" type="button">Preview Move</button>
-                    <button class="btn btn-primary" type="submit">Move Folder</button>
+                <div class="folder-workspace-toolbar">
+                  <div id="folderSelectionActions" class="folder-selection-actions">
+                    <button id="moveSelectedToRadarrButton" class="btn" type="button">Move To Radarr</button>
+                    <button id="moveSelectedToSonarrButton" class="btn" type="button">Move To Sonarr</button>
+                    <div class="folder-action-menu-shell">
+                      <button
+                        id="toggleFolderBulkMenuButton"
+                        class="btn"
+                        type="button"
+                        data-open-folder-menu="bulk"
+                        aria-haspopup="menu"
+                        aria-expanded="false"
+                      >
+                        More
+                      </button>
+                      <div id="folderBulkMenu" class="folder-action-menu" hidden>
+                        <button class="folder-action-menu-item" type="button" role="menuitem" data-bulk-folder-action="move-radarr">
+                          Move To Radarr...
+                        </button>
+                        <button class="folder-action-menu-item" type="button" role="menuitem" data-bulk-folder-action="move-sonarr">
+                          Move To Sonarr...
+                        </button>
+                          <button class="folder-action-menu-item danger" type="button" role="menuitem" data-bulk-folder-action="delete-folder">
+                            Delete Folder...
+                          </button>
+                      </div>
+                    </div>
                   </div>
-                </form>
-                <div id="moveFolderSummary" class="collection compact"></div>
-              </article>
-
-              <article class="card">
-                <div class="card-header">
-                  <div>
-                    <h3 class="title-with-icon">
-                      <span class="icon-badge" data-icon="library" aria-hidden="true"></span>
-                      <span>Folder List</span>
-                    </h3>
-                    <p>The main workspace is a list of connected folders. Use the action dropdown on each row to work from that folder.</p>
-                  </div>
+                  <label class="field folder-search-field folder-search-field-compact">
+                    <input
+                      id="operationsRootsSearchInput"
+                      name="operations_roots_search"
+                      placeholder="Filter by label, path, profile, or kind"
+                      autocomplete="off"
+                    />
+                  </label>
                 </div>
-                <div id="operationsRootsList" class="collection"></div>
+                <section class="folder-browser-shell" aria-label="Connected folders">
+                  <div class="folder-browser-head" aria-hidden="true">
+                    <sl-checkbox id="operationsRootsSelectAll" class="folder-library-checkbox folder-selection-toggle-header" aria-label="Select all shown"></sl-checkbox>
+                    <span>Folder</span>
+                    <span>Path</span>
+                    <span>Profile</span>
+                    <span>Kind</span>
+                    <span></span>
+                  </div>
+                  <div id="operationsRootsList" class="collection folder-list-collection"></div>
+                </section>
               </article>
 
               <article class="card">
@@ -159,11 +179,11 @@
                 <div class="workflow-summary-grid compact" id="operationSummaryCards"></div>
                 <label class="toggle-row">
                   <span>Delete lower-quality versions automatically when building plan</span>
-                  <input id="deleteLowerQuality" type="checkbox" />
+                  <sl-switch id="deleteLowerQuality" size="small"></sl-switch>
                 </label>
                 <label class="toggle-row">
                   <span>Prune empty folders after apply</span>
-                  <input id="pruneEmptyDirs" type="checkbox" checked />
+                  <sl-switch id="pruneEmptyDirs" size="small" checked></sl-switch>
                 </label>
               </article>
 
@@ -279,7 +299,7 @@
               <form id="radarrForm" class="form-stack">
                 <label class="toggle-row">
                   <span>Enable Radarr sync</span>
-                  <input name="enabled" type="checkbox" />
+                  <sl-switch name="enabled" size="small"></sl-switch>
                 </label>
                 <label class="field">
                   <span>Base URL</span>
@@ -309,7 +329,7 @@
               <form id="sonarrForm" class="form-stack">
                 <label class="toggle-row">
                   <span>Enable Sonarr sync</span>
-                  <input name="enabled" type="checkbox" />
+                  <sl-switch name="enabled" size="small"></sl-switch>
                 </label>
                 <label class="field">
                   <span>Base URL</span>
@@ -341,15 +361,15 @@
               <form id="integrationOptionsForm" class="form-stack">
                 <label class="toggle-row">
                   <span>Auto-sync after execute apply</span>
-                  <input name="sync_after_apply" type="checkbox" checked />
+                  <sl-switch name="sync_after_apply" size="small" checked></sl-switch>
                 </label>
                 <label class="toggle-row">
                   <span>Trigger refresh or rescan after update</span>
-                  <input name="rescan_after_update" type="checkbox" checked />
+                  <sl-switch name="rescan_after_update" size="small" checked></sl-switch>
                 </label>
                 <label class="toggle-row">
                   <span>Create root folder if missing</span>
-                  <input name="create_root_folder_if_missing" type="checkbox" checked />
+                  <sl-switch name="create_root_folder_if_missing" size="small" checked></sl-switch>
                 </label>
                 <div class="field-row">
                   <button id="saveIntegrationsButton" class="btn btn-primary" type="button">Save Integrations</button>
@@ -491,41 +511,70 @@
                     <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
                     <span>Folder</span>
                   </h3>
-                  <p>The connection above is ready. Only adjust these fields if the defaults are not correct.</p>
+                  <p>Choose one SMB host profile, then select one or more shares or folders to add in a single pass.</p>
                 </div>
               </div>
-              <div class="field-row">
-                <label class="field">
-                  <span>Label</span>
-                  <input name="label" placeholder="Movies Disk 1" />
-                </label>
-                <label class="field">
-                  <span>Folder Kind</span>
-                  <select name="kind">
-                    <option value="mixed">Mixed</option>
-                    <option value="movie">Movie</option>
-                    <option value="series">Series</option>
-                  </select>
-                </label>
+              <div id="smbFolderPicker" class="form-stack">
+                <div class="field-row">
+                  <label class="field">
+                    <span>Folder Kind</span>
+                    <select name="kind">
+                      <option value="mixed">Mixed</option>
+                      <option value="movie">Movie</option>
+                      <option value="series">Series</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Priority</span>
+                    <input name="priority" type="number" value="50" />
+                  </label>
+                  <label class="field">
+                    <span>SMB Profile</span>
+                    <select name="connection_id" id="addFolderConnectionSelect"></select>
+                  </label>
+                </div>
+                <div id="smbBrowserBreadcrumbs" class="breadcrumbs"></div>
+                <div id="smbFolderBrowser" class="collection compact"></div>
+                <div class="section-intro">
+                  <h3>Selected SMB Folders</h3>
+                  <p>Each selected item will become one connected folder using the best mounted runtime path match for that share or directory.</p>
+                </div>
+                <div id="smbSelectionSummary" class="collection compact"></div>
+                <div class="field-row">
+                  <button class="btn btn-primary" type="submit">Add Selected Folders</button>
+                  <button class="btn" type="button" data-close-modal="add-folder">Cancel</button>
+                </div>
               </div>
-              <label id="runtimePathField" class="field">
-                <span>Runtime Path</span>
-                <input name="path" placeholder="/mnt/media/movies" required />
-              </label>
-              <div id="runtimePathAssist" class="collection compact"></div>
-              <div class="field-row">
-                <label class="field">
-                  <span>Priority</span>
-                  <input name="priority" type="number" value="50" />
+
+              <div id="directFolderFields" class="form-stack" hidden>
+                <div class="field-row">
+                  <label class="field">
+                    <span>Label</span>
+                    <input name="label" placeholder="Movies Disk 1" />
+                  </label>
+                  <label class="field">
+                    <span>Folder Kind</span>
+                    <select name="direct_kind">
+                      <option value="mixed">Mixed</option>
+                      <option value="movie">Movie</option>
+                      <option value="series">Series</option>
+                    </select>
+                  </label>
+                </div>
+                <label id="runtimePathField" class="field">
+                  <span>Runtime Path</span>
+                  <input name="path" placeholder="/mnt/media/movies" />
                 </label>
-                <label class="field">
-                  <span>SMB Profile</span>
-                  <select name="connection_id" id="addFolderConnectionSelect"></select>
-                </label>
-              </div>
-              <div class="field-row">
-                <button class="btn btn-primary" type="submit">Add Folder</button>
-                <button class="btn" type="button" data-close-modal="add-folder">Cancel</button>
+                <div class="field-row">
+                  <label class="field">
+                    <span>Priority</span>
+                    <input name="direct_priority" type="number" value="50" />
+                  </label>
+                </div>
+                <div class="field-row">
+                  <button class="btn btn-primary" type="submit">Add Folder</button>
+                  <button class="btn" type="button" data-close-modal="add-folder">Cancel</button>
+                </div>
               </div>
             </form>
           </article>
@@ -540,9 +589,9 @@
           <div>
             <h3 class="title-with-icon">
               <span class="icon-badge" data-icon="sync" aria-hidden="true"></span>
-              <span id="providerMoveModalTitle">Move To Provider</span>
+              <span id="providerMoveModalTitle">Choose Provider Item</span>
             </h3>
-            <p>Select the movie or series already managed by the provider, then move the folder contents into that existing managed path.</p>
+            <p id="providerMoveModalDescription">Pick the existing movie or series managed by Radarr or Sonarr. The destination folder will follow that provider item's managed path.</p>
           </div>
           <button class="btn btn-small" type="button" data-close-modal="provider-move">Close</button>
         </div>
@@ -558,7 +607,11 @@
             <input name="source" readonly />
           </label>
           <label class="field">
-            <span>Provider Item</span>
+            <span>Find Movie Or Series</span>
+            <input id="providerItemSearchInput" name="item_search" placeholder="Search by title from the source folder name" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Destination Item</span>
             <select name="item_id" id="providerItemSelect"></select>
           </label>
           <div id="providerItemMeta" class="collection compact"></div>

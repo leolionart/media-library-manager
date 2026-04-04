@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
+import tempfile
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .browser import browse_path, list_mounts
 from .lan_connections import (
+    build_cd_command,
     browse_smb_path,
     create_smb_directory,
     delete_smb_directory,
+    normalize_stored_smb_connection,
+    parent_share_path,
     remove_smb_connection,
     resolve_smb_connection,
     resolve_smb_connection_for_test,
@@ -25,11 +31,26 @@ from .network import discover_lan_devices
 from .operations import apply_plan, delete_folder, move_folder, move_folder_contents
 from .planner import load_report, plan_actions
 from .scanner import scan_roots
+from .scanner_storage import StorageManagerScannerStorage
 from .state import StateStore
+from .storage import StoragePath as ScanStoragePath, default_storage_manager
 from .sync_integrations import default_integrations, list_provider_items, refresh_provider_item, sync_after_apply, test_integrations
 
 
 PLAN_PROGRESS_TOTAL = 3
+SMB_SCAN_HASH_TIMEOUT = 180
+
+
+def format_root_directory_error(root: RootConfig) -> str:
+    if root.storage_uri.startswith("smb://"):
+        return "Selected SMB root is invalid or unavailable."
+    if root.connection_id:
+        return "Selected SMB folder is not mounted in the runtime or is no longer available."
+    return f"path is not a directory: {root.path}"
+
+
+def root_requires_local_directory(root: RootConfig) -> bool:
+    return not root.storage_uri.startswith("smb://")
 
 
 def run_dashboard(*, host: str, port: int, state_file: Path) -> None:
@@ -76,6 +97,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/lan/connections":
             self._send_json(self.store.api_payload()["lan_connections"])
             return
+        if parsed.path == "/api/operations/folders":
+            try:
+                self._send_json(build_operations_folder_inventory(self.store.list_roots(), self.store.load_lan_connections()))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/smb/browse":
             params = parse_qs(parsed.query)
             connection_id = params.get("connection_id", [None])[0]
@@ -86,7 +113,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if connection is None:
                 self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
                 return
-            result = browse_smb_path(connection, params.get("path", [None])[0])
+            result = browse_smb_path(
+                connection,
+                params.get("path", [None])[0],
+                share_name=params.get("share_name", [None])[0],
+            )
             if result.get("status") != "success":
                 self._send_json({"error": result.get("message", "SMB browse failed")}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -118,8 +149,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/roots":
             payload = self._read_json()
             root = normalize_root_payload(payload)
-            if not root.path.is_dir():
-                self._send_json({"error": f"path is not a directory: {root.path}"}, status=HTTPStatus.BAD_REQUEST)
+            if root_requires_local_directory(root) and not root.path.is_dir():
+                self._send_json({"error": format_root_directory_error(root)}, status=HTTPStatus.BAD_REQUEST)
                 return
             self.store.add_root(root)
             self.store.append_activity(
@@ -135,6 +166,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "connection_label": root.connection_label,
                 },
             )
+            self._send_json(self.store.api_payload(), status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/roots/bulk":
+            payload = self._read_json()
+            roots = [normalize_root_payload(item) for item in payload.get("roots", [])]
+            if not roots:
+                self._send_json({"error": "at least one root is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            invalid_root = next((root for root in roots if root_requires_local_directory(root) and not root.path.is_dir()), None)
+            if invalid_root:
+                self._send_json({"error": format_root_directory_error(invalid_root)}, status=HTTPStatus.BAD_REQUEST)
+                return
+            for root in roots:
+                self.store.add_root(root)
+                self.store.append_activity(
+                    kind="config",
+                    status="success",
+                    message="Added scan root.",
+                    details={
+                        "label": root.label,
+                        "path": str(root.path),
+                        "priority": root.priority,
+                        "kind": root.kind,
+                        "connection_id": root.connection_id,
+                        "connection_label": root.connection_label,
+                    },
+                )
             self._send_json(self.store.api_payload(), status=HTTPStatus.CREATED)
             return
 
@@ -412,8 +471,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 details=job_details,
             )
 
+            lan_connections = self.store.load_lan_connections()
+            scan_backend = build_scan_storage_backend(roots=roots, lan_connections=lan_connections)
+            if scan_backend is not None:
+                smb_root_count = sum(1 for root in roots if (root.storage_uri or "").startswith("smb://"))
+                self.store.append_job_log(
+                    level="info",
+                    message="Using storage abstraction for scan roots.",
+                    details={"smb_roots": smb_root_count, "total_roots": len(roots)},
+                )
+
             try:
-                report = scan_roots(roots, progress_callback=self._scan_progress_callback).to_dict()
+                report = scan_roots(roots, progress_callback=self._scan_progress_callback, storage_backend=scan_backend).to_dict()
             except Exception as exc:
                 error_details = {"error": str(exc), **job_details}
                 self.store.finish_job(status="error", message="Library scan failed.", details=error_details)
@@ -854,7 +923,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def normalize_root_payload(payload: dict) -> RootConfig:
-    path = Path(payload["path"]).expanduser().resolve()
+    storage_uri = str(payload.get("storage_uri") or "").strip()
+    raw_path = str(payload.get("path") or "").strip()
+    path = build_root_path(storage_uri=storage_uri, raw_path=raw_path)
     return RootConfig(
         path=path,
         label=(payload.get("label") or path.name).strip(),
@@ -862,7 +933,31 @@ def normalize_root_payload(payload: dict) -> RootConfig:
         kind=(payload.get("kind") or "mixed").strip() or "mixed",
         connection_id=str(payload.get("connection_id") or "").strip(),
         connection_label=str(payload.get("connection_label") or "").strip(),
+        storage_uri=storage_uri,
+        share_name=str(payload.get("share_name") or "").strip().strip("/"),
     )
+
+
+def build_root_path(*, storage_uri: str, raw_path: str) -> Path:
+    if raw_path:
+        return Path(raw_path).expanduser().resolve()
+    if storage_uri.startswith("smb://"):
+        parsed = urlparse(storage_uri)
+        params = parse_qs(parsed.query)
+        connection_id = sanitize_path_segment(unquote(params.get("connection_id", [""])[0]), "connection")
+        share_name = sanitize_path_segment(unquote(parsed.netloc), "share")
+        share_path = "/" + str(parsed.path or "").strip("/")
+        base = Path("/") / "smb" / connection_id / share_name
+        if share_path in {"", "/"}:
+            return base
+        decoded_segments = [sanitize_path_segment(unquote(segment), "folder") for segment in share_path.strip("/").split("/") if segment]
+        return base.joinpath(*decoded_segments)
+    return Path("/").resolve()
+
+
+def sanitize_path_segment(value: str, fallback: str) -> str:
+    clean = str(value or "").strip().replace("/", "_")
+    return clean or fallback
 
 
 
@@ -908,6 +1003,8 @@ def summarize_roots(roots: list[RootConfig]) -> list[dict[str, object]]:
             "kind": root.kind,
             "connection_id": root.connection_id,
             "connection_label": root.connection_label,
+            "storage_uri": root.storage_uri,
+            "share_name": root.share_name,
         }
         for root in roots
     ]
@@ -930,6 +1027,143 @@ def summarize_apply_job(results: list[dict[str, Any]]) -> dict[str, int]:
             summary["completed"] += 1
     return summary
 
+
+
+def build_scan_storage_backend(
+    *,
+    roots: list[RootConfig],
+    lan_connections: dict[str, Any],
+) -> StorageManagerScannerStorage | None:
+    if not any(bool(root.storage_uri) for root in roots):
+        return None
+    manager = default_storage_manager(lan_connections=lan_connections)
+    return StorageManagerScannerStorage(
+        manager,
+        smb_sha256=lambda path: compute_smb_storage_sha256(path, lan_connections=lan_connections),
+    )
+
+
+def build_operations_folder_inventory(roots: list[RootConfig], lan_connections: dict[str, Any]) -> dict[str, Any]:
+    manager = default_storage_manager(lan_connections=lan_connections)
+    items: list[dict[str, Any]] = []
+
+    for root in roots:
+        root_storage_path = root_to_scan_storage_path(root)
+        try:
+            entries = manager.list_dir(root_storage_path)
+        except Exception:
+            continue
+        for entry in entries:
+            if not entry.is_dir:
+                continue
+            item_path = entry.path.to_uri() if entry.path.backend == "smb" else entry.path.normalized_path()
+            try:
+                relative_path = entry.path.relative_to(root_storage_path)
+            except Exception:
+                relative_path = entry.name
+            items.append(
+                {
+                    "label": entry.name,
+                    "path": item_path,
+                    "display_path": relative_path,
+                    "root_path": str(root.path),
+                    "root_label": root.label,
+                    "connection_id": root.connection_id,
+                    "connection_label": root.connection_label,
+                    "kind": root.kind,
+                    "priority": root.priority,
+                    "storage_uri": entry.path.to_uri(),
+                    "root_storage_uri": root.storage_uri,
+                }
+            )
+
+    items.sort(key=lambda item: (item["label"].lower(), item["display_path"].lower()))
+    return {"items": items, "summary": {"items": len(items), "roots": len(roots)}}
+
+
+def root_to_scan_storage_path(root: RootConfig) -> ScanStoragePath:
+    raw = root.storage_uri or str(root.path)
+    if raw.startswith(("local://", "smb://")):
+        return ScanStoragePath.from_uri(raw)
+    return ScanStoragePath.local(raw)
+
+
+def compute_smb_storage_sha256(
+    path: ScanStoragePath,
+    *,
+    lan_connections: dict[str, Any],
+    timeout: int = SMB_SCAN_HASH_TIMEOUT,
+) -> str:
+    if path.backend != "smb":
+        raise ValueError("SMB hash callback requires an smb storage path")
+
+    connection = resolve_smb_connection(lan_connections, path.connection_id)
+    if connection is None:
+        raise RuntimeError(f"SMB connection not found for scan: {path.connection_id}")
+
+    normalized_connection = normalize_stored_smb_connection({**connection, "share_name": path.share_name})
+    normalized_path = path.normalized_path()
+    if normalized_path in {"", "/"}:
+        raise RuntimeError("SMB hash callback requires a file path, not share root")
+
+    parent_path = parent_share_path(normalized_path) or "/"
+    file_name = PurePosixPath(normalized_path).name
+    escaped_file_name = file_name.replace('"', '\\"')
+    smb_command = f'{build_cd_command(parent_path)}get "{escaped_file_name}" -'
+
+    auth_file = None
+    process = None
+    stderr_raw = b""
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            auth_file = Path(handle.name)
+            handle.write(f"username = {normalized_connection['username']}\n")
+            handle.write(f"password = {normalized_connection['password']}\n")
+            if normalized_connection["domain"]:
+                handle.write(f"domain = {normalized_connection['domain']}\n")
+
+        target = f"//{normalized_connection['host']}/{normalized_connection['share_name']}"
+        process = subprocess.Popen(
+            [
+                "smbclient",
+                target,
+                "-A",
+                str(auth_file),
+                "-m",
+                f"SMB{normalized_connection['version']}",
+                "-c",
+                smb_command,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        digest = hashlib.sha256()
+        assert process.stdout is not None
+        while True:
+            chunk = process.stdout.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+        if process.stderr is not None:
+            stderr_raw = process.stderr.read() or b""
+        return_code = process.wait(timeout=timeout)
+    except FileNotFoundError as exc:
+        raise RuntimeError("smbclient is not installed in the runtime") from exc
+    except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            process.kill()
+        raise RuntimeError("SMB hash operation timed out") from exc
+    finally:
+        if auth_file and auth_file.exists():
+            auth_file.unlink(missing_ok=True)
+
+    if return_code != 0:
+        message = stderr_raw.decode("utf-8", errors="replace").strip() or "SMB hash operation failed"
+        raise RuntimeError(message)
+
+    return digest.hexdigest()
 
 
 def preview_actions(actions: list[dict]) -> list[dict[str, object]]:

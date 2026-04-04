@@ -35,6 +35,8 @@ def plan_actions(
                     root_path=keeper.root_path,
                     keep_path=desired_destination,
                     details=build_action_details(keeper, targets),
+                    source_uri=keeper.storage_uri,
+                    root_storage_uri=keeper.root_storage_uri,
                 )
             )
             keeper = clone_with_path(keeper, desired_destination)
@@ -53,6 +55,9 @@ def plan_actions(
                     root_path=item.root_path,
                     keep_path=keeper.path,
                     details=build_action_details(item, targets),
+                    source_uri=item.storage_uri,
+                    root_storage_uri=item.root_storage_uri,
+                    keep_uri=keeper.storage_uri,
                 )
             )
             handled_sources.add(str(item.path))
@@ -73,6 +78,8 @@ def plan_actions(
                     root_path=keeper.root_path,
                     keep_path=desired_destination,
                     details=build_action_details(keeper, targets),
+                    source_uri=keeper.storage_uri,
+                    root_storage_uri=keeper.root_storage_uri,
                 )
             )
             keeper = clone_with_path(keeper, desired_destination)
@@ -100,6 +107,9 @@ def plan_actions(
                         "keeper_quality_rank": keeper.quality_rank,
                         "candidate_quality_rank": item.quality_rank,
                     },
+                    source_uri=item.storage_uri,
+                    root_storage_uri=item.root_storage_uri,
+                    keep_uri=keeper.storage_uri,
                 )
             )
             handled_sources.add(str(item.path))
@@ -155,6 +165,7 @@ def media_from_dict(data: dict[str, Any]) -> MediaFile:
         label=data["root_label"],
         priority=int(data["root_priority"]),
         kind=data["kind"],
+        storage_uri=str(data.get("root_storage_uri", "") or ""),
     )
     report_item = MediaFile(
         path=Path(data["path"]),
@@ -176,6 +187,8 @@ def media_from_dict(data: dict[str, Any]) -> MediaFile:
         dynamic_range=data.get("dynamic_range"),
         quality_rank=int(data.get("quality_rank", 0)),
         sha256=data.get("sha256"),
+        storage_uri=str(data.get("storage_uri", "") or ""),
+        root_storage_uri=str(data.get("root_storage_uri", "") or ""),
     )
     return report_item
 
@@ -210,6 +223,8 @@ def load_report(report_path: str | Path) -> ScanReport:
             label=root["label"],
             priority=int(root["priority"]),
             kind=root.get("kind", "mixed"),
+            storage_uri=str(root.get("storage_uri", "") or ""),
+            share_name=str(root.get("share_name", "") or ""),
         )
         for root in data["roots"]
     ]

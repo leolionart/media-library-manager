@@ -103,6 +103,7 @@ class LanConnectionTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "error")
         self.assertIn("smbclient", result["message"])
+        self.assertIn("Docker image", result["message"])
 
     @patch("media_library_manager.lan_connections.subprocess.run")
     def test_browse_smb_path_lists_directories(self, run_mock) -> None:
@@ -123,6 +124,52 @@ class LanConnectionTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["entries"][0]["path"], "/library/Movies")
+
+    @patch("media_library_manager.lan_connections.subprocess.run")
+    def test_browse_smb_path_without_share_lists_shares(self, run_mock) -> None:
+        run_mock.return_value = CompletedProcess(
+            returncode=0,
+            stdout="Disk|DATA|Main data share\nDisk|Time Machine|Backup share\n",
+        )
+        result = browse_smb_path(
+            {
+                "id": "smb-1",
+                "label": "NAS",
+                "host": "nas.local",
+                "share_name": "",
+                "username": "leo",
+                "password": "secret",
+            }
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["scope"], "host")
+        self.assertEqual(result["entries"][0]["type"], "share")
+        self.assertEqual(result["entries"][0]["share_name"], "DATA")
+
+    @patch("media_library_manager.lan_connections.subprocess.run")
+    def test_test_smb_connection_with_share_also_lists_available_shares(self, run_mock) -> None:
+        run_mock.side_effect = [
+            CompletedProcess(
+                returncode=0,
+                stdout="Movies|0|2026-04-04|10:00:00|D\nREADME.txt|12|2026-04-04|10:00:00|A\n",
+            ),
+            CompletedProcess(
+                returncode=0,
+                stdout="Disk|DATA|Main data share\nDisk|Time Machine|Backup share\n",
+            ),
+        ]
+        result = test_smb_connection(
+            {
+                "host": "nas.local",
+                "share_name": "Time Machine",
+                "base_path": "/",
+                "username": "leo",
+                "password": "secret",
+            }
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["listing_preview"][0]["name"], "Movies")
+        self.assertEqual(result["shares"][0]["name"], "DATA")
 
     @patch("media_library_manager.lan_connections.subprocess.run")
     def test_create_and_delete_smb_directory_use_smbclient(self, run_mock) -> None:

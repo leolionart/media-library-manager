@@ -87,6 +87,8 @@ class StateStore:
                 kind=item.get("kind", "mixed"),
                 connection_id=str(item.get("connection_id", "") or ""),
                 connection_label=str(item.get("connection_label", "") or ""),
+                storage_uri=str(item.get("storage_uri", "") or ""),
+                share_name=str(item.get("share_name", "") or ""),
             )
             for item in self.load_state()["roots"]
         ]

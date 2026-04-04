@@ -164,6 +164,26 @@ http://localhost:9988
 ./run-dashboard.sh
 ```
 
+If port `8765` is already used on your machine, run the dashboard on `8766` instead:
+
+```bash
+HOST=127.0.0.1 PORT=8766 ./run-dashboard.sh
+```
+
+On the current macOS setup used during development, `8766` is the active local dashboard port because `8765` conflicts with another app.
+
+When running outside Docker, the host also needs the Samba CLI client because SMB browsing and folder discovery call `smbclient`.
+
+Examples:
+
+```bash
+# macOS
+brew install samba
+
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y smbclient
+```
+
 ## Current Direction For SMB Support
 
 SMB is a first-class setup concern in the product direction.

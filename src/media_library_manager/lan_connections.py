@@ -23,6 +23,12 @@ SMB_CONNECTION_KEYS = [
 ]
 
 
+SMBCLIENT_MISSING_MESSAGE = (
+    "smbclient is not installed in the runtime. "
+    "Install the Samba client for local runs, or use the Docker image which already includes smbclient."
+)
+
+
 def default_lan_connections() -> dict[str, Any]:
     return {"smb": []}
 
@@ -136,9 +142,9 @@ def test_smb_connection(connection: dict[str, Any], *, timeout: int = 8) -> dict
     if not normalized["username"]:
         return {"status": "error", "message": "username is required"}
 
-    target = f"//{normalized['host']}"
+    host_target = f"//{normalized['host']}"
+    target = host_target
     auth_file = None
-    command: list[str]
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             auth_file = Path(handle.name)
@@ -149,32 +155,42 @@ def test_smb_connection(connection: dict[str, Any], *, timeout: int = 8) -> dict
 
         if normalized["share_name"]:
             target = f"{target}/{normalized['share_name']}"
-            command = [
-                "smbclient",
-                target,
-                "-A",
-                str(auth_file),
-                "-m",
-                f"SMB{normalized['version']}",
-                "-g",
-                "-c",
-                f"{build_cd_command(normalized['base_path'])}ls",
-            ]
+            completed = subprocess.run(
+                [
+                    "smbclient",
+                    target,
+                    "-A",
+                    str(auth_file),
+                    "-m",
+                    f"SMB{normalized['version']}",
+                    "-g",
+                    "-c",
+                    f"{build_cd_command(normalized['base_path'])}ls",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
         else:
-            command = [
-                "smbclient",
-                "-L",
-                target,
-                "-A",
-                str(auth_file),
-                "-m",
-                f"SMB{normalized['version']}",
-                "-g",
-            ]
-
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+            completed = subprocess.run(
+                [
+                    "smbclient",
+                    "-L",
+                    host_target,
+                    "-A",
+                    str(auth_file),
+                    "-m",
+                    f"SMB{normalized['version']}",
+                    "-g",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
     except FileNotFoundError:
-        return {"status": "error", "message": "smbclient is not installed in the runtime"}
+        return {"status": "error", "message": SMBCLIENT_MISSING_MESSAGE}
     except subprocess.TimeoutExpired:
         return {"status": "error", "message": "SMB connection test timed out"}
     finally:
@@ -199,18 +215,80 @@ def test_smb_connection(connection: dict[str, Any], *, timeout: int = 8) -> dict
         result["shares"] = parse_smbclient_shares(completed.stdout or "")
     else:
         result["listing_preview"] = parse_smbclient_listing(completed.stdout or "")
+        try:
+            shares_completed = subprocess.run(
+                [
+                    "smbclient",
+                    "-L",
+                    host_target,
+                    "-A",
+                    str(auth_file),
+                    "-m",
+                    f"SMB{normalized['version']}",
+                    "-g",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            shares_completed = None
+        if shares_completed and shares_completed.returncode == 0:
+            result["shares"] = parse_smbclient_shares(shares_completed.stdout or "")
     return result
 
 
-def browse_smb_path(connection: dict[str, Any], raw_path: str | None = None, *, timeout: int = 10) -> dict[str, Any]:
+def browse_smb_path(
+    connection: dict[str, Any],
+    raw_path: str | None = None,
+    *,
+    timeout: int = 10,
+    share_name: str | None = None,
+) -> dict[str, Any]:
     normalized = normalize_stored_smb_connection(connection)
-    validation_error = validate_smb_browser_connection(normalized)
+    if not normalized["host"]:
+        return {"status": "error", "message": "host is required"}
+    if not normalized["username"]:
+        return {"status": "error", "message": "username is required"}
+
+    effective_share_name = str(share_name or normalized["share_name"] or "").strip().strip("/")
+    if not effective_share_name:
+        share_result = list_smb_shares(normalized, timeout=timeout)
+        if share_result["status"] != "success":
+            return share_result
+        return {
+            "status": "success",
+            "scope": "host",
+            "connection": {
+                "id": normalized["id"],
+                "label": normalized["label"],
+                "host": normalized["host"],
+                "share_name": "",
+            },
+            "path": "/",
+            "parent": None,
+            "breadcrumbs": [{"name": normalized["host"], "path": "/", "share_name": ""}],
+            "entries": [
+                {
+                    "name": share["name"],
+                    "path": "/",
+                    "type": "share",
+                    "share_name": share["name"],
+                    "comment": share.get("comment", ""),
+                }
+                for share in share_result.get("shares", [])
+            ],
+        }
+
+    browser_connection = {**normalized, "share_name": effective_share_name}
+    validation_error = validate_smb_browser_connection(browser_connection)
     if validation_error:
         return {"status": "error", "message": validation_error}
 
-    current_path = normalize_share_path(raw_path or normalized["base_path"])
+    current_path = normalize_share_path(raw_path or browser_connection["base_path"])
     command = f'{build_cd_command(current_path)}ls'
-    completed = run_smbclient_command(normalized, command, timeout=timeout)
+    completed = run_smbclient_command(browser_connection, command, timeout=timeout)
     if completed["status"] != "success":
         return completed
 
@@ -219,21 +297,23 @@ def browse_smb_path(connection: dict[str, Any], raw_path: str | None = None, *, 
         {
             **entry,
             "path": join_share_path(current_path, entry["name"]),
+            "share_name": browser_connection["share_name"],
         }
         for entry in entries
         if entry["type"] == "directory"
     ]
     return {
         "status": "success",
+        "scope": "share",
         "connection": {
-            "id": normalized["id"],
-            "label": normalized["label"],
-            "host": normalized["host"],
-            "share_name": normalized["share_name"],
+            "id": browser_connection["id"],
+            "label": browser_connection["label"],
+            "host": browser_connection["host"],
+            "share_name": browser_connection["share_name"],
         },
         "path": current_path or "/",
         "parent": parent_share_path(current_path),
-        "breadcrumbs": build_share_breadcrumbs(current_path),
+        "breadcrumbs": build_share_breadcrumbs(current_path, share_name=browser_connection["share_name"]),
         "entries": directories,
     }
 
@@ -312,6 +392,13 @@ def parse_smbclient_listing(output: str) -> list[dict[str, str]]:
     return preview
 
 
+def list_smb_shares(connection: dict[str, Any], *, timeout: int) -> dict[str, Any]:
+    completed = run_smbclient_share_listing(connection, timeout=timeout)
+    if completed["status"] != "success":
+        return completed
+    return {"status": "success", "shares": parse_smbclient_shares(str(completed.get("stdout") or ""))}
+
+
 def validate_smb_browser_connection(connection: dict[str, Any]) -> str | None:
     if not connection["host"]:
         return "host is required"
@@ -351,7 +438,7 @@ def run_smbclient_command(connection: dict[str, Any], smb_command: str, *, timeo
             check=False,
         )
     except FileNotFoundError:
-        return {"status": "error", "message": "smbclient is not installed in the runtime"}
+        return {"status": "error", "message": SMBCLIENT_MISSING_MESSAGE}
     except subprocess.TimeoutExpired:
         return {"status": "error", "message": "SMB command timed out"}
     finally:
@@ -360,6 +447,48 @@ def run_smbclient_command(connection: dict[str, Any], smb_command: str, *, timeo
 
     if completed.returncode != 0:
         error = (completed.stderr or completed.stdout or "SMB command failed").strip()
+        return {"status": "error", "message": error, "target": target}
+
+    return {"status": "success", "stdout": completed.stdout or "", "target": target}
+
+
+def run_smbclient_share_listing(connection: dict[str, Any], *, timeout: int) -> dict[str, Any]:
+    target = f"//{connection['host']}"
+    auth_file = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            auth_file = Path(handle.name)
+            handle.write(f"username = {connection['username']}\n")
+            handle.write(f"password = {connection['password']}\n")
+            if connection["domain"]:
+                handle.write(f"domain = {connection['domain']}\n")
+
+        completed = subprocess.run(
+            [
+                "smbclient",
+                "-L",
+                target,
+                "-A",
+                str(auth_file),
+                "-m",
+                f"SMB{connection['version']}",
+                "-g",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"status": "error", "message": SMBCLIENT_MISSING_MESSAGE}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "SMB share listing timed out"}
+    finally:
+        if auth_file and auth_file.exists():
+            auth_file.unlink(missing_ok=True)
+
+    if completed.returncode != 0:
+        error = (completed.stderr or completed.stdout or "SMB share listing failed").strip()
         return {"status": "error", "message": error, "target": target}
 
     return {"status": "success", "stdout": completed.stdout or "", "target": target}
@@ -388,13 +517,13 @@ def parent_share_path(path: str) -> str | None:
     return parent if parent.startswith("/") else f"/{parent}"
 
 
-def build_share_breadcrumbs(path: str) -> list[dict[str, str]]:
+def build_share_breadcrumbs(path: str, *, share_name: str = "") -> list[dict[str, str]]:
     normalized = normalize_share_path(path) or "/"
-    crumbs = [{"name": "/", "path": "/"}]
+    crumbs = [{"name": share_name or "/", "path": "/", "share_name": share_name}]
     current = ""
     for part in Path(normalized).parts[1:]:
         current = f"{current}/{part}"
-        crumbs.append({"name": part, "path": current})
+        crumbs.append({"name": part, "path": current, "share_name": share_name})
     return crumbs
 
 
