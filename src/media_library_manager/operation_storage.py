@@ -312,9 +312,12 @@ class OperationStorageRouter:
         if parent is None:
             return None
         target_name = path.name
-        for entry in self._smb_list_entries(parent):
-            if entry.get("name") == target_name:
-                return entry
+        try:
+            for entry in self._smb_list_entries(parent):
+                if entry.get("name") == target_name:
+                    return entry
+        except ValueError:
+            return None
         return None
 
     def _smb_list_entries(self, path: StoragePath) -> list[dict[str, str]]:

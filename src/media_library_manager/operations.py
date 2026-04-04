@@ -105,7 +105,12 @@ def apply_plan(
 def perform_move(
     action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter | None = None
 ) -> dict[str, Any]:
-    if _uses_storage_abstraction(action.get("source"), action.get("destination")):
+    if _uses_storage_abstraction(
+        action.get("source"),
+        action.get("destination"),
+        action.get("source_uri"),
+        action.get("destination_uri"),
+    ):
         return _perform_move_with_storage_router(
             action,
             execute=execute,
@@ -150,7 +155,7 @@ def perform_move(
 def perform_delete(
     action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter | None = None
 ) -> dict[str, Any]:
-    if _uses_storage_abstraction(action.get("source")):
+    if _uses_storage_abstraction(action.get("source"), action.get("source_uri")):
         return _perform_delete_with_storage_router(
             action,
             execute=execute,
@@ -230,8 +235,6 @@ def move_folder(
             return {"status": "error", "message": f"source does not exist: {source_value}"}
         if not router.is_dir(source_ref):
             return {"status": "error", "message": f"source is not a directory: {source_value}"}
-        if not router.same_backend_namespace(source_ref, destination_parent_ref):
-            return {"status": "error", "message": "cross-backend move is not supported yet"}
         if not router.exists(destination_parent_ref):
             return {"status": "error", "message": f"destination does not exist: {destination_parent_value}"}
         if not router.is_dir(destination_parent_ref):
@@ -248,17 +251,36 @@ def move_folder(
 
     operations = [{"move_dir": source_value, "to_parent": destination_parent_value, "destination": destination_value}]
     if not execute:
-        return {
-            "status": "dry-run",
-            "type": "move-folder",
-            "source": source_value,
-            "destination_parent": destination_parent_value,
-            "destination": destination_value,
-            "operations": operations,
-        }
+        if router.same_backend_namespace(source_ref, destination_parent_ref):
+            return {
+                "status": "dry-run",
+                "type": "move-folder",
+                "source": source_value,
+                "destination_parent": destination_parent_value,
+                "destination": destination_value,
+                "operations": operations,
+            }
+        return _move_tree_cross_namespace(
+            router,
+            source_ref,
+            destination_ref,
+            execute=False,
+            operation_type="move-folder",
+            destination_parent_value=destination_parent_value,
+        )
 
     try:
-        router.rename(source_ref, destination_ref)
+        if router.same_backend_namespace(source_ref, destination_ref):
+            router.rename(source_ref, destination_ref)
+        else:
+            return _move_tree_cross_namespace(
+                router,
+                source_ref,
+                destination_ref,
+                execute=True,
+                operation_type="move-folder",
+                destination_parent_value=destination_parent_value,
+            )
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 
@@ -394,6 +416,78 @@ def _move_folder_contents_cross_namespace(
     }
 
 
+def _move_tree_cross_namespace(
+    router: OperationStorageRouter,
+    source_ref: Any,
+    destination_ref: Any,
+    *,
+    execute: bool,
+    operation_type: str,
+    destination_parent_value: str | None = None,
+) -> dict[str, Any]:
+    source_value = router.stringify(source_ref)
+    destination_value = router.stringify(destination_ref)
+
+    try:
+        if router.exists(destination_ref):
+            return {
+                "status": "error",
+                "type": operation_type,
+                "source": source_value,
+                "destination": destination_value,
+                "message": f"destination already exists: {destination_value}" if operation_type == "move-folder" else f"destination exists: {destination_value}",
+            }
+        transfer_items = [
+            {
+                "kind": "dir",
+                "source": source_ref,
+                "destination": destination_ref,
+                "operation": {"mkdir": destination_value},
+            },
+            *_collect_cross_namespace_transfer_items(router, source_ref, destination_ref),
+        ]
+    except ValueError as exc:
+        return {"status": "error", "type": operation_type, "source": source_value, "destination": destination_value, "message": str(exc)}
+
+    operations = [item["operation"] for item in transfer_items]
+    operations.append({"delete_dir": source_value})
+    if not execute:
+        payload = {
+            "status": "dry-run",
+            "type": operation_type,
+            "source": source_value,
+            "destination": destination_value,
+            "operations": operations,
+        }
+        if destination_parent_value is not None:
+            payload["destination_parent"] = destination_parent_value
+        return payload
+
+    try:
+        for item in transfer_items:
+            if item["kind"] == "dir":
+                router.mkdir_parents(item["destination"])
+            else:
+                parent = router.parent(item["destination"])
+                if parent is not None:
+                    router.mkdir_parents(parent)
+                router.copy_file(item["source"], item["destination"])
+        router.delete_tree(source_ref)
+    except ValueError as exc:
+        return {"status": "error", "type": operation_type, "source": source_value, "destination": destination_value, "message": str(exc)}
+
+    payload = {
+        "status": "applied",
+        "type": operation_type,
+        "source": source_value,
+        "destination": destination_value,
+        "operations": operations,
+    }
+    if destination_parent_value is not None:
+        payload["destination_parent"] = destination_parent_value
+    return payload
+
+
 def _collect_cross_namespace_transfer_items(router: OperationStorageRouter, source_ref: Any, destination_ref: Any) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for child in router.listdir(source_ref):
@@ -469,10 +563,12 @@ def _parse_storage_path(router: OperationStorageRouter, value: str | Path) -> tu
 def _perform_move_with_storage_router(
     action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter
 ) -> dict[str, Any]:
-    source_ref, source_error = _parse_storage_path(storage_router, str(action["source"]))
+    source_input = str(action.get("source_uri") or action["source"])
+    destination_input = str(action.get("destination_uri") or action["destination"])
+    source_ref, source_error = _parse_storage_path(storage_router, source_input)
     if source_error:
         return {"status": "error", "type": "move", "source": str(action["source"]), "message": source_error}
-    destination_ref, destination_error = _parse_storage_path(storage_router, str(action["destination"]))
+    destination_ref, destination_error = _parse_storage_path(storage_router, destination_input)
     if destination_error:
         return {"status": "error", "type": "move", "source": str(action["source"]), "message": destination_error}
     assert source_ref is not None and destination_ref is not None
@@ -480,22 +576,17 @@ def _perform_move_with_storage_router(
     source_value = storage_router.stringify(source_ref)
     destination_value = storage_router.stringify(destination_ref)
     try:
-        if not storage_router.same_backend_namespace(source_ref, destination_ref):
-            return {
-                "status": "error",
-                "type": "move",
-                "source": source_value,
-                "destination": destination_value,
-                "message": "cross-backend move is not supported yet",
-            }
-
         destination_parent = storage_router.parent(destination_ref)
         if destination_parent is not None and not storage_router.exists(destination_parent):
             storage_router.mkdir_parents(destination_parent)
     except ValueError as exc:
         return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": str(exc)}
 
-    operations = [{"from": source_value, "to": destination_value}]
+    operations = (
+        [{"from": source_value, "to": destination_value}]
+        if storage_router.same_backend_namespace(source_ref, destination_ref)
+        else [{"copy": source_value, "destination": destination_value}, {"delete": source_value}]
+    )
     if not execute:
         return {"status": "dry-run", "type": "move", "source": source_value, "destination": destination_value, "operations": operations}
 
@@ -506,7 +597,11 @@ def _perform_move_with_storage_router(
         return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": str(exc)}
 
     try:
-        storage_router.rename(source_ref, destination_ref)
+        if storage_router.same_backend_namespace(source_ref, destination_ref):
+            storage_router.rename(source_ref, destination_ref)
+        else:
+            storage_router.copy_file(source_ref, destination_ref)
+            storage_router.delete_file(source_ref)
     except ValueError as exc:
         return {"status": "error", "type": "move", "source": source_value, "destination": destination_value, "message": str(exc)}
 
@@ -521,7 +616,8 @@ def _perform_move_with_storage_router(
 def _perform_delete_with_storage_router(
     action: dict[str, Any], *, execute: bool, prune_empty_dirs: bool, storage_router: OperationStorageRouter
 ) -> dict[str, Any]:
-    source_ref, source_error = _parse_storage_path(storage_router, str(action["source"]))
+    source_input = str(action.get("source_uri") or action["source"])
+    source_ref, source_error = _parse_storage_path(storage_router, source_input)
     if source_error:
         return {"status": "error", "type": "delete", "source": str(action["source"]), "message": source_error}
     assert source_ref is not None

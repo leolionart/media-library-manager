@@ -164,8 +164,12 @@ class OperationTests(unittest.TestCase):
     def test_move_folder_rejects_cross_share_smb_move(self, run_smbclient_mock) -> None:
         def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
             if command == "ls":
-                return {"status": "success", "stdout": "Source|0|2026-04-04|10:00:00|D\n"}
+                if connection["share_name"] == "Media":
+                    return {"status": "success", "stdout": "Source|0|2026-04-04|10:00:00|D\n"}
+                return {"status": "success", "stdout": "Library|0|2026-04-04|10:00:00|D\n"}
             if command == 'cd "Library";ls':
+                return {"status": "success", "stdout": ""}
+            if command == 'cd "Source";ls':
                 return {"status": "success", "stdout": ""}
             return {"status": "error", "message": f"unexpected command: {command}"}
 
@@ -185,8 +189,8 @@ class OperationTests(unittest.TestCase):
             execute=False,
             storage_router=router,
         )
-        self.assertEqual(result["status"], "error")
-        self.assertIn("cross-backend move", result["message"])
+        self.assertEqual(result["status"], "dry-run")
+        self.assertIn({"mkdir": "smb://nas-1/Library/Library/Source"}, result["operations"])
 
     @patch("media_library_manager.operation_storage.run_smbclient_command")
     def test_move_folder_contents_supports_smb_source_to_local_destination(self, run_smbclient_mock) -> None:
@@ -230,3 +234,191 @@ class OperationTests(unittest.TestCase):
             self.assertEqual(result["status"], "applied")
             self.assertTrue(expected_file.exists())
             self.assertIn({"delete_dir": "smb://nas-1/Media/Incoming"}, result["operations"])
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_move_folder_supports_local_source_to_smb_destination_parent(self, run_smbclient_mock) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source = tmp_path / "Downloads" / "Movie (2024)"
+            source.mkdir(parents=True)
+            movie_file = source / "Movie (2024).mkv"
+            movie_file.write_bytes(b"movie")
+
+            def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+                if command == "ls":
+                    return {"status": "success", "stdout": "Library|0|2026-04-04|10:00:00|D\n"}
+                if command == 'cd "Library";ls':
+                    return {"status": "success", "stdout": ""}
+                if command == 'cd "Library";mkdir "Movie (2024)"':
+                    return {"status": "success", "stdout": ""}
+                if command == 'cd "Library";ls':
+                    return {"status": "success", "stdout": "Movie (2024)|0|2026-04-04|10:00:00|D\n"}
+                if command == f'cd "Library/Movie (2024)";put "{movie_file.resolve()}" "Movie (2024).mkv"':
+                    return {"status": "success", "stdout": ""}
+                return {"status": "error", "message": f"unexpected command: {command}"}
+
+            run_smbclient_mock.side_effect = run_side_effect
+            router = OperationStorageRouter(
+                smb_connection_resolver=lambda connection_id: {
+                    "id": connection_id,
+                    "label": "NAS",
+                    "host": "nas.local",
+                    "username": "leo",
+                    "password": "secret",
+                }
+            )
+
+            result = move_folder(
+                source,
+                "smb://nas-1/Media/Library",
+                execute=True,
+                storage_router=router,
+            )
+
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(source.exists())
+            self.assertEqual(result["destination"], "smb://nas-1/Media/Library/Movie%20%282024%29")
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_apply_plan_supports_move_action_with_smb_source_uri(self, run_smbclient_mock) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            destination = tmp_path / "Library" / "Movie (2024)" / "Movie (2024).mkv"
+            source_root = tmp_path / "PseudoSmbRoot"
+            source_root.mkdir()
+
+            def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+                if command == 'cd "Incoming";ls':
+                    return {"status": "success", "stdout": "Movie (2024).mkv|100|2026-04-04|10:00:00|A\n"}
+                if command == f'cd "Incoming";get "Movie (2024).mkv" "{destination.resolve()}"':
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(b"movie")
+                    return {"status": "success", "stdout": ""}
+                if command == 'del "Incoming/Movie (2024).mkv"':
+                    return {"status": "success", "stdout": ""}
+                return {"status": "error", "message": f"unexpected command: {command}"}
+
+            run_smbclient_mock.side_effect = run_side_effect
+            router = OperationStorageRouter(
+                smb_connection_resolver=lambda connection_id: {
+                    "id": connection_id,
+                    "label": "NAS",
+                    "host": "nas.local",
+                    "username": "leo",
+                    "password": "secret",
+                }
+            )
+            plan = {
+                "version": 1,
+                "summary": {"move": 1, "delete": 0, "review": 0},
+                "actions": [
+                    {
+                        "type": "move",
+                        "source": str(source_root / "Movie (2024).mkv"),
+                        "source_uri": "smb://nas-1/Media/Incoming/Movie%20%282024%29.mkv",
+                        "destination": str(destination),
+                        "destination_uri": "",
+                        "reason": "canonicalize_best_media",
+                        "media_key": "movie:movie:2024",
+                        "root_path": str(source_root),
+                        "root_storage_uri": "smb://nas-1/Media/Incoming",
+                        "keep_path": str(destination),
+                        "details": {},
+                    }
+                ],
+            }
+
+            result = apply_plan(plan, execute=True, prune_empty_dirs=True, storage_router=router)
+
+            self.assertEqual(result["summary"]["applied"], 1)
+            self.assertTrue(destination.exists())
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_move_folder_supports_local_source_to_smb_destination(self, run_smbclient_mock) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source = tmp_path / "Downloads" / "Movie (2024)"
+            movie_file = source / "Movie (2024).mkv"
+            source.mkdir(parents=True)
+            movie_file.write_bytes(b"movie")
+
+            def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+                if command == "ls":
+                    return {"status": "success", "stdout": "Library|0|2026-04-04|10:00:00|D\n"}
+                if command == 'cd "Library";ls':
+                    return {"status": "success", "stdout": ""}
+                if command == 'cd "Library";mkdir "Movie (2024)"':
+                    return {"status": "success", "stdout": ""}
+                if command == 'cd "Library/Movie (2024)";put "{}" "Movie (2024).mkv"'.format(movie_file.resolve()):
+                    return {"status": "success", "stdout": ""}
+                return {"status": "error", "message": f"unexpected command: {command}"}
+
+            run_smbclient_mock.side_effect = run_side_effect
+            router = OperationStorageRouter(
+                smb_connection_resolver=lambda connection_id: {
+                    "id": connection_id,
+                    "label": "NAS",
+                    "host": "nas.local",
+                    "username": "leo",
+                    "password": "secret",
+                }
+            )
+
+            result = move_folder(source, "smb://nas-1/Media/Library", execute=True, storage_router=router)
+
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(source.exists())
+            self.assertEqual(result["destination"], "smb://nas-1/Media/Library/Movie%20%282024%29")
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_apply_plan_supports_cross_backend_file_move(self, run_smbclient_mock) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source_root = tmp_path / "Downloads"
+            source_file = source_root / "Movie (2024).mkv"
+            source_root.mkdir()
+            source_file.write_bytes(b"movie")
+
+            plan = {
+                "version": 1,
+                "summary": {"move": 1, "delete": 0, "review": 0},
+                "actions": [
+                    {
+                        "type": "move",
+                        "source": str(source_file),
+                        "destination": "smb://nas-1/Media/Library/Movie%20%282024%29/Movie%20%282024%29.mkv",
+                        "reason": "canonicalize_best_media",
+                        "media_key": "movie:movie:2024",
+                        "root_path": str(source_root),
+                        "keep_path": "smb://nas-1/Media/Library/Movie%20%282024%29/Movie%20%282024%29.mkv",
+                        "details": {},
+                    }
+                ],
+            }
+
+            def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+                if command == "ls":
+                    return {"status": "success", "stdout": "Library|0|2026-04-04|10:00:00|D\n"}
+                if command == 'cd "Library/Movie (2024)";ls':
+                    return {"status": "success", "stdout": ""}
+                if command == 'cd "Library";mkdir "Movie (2024)"':
+                    return {"status": "success", "stdout": ""}
+                if command == 'cd "Library/Movie (2024)";put "{}" "Movie (2024).mkv"'.format(source_file.resolve()):
+                    return {"status": "success", "stdout": ""}
+                return {"status": "error", "message": f"unexpected command: {command}"}
+
+            run_smbclient_mock.side_effect = run_side_effect
+            router = OperationStorageRouter(
+                smb_connection_resolver=lambda connection_id: {
+                    "id": connection_id,
+                    "label": "NAS",
+                    "host": "nas.local",
+                    "username": "leo",
+                    "password": "secret",
+                }
+            )
+
+            result = apply_plan(plan, execute=True, prune_empty_dirs=True, storage_router=router)
+
+            self.assertEqual(result["summary"]["applied"], 1)
+            self.assertFalse(source_file.exists())
