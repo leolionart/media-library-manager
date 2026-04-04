@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .lan_connections import (
     build_cd_command,
@@ -55,16 +56,26 @@ class OperationStorageRouter:
         text = str(value or "").strip()
         if text.startswith("smb://"):
             parsed = urlparse(text)
-            connection_id = unquote(parsed.netloc).strip()
-            if not connection_id:
-                raise ValueError(f"invalid SMB path (missing connection id): {text}")
-            parts = [unquote(part) for part in parsed.path.split("/") if part]
-            if not parts:
-                raise ValueError(f"invalid SMB path (missing share name): {text}")
-            share_name = parts[0].strip().strip("/")
-            if not share_name:
-                raise ValueError(f"invalid SMB path (missing share name): {text}")
-            share_path = normalize_share_path("/".join(parts[1:])) or "/"
+            query = parse_qs(parsed.query)
+            query_connection_id = unquote(query.get("connection_id", [""])[0]).strip()
+
+            if query_connection_id:
+                connection_id = query_connection_id
+                share_name = unquote(parsed.netloc).strip().strip("/")
+                if not share_name:
+                    raise ValueError(f"invalid SMB path (missing share name): {text}")
+                share_path = normalize_share_path(unquote(parsed.path or "/")) or "/"
+            else:
+                connection_id = unquote(parsed.netloc).strip()
+                if not connection_id:
+                    raise ValueError(f"invalid SMB path (missing connection id): {text}")
+                parts = [unquote(part) for part in parsed.path.split("/") if part]
+                if not parts:
+                    raise ValueError(f"invalid SMB path (missing share name): {text}")
+                share_name = parts[0].strip().strip("/")
+                if not share_name:
+                    raise ValueError(f"invalid SMB path (missing share name): {text}")
+                share_path = normalize_share_path("/".join(parts[1:])) or "/"
             return StoragePath(
                 backend="smb",
                 raw=text,
@@ -200,6 +211,44 @@ class OperationStorageRouter:
             self._run_smb_command(path, command)
             current = next_path
 
+    def copy_file(self, source: StoragePath, destination: StoragePath) -> None:
+        if source.backend == "local" and destination.backend == "local":
+            assert source.local_path is not None and destination.local_path is not None
+            destination.local_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source.local_path, destination.local_path)
+            return
+
+        if source.backend == "local" and destination.backend == "smb":
+            assert source.local_path is not None
+            parent = self.parent(destination)
+            if parent is None:
+                raise ValueError("cannot upload to SMB share root")
+            self.mkdir_parents(parent)
+            command = (
+                f'{build_cd_command(parent.share_path)}'
+                f'put "{self._escape_command_value(str(source.local_path))}" "{self._escape_command_value(destination.name)}"'
+            )
+            self._run_smb_command(destination, command)
+            return
+
+        if source.backend == "smb" and destination.backend == "local":
+            assert destination.local_path is not None
+            destination.local_path.parent.mkdir(parents=True, exist_ok=True)
+            self._download_smb_file(source, destination.local_path)
+            return
+
+        if source.backend == "smb" and destination.backend == "smb":
+            with tempfile.NamedTemporaryFile(prefix="mlm-cross-backend-", delete=False) as handle:
+                temp_path = Path(handle.name)
+            try:
+                self._download_smb_file(source, temp_path)
+                self.copy_file(StoragePath(backend="local", raw=str(temp_path), local_path=temp_path), destination)
+            finally:
+                temp_path.unlink(missing_ok=True)
+            return
+
+        raise ValueError("unsupported storage backend copy")
+
     def rename(self, source: StoragePath, destination: StoragePath) -> None:
         if not self.same_backend_namespace(source, destination):
             raise ValueError("cross-backend move is not supported yet")
@@ -272,6 +321,18 @@ class OperationStorageRouter:
         command = f"{build_cd_command(path.share_path)}ls"
         result = self._run_smb_command(path, command)
         return parse_smbclient_entries(str(result.get("stdout") or ""))
+
+    def _download_smb_file(self, source: StoragePath, destination: Path) -> None:
+        if source.share_path in {"", "/"}:
+            raise ValueError("cannot download SMB share root")
+        parent = self.parent(source)
+        if parent is None:
+            raise ValueError("cannot download SMB share root")
+        command = (
+            f'{build_cd_command(parent.share_path)}'
+            f'get "{self._escape_command_value(source.name)}" "{self._escape_command_value(str(destination))}"'
+        )
+        self._run_smb_command(source, command)
 
     def _run_smb_command(self, path: StoragePath, command: str) -> dict[str, Any]:
         result = self._try_run_smb_command(path, command)

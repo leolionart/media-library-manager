@@ -187,3 +187,46 @@ class OperationTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "error")
         self.assertIn("cross-backend move", result["message"])
+
+    @patch("media_library_manager.operation_storage.run_smbclient_command")
+    def test_move_folder_contents_supports_smb_source_to_local_destination(self, run_smbclient_mock) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            destination = tmp_path / "Library" / "Movie (2024)"
+            destination.mkdir(parents=True)
+
+            expected_file = (destination / "Movie (2024).mkv").resolve()
+
+            def run_side_effect(connection, command: str, *, timeout: int):  # noqa: ARG001
+                if command == "ls":
+                    return {"status": "success", "stdout": "Incoming|0|2026-04-04|10:00:00|D\n"}
+                if command == 'cd "Incoming";ls':
+                    return {"status": "success", "stdout": "Movie (2024).mkv|100|2026-04-04|10:00:00|A\n"}
+                if command == f'cd "Incoming";get "Movie (2024).mkv" "{expected_file}"':
+                    expected_file.write_bytes(b"movie")
+                    return {"status": "success", "stdout": ""}
+                if command == 'recurse ON;prompt OFF;deltree "Incoming"':
+                    return {"status": "success", "stdout": ""}
+                return {"status": "error", "message": f"unexpected command: {command}"}
+
+            run_smbclient_mock.side_effect = run_side_effect
+            router = OperationStorageRouter(
+                smb_connection_resolver=lambda connection_id: {
+                    "id": connection_id,
+                    "label": "NAS",
+                    "host": "nas.local",
+                    "username": "leo",
+                    "password": "secret",
+                }
+            )
+
+            result = move_folder_contents(
+                "smb://nas-1/Media/Incoming",
+                destination,
+                execute=True,
+                storage_router=router,
+            )
+
+            self.assertEqual(result["status"], "applied")
+            self.assertTrue(expected_file.exists())
+            self.assertIn({"delete_dir": "smb://nas-1/Media/Incoming"}, result["operations"])

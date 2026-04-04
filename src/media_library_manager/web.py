@@ -29,6 +29,7 @@ from .lan_connections import (
 from .models import LibraryTargets, RootConfig
 from .network import discover_lan_devices
 from .operations import apply_plan, delete_folder, move_folder, move_folder_contents
+from .operation_storage import OperationStorageRouter
 from .planner import load_report, plan_actions
 from .scanner import scan_roots
 from .scanner_storage import StorageManagerScannerStorage
@@ -71,6 +72,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self._run_with_api_error_boundary(self._do_get)
+
+    def _operation_storage_router(self) -> OperationStorageRouter:
+        lan_connections = self.store.load_lan_connections()
+        return OperationStorageRouter(
+            smb_connection_resolver=lambda connection_id: resolve_smb_connection(lan_connections, connection_id)
+        )
 
     def _do_get(self) -> None:
         parsed = urlparse(self.path)
@@ -406,6 +413,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 str(payload.get("source") or ""),
                 str(payload.get("destination_parent") or ""),
                 execute=bool(payload.get("execute")),
+                storage_router=self._operation_storage_router(),
             )
             if result.get("status") == "error":
                 self.store.append_activity(
@@ -438,6 +446,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 str(payload.get("source") or ""),
                 destination,
                 execute=bool(payload.get("execute")),
+                storage_router=self._operation_storage_router(),
             )
             if result.get("status") == "error":
                 self.store.append_activity(
@@ -834,7 +843,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not path_value:
                 self._send_json({"error": "missing path query parameter"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            result = delete_folder(path_value, execute=execute)
+            result = delete_folder(path_value, execute=execute, storage_router=self._operation_storage_router())
             if result.get("status") == "error":
                 self.store.append_activity(
                     kind="folder",
@@ -1249,8 +1258,6 @@ def build_operations_folder_inventory(roots: list[RootConfig], lan_connections: 
         except Exception:
             continue
         for entry in entries:
-            if not entry.is_dir:
-                continue
             item_path = entry.path.to_uri() if entry.path.backend == "smb" else entry.path.normalized_path()
             try:
                 relative_path = entry.path.relative_to(root_storage_path)
@@ -1269,6 +1276,11 @@ def build_operations_folder_inventory(roots: list[RootConfig], lan_connections: 
                     "priority": root.priority,
                     "storage_uri": entry.path.to_uri(),
                     "root_storage_uri": root.storage_uri or str(root.path),
+                    "entry_type": entry.entry_type,
+                    "is_file": entry.is_file,
+                    "has_children": _storage_path_has_dir_children(manager, entry.path) if entry.is_dir else False,
+                    "size": entry.size,
+                    "modified_at": entry.modified_at,
                 }
             )
 
@@ -1298,8 +1310,6 @@ def build_operations_folder_children(
 
     items: list[dict[str, Any]] = []
     for entry in entries:
-        if not entry.is_dir:
-            continue
         try:
             relative_path = entry.path.relative_to(root_storage_path)
         except Exception:
@@ -1319,7 +1329,11 @@ def build_operations_folder_children(
                 "storage_uri": entry.path.to_uri(),
                 "root_storage_uri": root.storage_uri or str(root.path),
                 "is_root": False,
-                "has_children": _storage_path_has_dir_children(manager, entry.path),
+                "entry_type": entry.entry_type,
+                "is_file": entry.is_file,
+                "has_children": _storage_path_has_dir_children(manager, entry.path) if entry.is_dir else False,
+                "size": entry.size,
+                "modified_at": entry.modified_at,
             }
         )
 

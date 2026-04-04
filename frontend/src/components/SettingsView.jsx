@@ -35,6 +35,8 @@ import {
 } from "@ant-design/icons";
 import {
   addRoot,
+  browseLocalPath,
+  browseSmbPath,
   deleteLanConnection,
   discoverLanDevices,
   fetchSettingsState,
@@ -204,6 +206,92 @@ function ProviderSettingsCard({ provider, testResult, onSave, onTest, saving, te
   );
 }
 
+function PathBrowserModal({ state, onCancel, onBrowse, onUseCurrent }) {
+  return (
+    <Modal
+      open={state.open}
+      title={state.mode === "smb" ? "Choose SMB Folder" : "Choose Folder"}
+      okText="Use Current Folder"
+      okButtonProps={{ disabled: state.loading || !state.path }}
+      onCancel={onCancel}
+      onOk={onUseCurrent}
+      width={760}
+    >
+      <Flex vertical gap={16}>
+        {state.error ? <Alert type="error" showIcon message={state.error} /> : null}
+        <Flex justify="space-between" align="center" gap={12} wrap>
+          <Text type="secondary" className="mono">
+            {state.mode === "smb"
+              ? `${state.shareName ? `${state.shareName}:` : ""}${state.path || "/"}`
+              : state.path || "/"}
+          </Text>
+          {state.parent ? (
+            <Button onClick={() => onBrowse({ path: state.parent, shareName: state.shareName })}>Up One Level</Button>
+          ) : null}
+        </Flex>
+
+        {state.breadcrumbs?.length ? (
+          <Space size={[8, 8]} wrap>
+            {state.breadcrumbs.map((crumb) => (
+              <Button
+                key={`${crumb.share_name || ""}:${crumb.path || "/"}`}
+                size="small"
+                onClick={() => onBrowse({ path: crumb.path || "/", shareName: crumb.share_name || state.shareName })}
+              >
+                {crumb.name || "/"}
+              </Button>
+            ))}
+          </Space>
+        ) : null}
+
+        {state.mode === "local" && state.favorites?.length ? (
+          <Space size={[8, 8]} wrap>
+            {state.favorites.map((favorite) => (
+              <Button key={favorite.mount_point} size="small" onClick={() => onBrowse({ path: favorite.mount_point })}>
+                {favorite.label}
+              </Button>
+            ))}
+          </Space>
+        ) : null}
+
+        <List
+          bordered
+          loading={state.loading}
+          dataSource={state.entries || []}
+          locale={{ emptyText: <Empty description="No folders available here." /> }}
+          renderItem={(entry) => (
+            <List.Item
+              actions={[
+                <Button
+                  key="open"
+                  onClick={() =>
+                    onBrowse({
+                      path: entry.path || "/",
+                      shareName: entry.share_name || state.shareName,
+                      scope: entry.type === "share" ? "" : undefined,
+                    })
+                  }
+                >
+                  Open
+                </Button>,
+              ]}
+            >
+              <List.Item.Meta
+                title={entry.name}
+                description={
+                  state.mode === "smb"
+                    ? `${entry.type === "share" ? "Share" : "Folder"}${entry.comment ? ` • ${entry.comment}` : ""}`
+                    : entry.path
+                }
+              />
+            </List.Item>
+          )}
+        />
+      </Flex>
+    </Modal>
+  );
+}
+
 export function SettingsView() {
   const { message } = AntApp.useApp();
   const [loading, setLoading] = useState(true);
@@ -222,6 +310,19 @@ export function SettingsView() {
   const [savingConnection, setSavingConnection] = useState(false);
   const [deletingConnectionId, setDeletingConnectionId] = useState("");
   const [removingRootPath, setRemovingRootPath] = useState("");
+  const [pathBrowser, setPathBrowser] = useState({
+    open: false,
+    mode: "local",
+    loading: false,
+    error: "",
+    path: "",
+    parent: null,
+    breadcrumbs: [],
+    entries: [],
+    favorites: [],
+    connectionId: "",
+    shareName: "",
+  });
   const [rootForm] = Form.useForm();
   const [connectionForm] = Form.useForm();
   const [integrationsForm] = Form.useForm();
@@ -250,6 +351,63 @@ export function SettingsView() {
     provider,
     testResult: integrationTestResults?.[provider] || null
   }));
+
+  const loadLocalPathBrowser = async (path) => {
+    setPathBrowser((current) => ({ ...current, open: true, mode: "local", loading: true, error: "" }));
+    try {
+      const result = await browseLocalPath(path);
+      setPathBrowser((current) => ({
+        ...current,
+        open: true,
+        mode: "local",
+        loading: false,
+        error: "",
+        path: result.path || path || "/",
+        parent: result.parent || null,
+        breadcrumbs: result.breadcrumbs || [],
+        entries: (result.entries || []).filter((entry) => entry.type === "directory"),
+        favorites: result.favorites || [],
+      }));
+    } catch (error) {
+      setPathBrowser((current) => ({ ...current, open: true, mode: "local", loading: false, error: error.message }));
+    }
+  };
+
+  const loadSmbPathBrowser = async ({ connectionId, shareName, path, scope }) => {
+    setPathBrowser((current) => ({
+      ...current,
+      open: true,
+      mode: "smb",
+      loading: true,
+      error: "",
+      connectionId,
+      shareName: shareName || "",
+    }));
+    try {
+      const result = await browseSmbPath({
+        connectionId,
+        shareName,
+        path,
+        scope: scope || (!shareName ? "host" : ""),
+      });
+      setPathBrowser((current) => ({
+        ...current,
+        open: true,
+        mode: "smb",
+        loading: false,
+        error: "",
+        connectionId,
+        shareName: result.connection?.share_name || shareName || "",
+        path: result.path || "/",
+        parent: result.parent || null,
+        breadcrumbs: result.breadcrumbs || [],
+        entries: result.entries || [],
+        favorites: [],
+      }));
+    } catch (error) {
+      setPathBrowser((current) => ({ ...current, open: true, mode: "smb", loading: false, error: error.message }));
+    }
+  };
 
   const rootColumns = [
     {
@@ -855,10 +1013,40 @@ export function SettingsView() {
                   </Form.Item>
                 </>
               ) : (
-                <Form.Item name="path" label="Filesystem Path" rules={[{ required: true }]}>
-                  <Input placeholder="/mnt/library/incoming" />
+                <Form.Item label="Filesystem Path" required>
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Form.Item name="path" noStyle rules={[{ required: true }]}>
+                      <Input placeholder="/mnt/library/incoming" />
+                    </Form.Item>
+                    <Button onClick={() => loadLocalPathBrowser(rootForm.getFieldValue("path"))}>Choose Folder</Button>
+                  </Space.Compact>
                 </Form.Item>
               )
+            }
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.mode !== next.mode || prev.connection_id !== next.connection_id}>
+            {({ getFieldValue }) =>
+              getFieldValue("mode") === "smb" ? (
+                <Form.Item label="Folder Picker">
+                  <Button
+                    onClick={() => {
+                      const connectionId = getFieldValue("connection_id");
+                      if (!connectionId) {
+                        message.error("Choose an SMB connection first.");
+                        return;
+                      }
+                      loadSmbPathBrowser({
+                        connectionId,
+                        shareName: getFieldValue("share_name"),
+                        path: getFieldValue("share_path") || "/",
+                      });
+                    }}
+                  >
+                    Choose Folder
+                  </Button>
+                </Form.Item>
+              ) : null
             }
           </Form.Item>
 
@@ -975,6 +1163,60 @@ export function SettingsView() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <PathBrowserModal
+        state={pathBrowser}
+        onCancel={() =>
+          setPathBrowser({
+            open: false,
+            mode: "local",
+            loading: false,
+            error: "",
+            path: "",
+            parent: null,
+            breadcrumbs: [],
+            entries: [],
+            favorites: [],
+            connectionId: "",
+            shareName: "",
+          })
+        }
+        onBrowse={({ path, shareName, scope }) => {
+          if (pathBrowser.mode === "smb") {
+            return loadSmbPathBrowser({
+              connectionId: pathBrowser.connectionId,
+              shareName,
+              path,
+              scope,
+            });
+          }
+          return loadLocalPathBrowser(path);
+        }}
+        onUseCurrent={() => {
+          if (pathBrowser.mode === "smb") {
+            rootForm.setFieldsValue({
+              connection_id: pathBrowser.connectionId,
+              share_name: pathBrowser.shareName || rootForm.getFieldValue("share_name"),
+              share_path: pathBrowser.path || "/",
+            });
+          } else {
+            rootForm.setFieldsValue({ path: pathBrowser.path });
+          }
+          setPathBrowser({
+            open: false,
+            mode: "local",
+            loading: false,
+            error: "",
+            path: "",
+            parent: null,
+            breadcrumbs: [],
+            entries: [],
+            favorites: [],
+            connectionId: "",
+            shareName: "",
+          });
+        }}
+      />
     </Flex>
   );
 }

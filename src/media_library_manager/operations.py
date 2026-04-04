@@ -299,15 +299,19 @@ def move_folder_contents(
             return {"status": "error", "message": f"source does not exist: {source_value}"}
         if not router.is_dir(source_ref):
             return {"status": "error", "message": f"source is not a directory: {source_value}"}
-        if not router.same_backend_namespace(source_ref, destination_ref):
-            return {"status": "error", "message": "cross-backend move is not supported yet"}
         if not router.exists(destination_ref):
             return {"status": "error", "message": f"destination does not exist: {destination_value}"}
         if not router.is_dir(destination_ref):
             return {"status": "error", "message": f"destination is not a directory: {destination_value}"}
         if router.is_relative_to(destination_ref, source_ref):
             return {"status": "error", "message": "destination cannot be inside the source folder"}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
 
+    if not router.same_backend_namespace(source_ref, destination_ref):
+        return _move_folder_contents_cross_namespace(router, source_ref, destination_ref, execute=execute)
+
+    try:
         items = router.listdir(source_ref)
         operations = [{"move": router.stringify(item), "destination": router.stringify(router.join(destination_ref, item.name))} for item in items]
         for item in items:
@@ -340,6 +344,82 @@ def move_folder_contents(
         "destination": destination_value,
         "operations": operations,
     }
+
+
+def _move_folder_contents_cross_namespace(
+    router: OperationStorageRouter,
+    source_ref: Any,
+    destination_ref: Any,
+    *,
+    execute: bool,
+) -> dict[str, Any]:
+    source_value = router.stringify(source_ref)
+    destination_value = router.stringify(destination_ref)
+
+    try:
+        transfer_items = _collect_cross_namespace_transfer_items(router, source_ref, destination_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    operations = [item["operation"] for item in transfer_items]
+    operations.append({"delete_dir": source_value})
+    if not execute:
+        return {
+            "status": "dry-run",
+            "type": "move-folder-contents",
+            "source": source_value,
+            "destination": destination_value,
+            "operations": operations,
+        }
+
+    try:
+        for item in transfer_items:
+            if item["kind"] == "dir":
+                router.mkdir_parents(item["destination"])
+            else:
+                parent = router.parent(item["destination"])
+                if parent is not None:
+                    router.mkdir_parents(parent)
+                router.copy_file(item["source"], item["destination"])
+        router.delete_tree(source_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    return {
+        "status": "applied",
+        "type": "move-folder-contents",
+        "source": source_value,
+        "destination": destination_value,
+        "operations": operations,
+    }
+
+
+def _collect_cross_namespace_transfer_items(router: OperationStorageRouter, source_ref: Any, destination_ref: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for child in router.listdir(source_ref):
+        destination_child = router.join(destination_ref, child.name)
+        if router.exists(destination_child):
+            raise ValueError(f"destination entry exists: {router.stringify(destination_child)}")
+        if router.is_dir(child):
+            items.append(
+                {
+                    "kind": "dir",
+                    "source": child,
+                    "destination": destination_child,
+                    "operation": {"mkdir": router.stringify(destination_child)},
+                }
+            )
+            items.extend(_collect_cross_namespace_transfer_items(router, child, destination_child))
+            continue
+        items.append(
+            {
+                "kind": "file",
+                "source": child,
+                "destination": destination_child,
+                "operation": {"copy": router.stringify(child), "destination": router.stringify(destination_child)},
+            }
+        )
+    return items
 
 
 def delete_folder(path: str | Path, *, execute: bool = False, storage_router: OperationStorageRouter | None = None) -> dict[str, Any]:

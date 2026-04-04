@@ -36,19 +36,18 @@ export async function request(url, options = {}) {
 }
 
 export async function fetchOperationsData() {
-  const [state, process, mounts, folders] = await Promise.all([
+  const [state, process, mounts] = await Promise.all([
     request("/api/state"),
     request("/api/process"),
-    request("/api/system/mounts"),
-    request("/api/operations/folders")
+    request("/api/system/mounts")
   ]);
 
   return {
     state,
     process: process.current_job || null,
     mounts: mounts.mounts || [],
-    operationsFolders: folders.items || [],
-    operationsSummary: folders.summary || { items: 0, roots: 0 }
+    operationsFolders: [],
+    operationsSummary: { items: 0, roots: state?.roots?.length || 0 }
   };
 }
 
@@ -66,6 +65,20 @@ export function fetchProviderItems(provider) {
 
 export function fetchSettingsState() {
   return request("/api/state");
+}
+
+export function browseLocalPath(path) {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  return request(`/api/browse${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+export function browseSmbPath({ connectionId, shareName, path, scope }) {
+  const params = new URLSearchParams({ connection_id: connectionId });
+  if (shareName) params.set("share_name", shareName);
+  if (path && path !== "/") params.set("path", path);
+  if (scope) params.set("scope", scope);
+  return request(`/api/smb/browse?${params.toString()}`);
 }
 
 export function discoverLanDevices() {

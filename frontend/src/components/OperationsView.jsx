@@ -23,7 +23,9 @@ import {
   Typography,
 } from "antd";
 import {
+  FileOutlined,
   FolderOpenOutlined,
+  LoadingOutlined,
   MoreOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -98,6 +100,25 @@ function normalizeSearchText(value) {
     .trim();
 }
 
+function compactDisplayPath(record) {
+  if (record.is_root) {
+    return record.path;
+  }
+
+  const display = String(record.display_path || record.path || "");
+  const rootLabel = String(record.root_label || "");
+
+  if (!display) {
+    return "-";
+  }
+
+  if (display === record.label) {
+    return rootLabel ? `${rootLabel} / ${record.label}` : record.label;
+  }
+
+  return display;
+}
+
 function scoreProviderItem(item, query) {
   const normalizedQuery = normalizeSearchText(query);
   const normalizedTitle = normalizeSearchText(item.title);
@@ -113,7 +134,6 @@ function scoreProviderItem(item, query) {
 }
 
 function buildFolderTableData(roots, items) {
-  const rootsByKey = new Map();
   const rootRows = (roots || [])
     .map((root) => {
       const rootKey = root.storage_uri || root.path;
@@ -133,8 +153,9 @@ function buildFolderTableData(roots, items) {
         is_root: true,
         has_children: true,
         children_loaded: false,
+        is_loading: false,
+        children: [],
       };
-      rootsByKey.set(rootKey, row);
       return row;
     })
     .sort((left, right) => String(left.label).localeCompare(String(right.label)));
@@ -147,8 +168,11 @@ function buildFolderTableData(roots, items) {
       ...item,
       key: item.storage_uri || item.path,
       is_root: false,
-      has_children: true,
-      children_loaded: false,
+      has_children: Boolean(item.has_children),
+      children_loaded: !item.has_children,
+      is_file: Boolean(item.is_file),
+      is_loading: false,
+      children: item.has_children ? [] : undefined,
     });
   });
 
@@ -160,16 +184,16 @@ function buildFolderTableData(roots, items) {
     );
     return {
       ...root,
-      has_children: children.length > 0,
+      has_children: true,
       children_loaded: children.length > 0,
-      children: children.length ? children : undefined,
+      children: children.length ? children : [],
     };
   });
 }
 
 function buildDuplicateScanSelection(records) {
   return (records || [])
-    .filter((record) => record && !record.is_root)
+    .filter((record) => record && !record.is_root && !record.is_file)
     .map((record) => ({
       label: record.label,
       path: record.path,
@@ -192,10 +216,21 @@ function replaceNodeChildren(rows, targetKey, children) {
         children: children.length ? children : undefined,
         has_children: children.length > 0,
         children_loaded: true,
+        is_loading: false,
       };
     }
     if (!row.children?.length) return row;
     return { ...row, children: replaceNodeChildren(row.children, targetKey, children) };
+  });
+}
+
+function updateNode(rows, targetKey, updater) {
+  return rows.map((row) => {
+    if (row.key === targetKey) {
+      return updater(row);
+    }
+    if (!row.children?.length) return row;
+    return { ...row, children: updateNode(row.children, targetKey, updater) };
   });
 }
 
@@ -424,9 +459,17 @@ export function OperationsView() {
     () => selectedNodeKeys.map((key) => nodeMap.get(key)).filter(Boolean),
     [nodeMap, selectedNodeKeys]
   );
-  const selectedFolders = useMemo(() => selectedRecords.filter((record) => !record.is_root), [selectedRecords]);
+  const selectedFolders = useMemo(
+    () => selectedRecords.filter((record) => !record.is_root && !record.is_file),
+    [selectedRecords]
+  );
+  const selectedFiles = useMemo(
+    () => selectedRecords.filter((record) => !record.is_root && record.is_file),
+    [selectedRecords]
+  );
   const selectedRoots = useMemo(() => selectedRecords.filter((record) => record.is_root), [selectedRecords]);
-  const selectedFolder = selectedFolders.length === 1 && selectedRoots.length === 0 ? selectedFolders[0] : null;
+  const selectedFolder =
+    selectedFolders.length === 1 && selectedRoots.length === 0 && selectedFiles.length === 0 ? selectedFolders[0] : null;
   const canMoveToRadarr = Boolean(payload.integrations?.radarr?.enabled && selectedFolder);
   const canMoveToSonarr = Boolean(payload.integrations?.sonarr?.enabled && selectedFolder);
   const selectedPaths = selectedFolders.map((record) => record.path);
@@ -434,7 +477,7 @@ export function OperationsView() {
   const duplicateScanSelection = useMemo(() => buildDuplicateScanSelection(selectedFolders), [selectedFolders]);
   const treeSummary = {
     roots: folderSummary.roots || payload.roots?.length || 0,
-    nodes: folderSummary.items || folderItems.length || 0,
+    nodes: folderItems.length || 0,
     max_depth: "Unlimited",
   };
 
@@ -492,11 +535,23 @@ export function OperationsView() {
   };
 
   const loadBranch = async (record) => {
-    if (!record?.storage_uri || !record?.root_storage_uri || record.children_loaded || record.has_children === false) {
+    if (
+      !record?.storage_uri ||
+      !record?.root_storage_uri ||
+      record.children_loaded ||
+      record.has_children === false ||
+      record.is_file
+    ) {
       return;
     }
 
     setLoadingBranchKeys((current) => (current.includes(record.key) ? current : [...current, record.key]));
+    setFolderTreeRows((current) =>
+      updateNode(current, record.key, (node) => ({
+        ...node,
+        is_loading: true,
+      }))
+    );
 
     try {
       const result = await fetchOperationsFolderChildren({
@@ -506,10 +561,19 @@ export function OperationsView() {
       const children = (result.items || []).map((item) => ({
         ...item,
         key: item.storage_uri || item.path,
-        children_loaded: false,
+        children_loaded: !item.has_children,
+        is_file: Boolean(item.is_file),
+        is_loading: false,
+        children: item.has_children ? [] : undefined,
       }));
       setFolderTreeRows((current) => replaceNodeChildren(current, record.key, children));
     } catch (error) {
+      setFolderTreeRows((current) =>
+        updateNode(current, record.key, (node) => ({
+          ...node,
+          is_loading: false,
+        }))
+      );
       message.error(error.message);
     } finally {
       setLoadingBranchKeys((current) => current.filter((key) => key !== record.key));
@@ -591,15 +655,15 @@ export function OperationsView() {
       trigger={["click"]}
       menu={{
         items: [
-          { key: "move-radarr", label: "Move To Radarr...", disabled: record.is_root || !payload.integrations?.radarr?.enabled },
-          { key: "move-sonarr", label: "Move To Sonarr...", disabled: record.is_root || !payload.integrations?.sonarr?.enabled },
+          { key: "move-radarr", label: "Move To Radarr...", disabled: record.is_root || record.is_file || !payload.integrations?.radarr?.enabled },
+          { key: "move-sonarr", label: "Move To Sonarr...", disabled: record.is_root || record.is_file || !payload.integrations?.sonarr?.enabled },
           { type: "divider" },
           { key: "remove-root", label: "Remove From App", disabled: !record.is_root },
-          { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: record.is_root },
+          { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: record.is_root || record.is_file },
         ],
         onClick: async ({ domEvent, key }) => {
           domEvent.stopPropagation();
-          setSelectedNodeKeys(record.is_root ? [] : [record.key]);
+          setSelectedNodeKeys(record.is_root || record.is_file ? [] : [record.key]);
           if (key === "move-radarr" || key === "move-sonarr") {
             await openProviderModal(key === "move-radarr" ? "radarr" : "sonarr", record);
             return;
@@ -632,6 +696,8 @@ export function OperationsView() {
       render: (_, record) => (
         <Flex vertical gap={6} style={{ minWidth: 0 }}>
           <Space size={[4, 4]} wrap>
+            {record.is_loading ? <LoadingOutlined spin /> : null}
+            {record.is_file ? <FileOutlined /> : null}
             <Text strong>{record.label}</Text>
             {record.priority ? (
               <Tag color="gold" bordered={false}>
@@ -640,12 +706,8 @@ export function OperationsView() {
             ) : null}
             {record.kind ? <Tag>{record.kind}</Tag> : null}
             {record.is_root ? <Tag color="blue">Root</Tag> : null}
+            {record.is_file ? <Tag>File</Tag> : null}
           </Space>
-          {!record.is_root ? (
-            <Text type="secondary" className="mono">
-              {record.display_path || record.path}
-            </Text>
-          ) : null}
         </Flex>
       ),
     },
@@ -656,15 +718,9 @@ export function OperationsView() {
       width: "30%",
       render: (_, record) => (
         <Text type="secondary" className="mono">
-          {record.path}
+          {compactDisplayPath(record)}
         </Text>
       ),
-    },
-    {
-      title: "Source",
-      key: "source",
-      width: "16%",
-      render: (_, record) => <Text>{record.connection_label || record.root_label || "Direct path"}</Text>,
     },
     {
       title: "",
@@ -769,6 +825,7 @@ export function OperationsView() {
                     <Button
                       icon={<ReloadOutlined />}
                       loading={actionLoading === "refresh-folders"}
+                      disabled={loadingBranchKeys.length > 0}
                       onClick={handleRefreshFolders}
                     >
                       Refresh
@@ -823,7 +880,7 @@ export function OperationsView() {
                     selectedRowKeys: selectedNodeKeys,
                     checkStrictly: true,
                     onChange: (keys) => setSelectedNodeKeys(keys),
-                    getCheckboxProps: (record) => ({ disabled: record.is_root }),
+                    getCheckboxProps: (record) => ({ disabled: record.is_root || record.is_file }),
                   }}
                   locale={{
                     emptyText: search
