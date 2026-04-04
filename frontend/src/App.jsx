@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Layout, Menu, Typography } from "antd";
-import { AppstoreOutlined, SettingOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, DashboardOutlined, SettingOutlined } from "@ant-design/icons";
+import { OverviewView } from "./components/OverviewView";
 import { OperationsView } from "./components/OperationsView";
 import { SettingsView } from "./components/SettingsView";
 
@@ -8,6 +9,11 @@ const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
 
 const VIEW_META = {
+  overview: {
+    title: "Overview",
+    description:
+      "Monitor library health, provider status, current processing, and recent activity from a single dashboard."
+  },
   operations: {
     title: "Operations",
     description:
@@ -21,7 +27,7 @@ const VIEW_META = {
 };
 
 export function DashboardApp() {
-  const [view, setView] = useState("operations");
+  const [view, setView] = useState("overview");
   const meta = useMemo(() => VIEW_META[view] || VIEW_META.operations, [view]);
 
   return (
@@ -39,6 +45,7 @@ export function DashboardApp() {
           theme="dark"
           selectedKeys={[view]}
           items={[
+            { key: "overview", icon: <DashboardOutlined />, label: "Overview" },
             { key: "operations", icon: <AppstoreOutlined />, label: "Operations" },
             { key: "settings", icon: <SettingOutlined />, label: "Settings" }
           ]}
@@ -60,7 +67,7 @@ export function DashboardApp() {
         </Header>
 
         <Content className="content-react">
-          {view === "operations" ? <OperationsView /> : <SettingsView />}
+          {view === "overview" ? <OverviewView /> : view === "operations" ? <OperationsView /> : <SettingsView />}
         </Content>
       </Layout>
     </Layout>

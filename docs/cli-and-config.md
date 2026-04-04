@@ -1,91 +1,22 @@
 # CLI And Configuration
 
-Tài liệu này giải thích cách CLI hiện tại hoạt động và cách dự án nạp cấu hình roots/targets.
-
 ## 1. Entry point
 
-Project publish command:
+CLI entry point:
 
 ```bash
 media-library-manager
 ```
 
-CLI được khai báo trong `pyproject.toml` và trỏ vào:
+Code nằm ở:
 
-```python
-media_library_manager.cli:main
-```
+- [cli.py](/Volumes/DATA/Coding Projects/media-library-manager/src/media_library_manager/cli.py)
 
-## 2. Các lệnh hiện có
+## 2. Commands hiện có
 
 ### `scan`
 
-Mục đích:
-
-- quét các root
-- tạo scan report JSON
-
-Tham số chính:
-
-- `--output`
-- `--config`
-- `--root`
-- `--priority-root`
-
-### `plan`
-
-Mục đích:
-
-- đọc report có sẵn hoặc tự scan lại
-- build action plan
-
-Tham số chính:
-
-- `--report`
-- `--output`
-- `--movie-root`
-- `--series-root`
-- `--review-root`
-- `--delete-lower-quality`
-- `--config`
-- `--root`
-- `--priority-root`
-
-### `apply`
-
-Mục đích:
-
-- đọc plan JSON
-- chạy dry-run hoặc execute
-
-Tham số chính:
-
-- `--plan`
-- `--execute`
-- `--prune-empty-dirs`
-
-### `serve`
-
-Mục đích:
-
-- chạy dashboard HTTP cục bộ
-
-Tham số chính:
-
-- `--host`
-- `--port`
-- `--state-file`
-
-Lưu ý:
-
-- `serve` mặc định port `8765`
-- `run-dashboard.sh` mặc định port `9988`
-
-## 3. Hai cách khai báo root
-
-CLI hiện hỗ trợ khai báo root theo 2 cách.
-
-### `--root`
+Dùng để scan roots và tạo report JSON.
 
 Ví dụ:
 
@@ -96,36 +27,85 @@ media-library-manager scan \
   --output ./report.json
 ```
 
-Mỗi root kiểu này sẽ được gán:
+### `plan`
 
-- `label = tên thư mục cuối`
-- `priority = 50`
-- `kind = mixed`
-
-### `--priority-root`
+Build action plan từ report hoặc từ roots/config.
 
 Ví dụ:
 
 ```bash
-media-library-manager scan \
-  --priority-root 100:/Volumes/Media/Movies \
-  --priority-root 60:/Volumes/Archive/Movies \
-  --output ./report.json
+media-library-manager plan \
+  --report ./report.json \
+  --output ./plan.json
 ```
 
-Format là:
+### `apply`
+
+Apply plan theo dry-run hoặc execute.
+
+Ví dụ:
+
+```bash
+media-library-manager apply \
+  --plan ./plan.json \
+  --execute \
+  --prune-empty-dirs
+```
+
+### `serve`
+
+Chạy dashboard server.
+
+Ví dụ:
+
+```bash
+media-library-manager serve \
+  --host 127.0.0.1 \
+  --port 8766 \
+  --state-file ./data/app-state.json
+```
+
+## 3. Config roots
+
+CLI hỗ trợ:
+
+- `--root`
+- `--priority-root`
+- `--config`
+
+### `--root`
+
+Format:
+
+```text
+--root /path/to/root
+```
+
+Default:
+
+- `priority = 50`
+- `kind = mixed`
+- `label = tên thư mục cuối`
+
+### `--priority-root`
+
+Format:
 
 ```text
 PRIORITY:PATH
 ```
 
-Kiểu này cho phép gán priority rõ ràng cho từng root.
+Ví dụ:
 
-## 4. Nạp cấu hình từ file TOML
+```bash
+--priority-root 100:/Volumes/Media/Movies
+```
 
-Project có thể đọc file TOML bằng `load_config()`.
+### `--config`
 
-Schema hiện tại:
+Config TOML vẫn được hỗ trợ.
+
+Ví dụ:
 
 ```toml
 [[roots]]
@@ -140,66 +120,35 @@ series_root = "/Volumes/MediaPool/Series"
 review_root = "/Volumes/MediaPool/_review"
 ```
 
-Quy tắc default:
+## 4. Vai trò hiện tại của CLI
 
-- `label` mặc định là tên thư mục cuối
-- `priority` mặc định là `50`
-- `kind` mặc định là `mixed`
+CLI vẫn hữu ích cho:
 
-## 5. Cách CLI resolve roots và targets
+- batch scan / plan / apply
+- automation
+- server bootstrap bằng `serve`
 
-Hàm `resolve_roots_and_targets()` hiện hoạt động như sau:
+Nhưng hướng phát triển chính hiện tại nằm ở dashboard runtime và SMB-native API.
 
-1. nếu có `--config` thì load roots và targets từ TOML
-2. nếu có `--root` hoặc `--priority-root` thì tạo roots từ CLI
-3. nếu CLI có roots thì dùng roots từ CLI
-4. nếu CLI không có roots thì fallback về roots từ config
-5. nếu cuối cùng không có root nào thì exit với lỗi
+## 5. Local development
 
-Điều này có nghĩa:
+Backend local:
 
-- CLI roots override config roots
-- config targets vẫn có thể được dùng làm base
-- `plan` sau đó merge target từ config với target override truyền qua CLI
+```bash
+HOST=127.0.0.1 PORT=8766 ./run-dashboard.sh
+```
 
-## 6. Merge targets trong lệnh `plan`
+Frontend local:
 
-`plan` dùng logic:
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-- target truyền qua CLI sẽ override target từ config
-- target nào không truyền thì giữ giá trị từ config
+Build frontend:
 
-Điều này hữu ích khi:
-
-- dùng một file TOML cố định
-- nhưng tạm thời muốn override một target cho một lần chạy
-
-## 7. Output của từng lệnh
-
-### `scan`
-
-Ghi ra:
-
-- file report JSON
-- summary trên stdout
-
-### `plan`
-
-Ghi ra:
-
-- file plan JSON
-- summary trên stdout
-
-### `apply`
-
-Không ghi file riêng qua CLI, nhưng in:
-
-- summary trên stdout
-
-Trong dashboard mode, kết quả apply còn được lưu vào state store.
-
-## 8. Một số hành vi cần lưu ý
-
-- `plan` có thể chạy mà không cần `scan` trước nếu bạn truyền roots/config thay vì `--report`
-- `apply` không tự validate lại logic scan/planner, nó tin rằng `plan.json` đã đúng
-- CLI hiện không có command riêng để test integrations; phần này nằm ở dashboard API
+```bash
+cd frontend
+npm run build
+```

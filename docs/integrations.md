@@ -1,21 +1,18 @@
 # Radarr And Sonarr Integrations
 
-Tài liệu này mô tả logic tích hợp hiện tại với Radarr và Sonarr.
+## 1. Vai trò hiện tại
 
-## 1. Vai trò trong product mới
+Provider layer hiện dùng cho:
 
-Trong product shape hiện tại:
+- test kết nối
+- lấy danh sách movie hoặc series
+- move vào provider-managed path
+- refresh provider item
+- sync sau apply
 
-- `Settings` giữ cấu hình provider
-- `Operations` mới là nơi chạy duplicate workflow
+Nó không điều khiển scan engine.
 
-Điều này có nghĩa:
-
-- integrations không lẫn vào folder onboarding
-- integrations không quyết định duplicate logic
-- integrations chỉ bổ trợ cho path sync sau apply hoặc sync thủ công
-
-## 2. Cấu hình hiện có
+## 2. Config hiện có
 
 Mỗi provider có:
 
@@ -24,63 +21,61 @@ Mỗi provider có:
 - `api_key`
 - `root_folder_path`
 
-`sync_options` có:
+Sync options:
 
 - `sync_after_apply`
 - `rescan_after_update`
 - `create_root_folder_if_missing`
 
-## 3. Test kết nối
+## 3. Reverse proxy / Cloudflare note
 
-Dashboard gọi `POST /api/integrations/test`.
+Provider client hiện gửi `User-Agent` browser-like ở backend.
 
-Kết quả:
+Lý do:
 
-- `disabled` nếu provider tắt
-- `success` nếu gọi được `/api/v3/system/status`
-- `error` nếu lỗi network, config hoặc HTTP
+- một số deployment qua reverse proxy hoặc Cloudflare chặn request API nếu user-agent trông như script mặc định
 
-## 4. Thời điểm sync chạy
+Điểm này đã được xác thực với:
 
-### Tự động
+- `https://movie.naai.studio/`
+- `https://tv.naai.studio/`
 
-Sau `apply` với `execute=true`, dashboard gọi `sync_after_apply()`.
+## 4. Provider APIs đang dùng
 
-### Thủ công
+### `GET /api/integrations/radarr/items`
 
-Người dùng có thể gọi `POST /api/sync` từ `Settings`.
+Trả list movie hiện có.
 
-## 5. Mối quan hệ với manual folder move
+### `GET /api/integrations/sonarr/items`
 
-Manual folder move là một luồng độc lập trong `Operations`.
+Trả list series hiện có.
 
-Hiện tại code có 2 nhánh:
+### `POST /api/integrations/test`
 
-- `POST /api/folders/move`
-  move cả folder từ A sang destination parent B
-  nhánh này không tự sync provider
+Test connectivity.
 
-- `POST /api/folders/move-to-provider`
-  move nội dung của source folder vào path đang được provider quản lý
-  nhánh này sẽ refresh provider sau khi move execute thành công
+### `POST /api/integrations`
 
-Điều này phản ánh đúng use case:
+Save settings.
 
-- nếu người dùng move vào đúng folder movie/series mà Radarr/Sonarr đang track
-- provider path không đổi
-- app chỉ cần refresh hoặc rescan để provider nhìn thấy nội dung mới
+### `POST /api/sync`
 
-## 6. Khi nào app update path, khi nào chỉ refresh
+Manual sync.
 
-### Chỉ refresh
+## 5. Move into provider path
 
-Nếu destination là path đang được provider quản lý sẵn:
+Luồng:
 
-- app move nội dung vào folder đó
-- app không đổi `movie.path` hoặc `series.path`
-- app chỉ gọi refresh hoặc rescan
+1. user chọn folder trong `Operations`
+2. frontend load item list từ provider
+3. user chọn movie hoặc series đích
+4. backend gọi `move_folder_contents()`
+5. backend refresh provider item tương ứng
 
-### Update path
+## 6. Sync after apply
 
-Luồng update path hiện vẫn thuộc duplicate workflow `apply + sync_after_apply()`.
-Khi action plan đã move media sang path mới, integration layer có thể cập nhật `path` và `rootFolderPath` trên provider.
+Khi `apply` chạy với `execute=true`:
+
+- backend có thể gọi `sync_after_apply()`
+- sync result được lưu vào state
+- UI có thể xem lại sync status từ state

@@ -1,67 +1,38 @@
 # Dashboard And API
 
-Tài liệu này mô tả dashboard 2 page và các API nội bộ mà frontend đang dùng.
+## 1. Dashboard hiện tại
 
-## 1. Dashboard layout
+UI hiện có 3 view:
 
-Dashboard hiện chỉ có 2 page:
-
+- `Overview`
 - `Operations`
 - `Settings`
 
-### Operations
+Static assets được backend serve từ:
 
-Hiển thị:
+- [src/media_library_manager/static/index.html](/Volumes/DATA/Coding Projects/media-library-manager/src/media_library_manager/static/index.html)
+- [src/media_library_manager/static/app.js](/Volumes/DATA/Coding Projects/media-library-manager/src/media_library_manager/static/app.js)
+- [src/media_library_manager/static/styles.css](/Volumes/DATA/Coding Projects/media-library-manager/src/media_library_manager/static/styles.css)
 
-- folder list là workspace chính
-- action dropdown trên từng connected folder row
-- manual folder move form
-- connected folders overview
-- duplicate workflow controls
-- duplicate results
-- action plan
-- apply result
-- process logs
-- recent activity
+Source frontend:
 
-### Settings
+- [frontend/](/Volumes/DATA/Coding Projects/media-library-manager/frontend)
 
-Hiển thị:
-
-- connected folders list
-- add-folder modal
-- SMB profile form và danh sách profile
-- Radarr form
-- Sonarr form
-- integration options
-- integration status
-
-## 2. Static assets
-
-Dashboard dùng:
-
-- `static/index.html`
-- `static/styles.css`
-- `static/app.js`
-- `static/favicon.svg`
-
-## 3. API state và process
+## 2. State và process APIs
 
 ### `GET /api/state`
 
-Trả về payload tổng hợp:
+Payload tổng hợp cho frontend:
 
 - `roots`
-- `targets`
 - `integrations`
 - `lan_connections`
+- `activity_log`
+- `current_job`
 - `report`
 - `plan`
 - `apply_result`
 - `sync_result`
-- timestamps
-- `activity_log`
-- `current_job`
 
 ### `GET /api/process`
 
@@ -69,36 +40,35 @@ Trả về:
 
 - `current_job`
 
-Frontend poll endpoint này khi scan/plan/apply đang chạy.
+### `POST /api/process/cancel`
 
-## 4. API connected folders
+Yêu cầu hủy job đang chạy.
+
+Kết quả:
+
+- set `cancel_requested = true`
+- update `message`
+- append warning log
+
+## 3. Roots APIs
 
 ### `POST /api/roots`
 
-Thêm hoặc cập nhật connected folder.
+Thêm một root.
 
-Payload:
+### `POST /api/roots/bulk`
 
-- `path`
-- `label`
-- `priority`
-- `kind`
-- `connection_id`
-- `connection_label`
-
-Lưu ý:
-
-- path phải là directory tồn tại và runtime phải truy cập được
+Thêm nhiều roots cùng lúc.
 
 ### `DELETE /api/roots?path=...`
 
-Xóa connected folder khỏi state.
+Xóa root khỏi state.
 
-## 5. API SMB profiles
+## 4. SMB APIs
 
 ### `GET /api/lan/connections`
 
-Lấy danh sách SMB profiles đã lưu.
+Lấy SMB profiles đã lưu.
 
 ### `POST /api/lan/connections`
 
@@ -112,91 +82,103 @@ Test profile bằng `smbclient`.
 
 Xóa SMB profile.
 
-## 6. API duplicate workflow
+### `GET /api/smb/browse`
+
+Browse SMB host hoặc share.
+
+Query thường dùng:
+
+- `connection_id`
+- `share_name`
+- `path`
+- `scope=host`
+
+## 5. Operations folder APIs
+
+### `GET /api/operations/folders`
+
+Trả inventory phẳng của folder con bên trong roots.
+
+### `GET /api/operations/folders/tree?depth=...`
+
+Trả cấu trúc tree theo root.
+
+Node hiện có:
+
+- `label`
+- `key`
+- `path`
+- `display_path`
+- `storage_uri`
+- `depth`
+- `has_children`
+- `children`
+
+## 6. Duplicate workflow APIs
 
 ### `POST /api/scan`
 
-Scan tất cả connected folders hiện có.
+Scan tất cả roots hiện có.
 
 ### `POST /api/plan`
 
 Build plan từ latest report.
 
-Payload hiện dùng:
+Payload:
 
 - `delete_lower_quality`
 
 ### `POST /api/apply`
 
-Apply plan hiện tại.
+Apply latest plan.
 
-Payload hiện dùng:
+Payload:
 
 - `execute`
 - `prune_empty_dirs`
 
-## 7. API manual folder move
+## 7. Folder operation APIs
 
 ### `POST /api/folders/move`
 
-Preview hoặc execute một folder move độc lập với duplicate planner.
-
-Payload:
-
-- `source`
-- `destination_parent`
-- `execute`
-
-Hành vi:
-
-- nếu `execute=false` thì trả preview
-- nếu `execute=true` thì move thật thư mục vào destination parent
+Move cả folder từ source sang destination parent.
 
 ### `POST /api/folders/move-to-provider`
 
-Move nội dung của một source folder vào path đã được Radarr hoặc Sonarr quản lý.
-
-Payload:
-
-- `provider`
-- `source`
-- `item_id`
-- `destination`
-- `execute`
-
-Hành vi:
-
-- nếu `execute=false` thì trả preview
-- nếu `execute=true` thì move nội dung source folder vào destination hiện có
-- sau đó gọi refresh provider tương ứng
+Move nội dung của source folder vào path mà Radarr hoặc Sonarr đang quản lý.
 
 ### `DELETE /api/folders?path=...&execute=true`
 
-Xóa một folder khỏi filesystem.
+Xóa folder.
 
-Hiện tại:
-
-- nếu `execute=false` thì trả preview delete
-- nếu `execute=true` thì xóa recursive bằng backend operation
-
-## 8. API integrations
+## 8. Provider APIs
 
 ### `POST /api/integrations`
 
-Lưu cấu hình Radarr/Sonarr.
+Lưu Radarr/Sonarr settings.
 
 ### `POST /api/integrations/test`
 
-Test connectivity của integrations.
+Test connectivity của providers.
 
 ### `POST /api/sync`
 
-Chạy sync thủ công dựa trên latest plan và latest apply result.
+Manual sync sau apply result.
 
 ### `GET /api/integrations/radarr/items`
 
-Lấy movie list hiện có từ Radarr để dùng cho modal `Move To Radarr...`
+Lấy movie list.
 
 ### `GET /api/integrations/sonarr/items`
 
-Lấy series list hiện có từ Sonarr để dùng cho modal `Move To Sonarr...`
+Lấy series list.
+
+## 9. Legacy note
+
+Project vẫn giữ các file legacy static:
+
+- `legacy-index.html`
+- `legacy-app.js`
+- `legacy-styles.css`
+
+Nhưng hướng chính hiện tại là frontend React bundle mới.

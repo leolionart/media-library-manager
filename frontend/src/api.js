@@ -1,29 +1,46 @@
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export async function request(url, options = {}) {
-  const response = await fetch(url, {
-    headers: JSON_HEADERS,
-    ...options
-  });
+  const { timeoutMs, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeoutId =
+    typeof timeoutMs === "number" && timeoutMs > 0
+      ? window.setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs)
+      : null;
 
-  const text = await response.text();
-  const contentType = response.headers.get("content-type") || "";
-  const data = text ? (contentType.includes("application/json") ? JSON.parse(text) : text) : {};
+  try {
+    const response = await fetch(url, {
+      headers: JSON_HEADERS,
+      signal: controller.signal,
+      ...fetchOptions
+    });
+    const text = await response.text();
+    const contentType = response.headers.get("content-type") || "";
+    const data = text ? (contentType.includes("application/json") ? JSON.parse(text) : text) : {};
 
-  if (!response.ok) {
-    throw new Error(data?.error || `Request failed with status ${response.status}`);
+    if (!response.ok) {
+      throw new Error(data?.error || `Request failed with status ${response.status}`);
+    }
+
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
   }
-
-  return data;
 }
 
 export async function fetchOperationsData() {
-  const [state, process, mounts, folders, folderTree] = await Promise.all([
+  const [state, process, mounts, folders] = await Promise.all([
     request("/api/state"),
     request("/api/process"),
     request("/api/system/mounts"),
-    request("/api/operations/folders"),
-    request("/api/operations/folders/tree")
+    request("/api/operations/folders")
   ]);
 
   return {
@@ -32,9 +49,14 @@ export async function fetchOperationsData() {
     mounts: mounts.mounts || [],
     operationsFolders: folders.items || [],
     operationsSummary: folders.summary || { items: 0, roots: 0 },
-    operationsFolderTree: folderTree.items || [],
-    operationsTreeSummary: folderTree.summary || { roots: 0, nodes: 0, max_depth: 4 }
+    operationsFolderTree: [],
+    operationsTreeSummary: { roots: folders.summary?.roots || 0, nodes: 0, max_depth: 0 }
   };
+}
+
+export function fetchOperationsTree({ depth = 2, timeoutMs = 5000 } = {}) {
+  const params = new URLSearchParams({ depth: String(depth) });
+  return request(`/api/operations/folders/tree?${params.toString()}`, { timeoutMs });
 }
 
 export function fetchProviderItems(provider) {
@@ -47,13 +69,6 @@ export function fetchSettingsState() {
 
 export function discoverLanDevices() {
   return request("/api/lan/discover");
-}
-
-export function saveTargetPaths(payload) {
-  return request("/api/targets", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
 }
 
 export function addRoot(payload) {
@@ -100,17 +115,6 @@ export function runManualSync() {
     method: "POST",
     body: "{}"
   });
-}
-
-export function addManagedFolder(payload) {
-  return request("/api/managed-folders", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
-
-export function deleteManagedFolder(id) {
-  return request(`/api/managed-folders?id=${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function previewMoveToProvider(payload) {

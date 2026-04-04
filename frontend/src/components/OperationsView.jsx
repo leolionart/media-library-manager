@@ -34,6 +34,7 @@ import {
   deleteFolder,
   executeMoveToProvider,
   fetchOperationsData,
+  fetchOperationsTree,
   fetchProviderItems,
   previewMoveToProvider,
   removeRoot,
@@ -312,6 +313,8 @@ export function OperationsView() {
   const [folderTree, setFolderTree] = useState([]);
   const [folderSummary, setFolderSummary] = useState({ items: 0, roots: 0 });
   const [treeSummary, setTreeSummary] = useState({ roots: 0, nodes: 0, max_depth: 4 });
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [treeError, setTreeError] = useState("");
   const [search, setSearch] = useState("");
   const [selectedNodeKeys, setSelectedNodeKeys] = useState([]);
   const [deleteLowerQuality, setDeleteLowerQuality] = useState(false);
@@ -323,14 +326,32 @@ export function OperationsView() {
     setPayload(data.state || emptyState);
     setCurrentJob(data.process || data.state?.current_job || null);
     setFolderItems(data.operationsFolders || []);
-    setFolderTree(data.operationsFolderTree || []);
     setFolderSummary(data.operationsSummary || { items: 0, roots: 0 });
-    setTreeSummary(data.operationsTreeSummary || { roots: 0, nodes: 0, max_depth: 4 });
+    setTreeSummary({ roots: data.operationsSummary?.roots || 0, nodes: 0, max_depth: 0 });
     setSelectedNodeKeys((current) => current.filter((key) => (data.operationsFolders || []).some((item) => item.path === key)));
+    return data;
+  };
+
+  const refreshTree = async (summary = folderSummary) => {
+    setTreeLoading(true);
+    setTreeError("");
+
+    try {
+      const folderTree = await fetchOperationsTree();
+      setFolderTree(folderTree.items || []);
+      setTreeSummary(folderTree.summary || { roots: summary.roots || 0, nodes: 0, max_depth: 0 });
+    } catch (error) {
+      setFolderTree([]);
+      setTreeSummary({ roots: summary.roots || 0, nodes: 0, max_depth: 0 });
+      setTreeError(error.message || "Folder tree is unavailable right now.");
+    } finally {
+      setTreeLoading(false);
+    }
   };
 
   useEffect(() => {
     refreshAll()
+      .then((data) => refreshTree(data.operationsSummary || { items: 0, roots: 0 }))
       .catch((error) => message.error(error.message))
       .finally(() => setLoading(false));
   }, [message]);
@@ -414,7 +435,8 @@ export function OperationsView() {
     setActionLoading(actionKey);
     try {
       const result = await action();
-      await refreshAll();
+      const data = await refreshAll();
+      await refreshTree(data.operationsSummary || { items: 0, roots: 0 });
       if (successMessage) message.success(successMessage);
       return result;
     } catch (error) {
@@ -587,8 +609,6 @@ export function OperationsView() {
 
   return (
     <Flex vertical gap={16}>
-      <SummaryCards payload={payload} folderSummary={folderSummary} />
-
       <Row gutter={[16, 16]} align="top">
         <Col xs={24} xl={17}>
           <Flex vertical gap={16}>
@@ -655,12 +675,25 @@ export function OperationsView() {
                 column={{ xs: 1, md: 3 }}
                 style={{ marginTop: 16, marginBottom: 16 }}
                 items={[
-                  { key: "roots", label: "Roots", children: treeSummary.roots || 0 },
-                  { key: "nodes", label: "Folders", children: treeSummary.nodes || 0 },
+                  { key: "roots", label: "Roots", children: treeSummary.roots || folderSummary.roots || 0 },
+                  { key: "nodes", label: "Folders", children: treeSummary.nodes || folderSummary.items || 0 },
                   { key: "depth", label: "Depth", children: treeSummary.max_depth || 0 },
                 ]}
               />
-              {treeData.length ? (
+              {treeError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="Folder tree is temporarily unavailable"
+                  description={treeError}
+                />
+              ) : null}
+              {treeLoading && !treeData.length ? (
+                <Flex justify="center" style={{ padding: 32 }}>
+                  <Spin />
+                </Flex>
+              ) : treeData.length ? (
                 <Tree
                   blockNode
                   showLine
@@ -671,7 +704,7 @@ export function OperationsView() {
                   treeData={treeData}
                 />
               ) : (
-                <Empty description="No connected folders yet. Add one from Settings." />
+                <Empty description={folderSummary.items ? "Folder tree is unavailable right now." : "No connected folders yet. Add one from Settings."} />
               )}
             </Card>
 

@@ -1,180 +1,208 @@
 # Media Library Manager
 
-`media-library-manager` is a local dashboard and CLI for working with existing media folders across local disks, mounted shares, and SMB hosts.
+`media-library-manager` là ứng dụng local để quản lý thư viện media nằm trên:
 
-The project is built around a simple operating model:
+- ổ đĩa local
+- SMB shares
+- thư viện đã được Radarr hoặc Sonarr quản lý
 
-1. Connect the app to folders that already exist, including folders managed by Radarr and Sonarr.
-2. Detect duplicate folders or duplicate files and suggest what can be removed.
-3. Allow moving a folder from location A to location B with an explicit cut/paste style workflow.
+Trọng tâm hiện tại của dự án là:
 
-The application is not meant to replace Radarr or Sonarr. It sits beside them and helps operate on the filesystem they already use.
+1. kết nối nhiều root SMB hoặc local vào app
+2. duyệt folder theo dạng inventory và tree để thao tác
+3. scan tìm duplicate
+4. build plan và apply
+5. move folder vào đúng path mà Radarr hoặc Sonarr đang quản lý
 
-## Product Scope
+Ứng dụng không thay Radarr hoặc Sonarr. Nó là lớp điều phối filesystem và vận hành library.
 
-The dashboard works with storage that already exists:
+## Current Product Shape
 
-- local folders visible to the runtime
-- mounted network shares
-- SMB hosts with different usernames and passwords
-- folders already managed by Radarr
-- folders already managed by Sonarr
+Frontend hiện tại là React + Ant Design, được build vào:
 
-Typical use cases:
+- [src/media_library_manager/static/app.js](/Volumes/DATA/Coding Projects/media-library-manager/src/media_library_manager/static/app.js)
+- [src/media_library_manager/static/styles.css](/Volumes/DATA/Coding Projects/media-library-manager/src/media_library_manager/static/styles.css)
 
-- connect one or more storage roots so the app can scan them
-- find duplicate movie or series folders spread across multiple disks
-- find duplicate files inside those folders
-- review deletion suggestions before removing anything
-- move a movie or series folder from one storage location to another
-- move a downloaded folder into the correct Radarr or Sonarr managed library path
+Backend là Python HTTP server, vừa serve static frontend vừa expose API nội bộ.
 
-## Dashboard Structure
+App hiện có 3 màn chính:
 
-The UI is intentionally split into two pages.
+- `Overview`
+- `Operations`
+- `Settings`
 
-### 1. Operations
+### Overview
 
-This page contains the operational tools:
+Màn tổng quan để xem:
 
-- list connected folders as the main workspace
-- use a per-folder action dropdown
-- choose a source folder
-- choose a destination folder
-- cut and paste a folder from A to B
-- delete a folder
-- scan connected folders for duplicate files and folders
-- review suggested deletions
-- move a download folder into an existing Radarr or Sonarr managed path
+- trạng thái runtime
+- tóm tắt root đã connect
+- duplicate summary
+- trạng thái provider
+- current job
+- activity gần đây
 
-This page should stay focused on day-to-day actions, not connection setup.
+### Operations
 
-### 2. Settings
+Màn vận hành chính:
 
-This page contains all application setup:
+- xem danh sách folder đã discover từ các root
+- xem tree thư mục theo root
+- chọn folder làm source hoặc destination
+- move folder
+- move vào Radarr hoặc Sonarr
+- scan duplicate
+- build plan
+- dry-run apply
+- execute apply
+- xem current job logs
+- cancel job đang chạy
 
-- save multiple SMB host profiles
-- each profile can have its own host, username, and password
-- add folders through a modal
-- when adding a folder, select one saved SMB profile and browse shares or folders directly over SMB
-- add multiple folders when needed, because media may be spread across multiple disks
-- in most cases, add a high-level root folder and let the app scan and operate inside that root
-- configure Radarr connection
-- configure Sonarr connection
+### Settings
 
-Settings should remain the support layer. Operations should remain the working layer.
+Màn cấu hình:
 
-## Folder Connection Model
+- quản lý connected roots
+- quản lý SMB profiles
+- cấu hình Radarr
+- cấu hình Sonarr
+- cấu hình sync options
 
-The expected workflow for folder setup is:
+Các khối `Canonical Targets` và `Managed SMB Folders` đã bị bỏ khỏi UI mới.
 
-1. Save one or more SMB profiles.
-2. Open the add-folder modal.
-3. Discover a LAN SMB host or enter an IP manually.
-4. Save or reuse an SMB profile.
-5. Select that saved profile and browse the SMB host directly.
-6. Choose one or more shares or folders to connect in one pass.
-7. Repeat if you need to work across multiple disks or multiple hosts.
+## SMB-Native Workflow
 
-The common case is still simple:
+Luồng hiện tại không yêu cầu mount share vào OS như luồng chính.
 
-- add one large root folder per disk or share
-- let the app scan that root
-- work inside the connected roots from the Operations page
+Nguyên tắc:
 
-## Radarr / Sonarr Relationship
+- SMB profile lưu host, share, username, password
+- root SMB được lưu bằng `storage_uri`
+- backend truy cập trực tiếp qua `smbclient`
+- `path` local pseudo chỉ dùng làm identity dễ đọc trong state/UI
 
-Radarr and Sonarr remain part of the project.
-
-The app must be able to work with folders already managed by those systems:
-
-- use Radarr and Sonarr as connection-backed library references
-- keep their API settings in `Settings`
-- allow operational actions in `Operations` to move folders into the correct managed location
-- keep filesystem actions explicit so the user can review what is about to happen
-
-Example:
-
-- a movie folder exists in a download location
-- the user selects that folder in `Operations`
-- the user chooses `Move to Radarr...`
-- the user selects the movie already managed by Radarr
-- the app moves the folder contents into the existing Radarr path
-- because the managed path itself did not change, the app refreshes or rescans Radarr instead of changing `movie.path`
-
-The same pattern applies to Sonarr.
-
-## Duplicate Detection
-
-The project should detect duplicates at two levels:
-
-- duplicate files
-- duplicate folders
-
-The output should be phrased as suggestions, not automatic destructive actions.
-
-Expected behavior:
-
-- scan all connected roots
-- detect exact duplicate files where possible
-- detect folders that appear to represent the same movie or series content
-- present suggestions to delete or keep
-- require explicit confirmation before destructive actions
-
-## Deployment
-
-The primary deployment target is a Linux server running Docker Compose.
-The container is configured to join the host network and access common host mount roots directly.
-
-1. Copy the environment template:
-
-```bash
-cp .env.example .env
-mkdir -p data
-```
-
-2. Edit `.env` if you want to change the image tag or dashboard port:
-
-```dotenv
-MLM_IMAGE=ghcr.io/leolionart/media-library-manager:latest
-MLM_PORT=9988
-```
-
-3. Start the stack:
-
-```bash
-docker compose up -d
-```
-
-4. Open:
+Ví dụ root SMB:
 
 ```text
-http://localhost:9988
+storage_uri = smb://Download/?connection_id=smb-1775287593611315000
+path        = /smb/smb-1775287593611315000/Download
 ```
 
-`compose.yaml` uses:
+App hiện hỗ trợ:
 
-- `./data` to `/app/data` for persisted dashboard state
-- `network_mode: host` so the service can reach the LAN directly
-- bind mounts for `/mnt`, `/media`, and `/srv` so host-mounted shares are visible inside the container
+- nhiều SMB profiles
+- nhiều roots trên cùng một profile
+- nhiều shares trên cùng một host
+- inventory phẳng và tree cho SMB roots
 
-## Local Run Without Docker
+## Radarr / Sonarr
 
-```bash
-./run-dashboard.sh
-```
+App vẫn tích hợp Radarr và Sonarr như provider layer.
 
-If port `8765` is already used on your machine, run the dashboard on `8766` instead:
+Use case chính:
+
+- lấy danh sách movie hoặc series đang được provider quản lý
+- move folder download vào path đã có sẵn của provider
+- refresh lại provider sau khi move
+- sync lại provider sau `apply execute`
+
+Hiện tại app đã được xác nhận chạy với:
+
+- `https://movie.naai.studio/`
+- `https://tv.naai.studio/`
+
+Backend provider client gửi `User-Agent` browser-like để tránh reverse proxy / Cloudflare chặn request API.
+
+## Current Backend APIs
+
+Các API chính đang dùng:
+
+- `GET /api/state`
+- `GET /api/process`
+- `POST /api/process/cancel`
+- `GET /api/operations/folders`
+- `GET /api/operations/folders/tree?depth=...`
+- `GET /api/smb/browse`
+- `POST /api/roots`
+- `POST /api/roots/bulk`
+- `DELETE /api/roots?path=...`
+- `POST /api/scan`
+- `POST /api/plan`
+- `POST /api/apply`
+- `GET /api/integrations/radarr/items`
+- `GET /api/integrations/sonarr/items`
+- `POST /api/integrations`
+- `POST /api/integrations/test`
+- `POST /api/sync`
+
+## Current Job Model
+
+`current_job` được persist trong state, nên refresh vẫn thấy job đang chạy hoặc job vừa xong.
+
+Mỗi job hiện có:
+
+- `id`
+- `kind`
+- `status`
+- `message`
+- `summary`
+- `details`
+- `logs`
+- `cancel_requested`
+- `started_at`
+- `updated_at`
+- `finished_at`
+
+Các job dài như `scan`, `plan`, `apply` đều ghi log vào state.
+
+Cancel hiện là cooperative:
+
+- `POST /api/process/cancel`
+- state chuyển `cancel_requested = true`
+- job dừng ở safe point tiếp theo
+
+## Local Run
+
+Chạy backend local:
 
 ```bash
 HOST=127.0.0.1 PORT=8766 ./run-dashboard.sh
 ```
 
-On the current macOS setup used during development, `8766` is the active local dashboard port because `8765` conflicts with another app.
+Trong môi trường macOS hiện tại, cổng nên dùng là:
 
-When running outside Docker, the host also needs the Samba CLI client because SMB browsing, folder discovery, and SMB-native operations call `smbclient`.
+```text
+http://127.0.0.1:8766
+```
 
-Examples:
+Không nên dùng `8765` nếu máy đang có app khác chiếm cổng.
+
+## Frontend Development
+
+Source frontend nằm trong:
+
+- [frontend/](/Volumes/DATA/Coding Projects/media-library-manager/frontend)
+
+Chạy dev frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Build frontend vào static bundle của backend:
+
+```bash
+cd frontend
+npm run build
+```
+
+## SMB Runtime Requirement
+
+Local runtime cần có `smbclient`.
+
+Ví dụ:
 
 ```bash
 # macOS
@@ -184,37 +212,41 @@ brew install samba
 sudo apt-get update && sudo apt-get install -y smbclient
 ```
 
-## Current Direction For SMB Support
+## Docker
 
-SMB is a first-class setup concern in the product direction.
+Project vẫn có thể chạy bằng Docker Compose.
 
-That means the dashboard should support:
+Chuẩn bị:
 
-- multiple SMB hosts
-- different credentials per host
-- selecting a saved SMB profile when adding a folder
-- reusing those saved profiles across multiple connected roots
+```bash
+cp .env.example .env
+mkdir -p data
+```
 
-Infrastructure and deployment should not assume a single SMB target.
+Chạy:
 
-## Release Flow
+```bash
+docker compose up -d
+```
 
-The repository ships a Docker-only release flow:
+Mặc định mở:
 
-- `CI` runs tests and validates the Docker build on pull requests and pushes to `main`.
-- `release-please` opens or updates a release PR from conventional commits.
-- when that release PR is merged to `main`, GitHub Actions creates the release and publishes:
-  - `ghcr.io/leolionart/media-library-manager:latest`
-  - `ghcr.io/leolionart/media-library-manager:<version>`
-  - `ghcr.io/leolionart/media-library-manager:v<version>`
-
-To keep releases automatic, use conventional commit prefixes such as `feat:`, `fix:`, or `chore:`.
+```text
+http://localhost:9988
+```
 
 ## Verification
 
-Local verification used during development:
+Kiểm tra backend:
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-python3 -m py_compile src/media_library_manager/*.py src/media_library_manager/providers/*.py
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m py_compile src/media_library_manager/*.py src/media_library_manager/providers/*.py src/media_library_manager/storage/*.py
+```
+
+Kiểm tra frontend:
+
+```bash
+cd frontend
+npm run build
 ```

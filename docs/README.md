@@ -1,50 +1,49 @@
-# Project Documentation
+# Documentation
 
-Thư mục `docs/` mô tả logic hiện tại của dự án theo product shape mới:
+Thư mục `docs/` mô tả trạng thái hiện tại của dự án sau khi:
 
-- `Operations` là nơi chạy scan, review duplicate, build plan, apply, và move folder thủ công
-- `Settings` là nơi quản lý SMB profiles, connected folders, và Radarr/Sonarr
+- frontend được viết lại bằng React + Ant Design
+- backend chuyển mạnh sang SMB-native
+- folder inventory có cả list và tree
+- current job có log chi tiết, cancel request, và persist qua refresh
 
 ## Danh mục
 
-- [current-features.md](./current-features.md)
-  Tập hợp các tính năng hiện có theo góc nhìn người dùng.
-
 - [architecture.md](./architecture.md)
-  Kiến trúc module, luồng dữ liệu, và quan hệ giữa dashboard, state, scanner, planner, operations, integrations.
+  Kiến trúc tổng thể, module chính, và luồng dữ liệu.
+
+- [current-features.md](./current-features.md)
+  Các tính năng hiện có theo góc nhìn product và user flow.
 
 - [dashboard-and-api.md](./dashboard-and-api.md)
-  Cấu trúc dashboard 2 page và các API nội bộ mà frontend đang dùng.
-
-- [state-and-artifacts.md](./state-and-artifacts.md)
-  Cách state và các artifact JSON được lưu.
-
-- [integrations.md](./integrations.md)
-  Logic giữ kết nối Radarr/Sonarr trong `Settings` và đồng bộ path sau `apply`.
-
-- [planning-and-apply.md](./planning-and-apply.md)
-  Cách hệ thống chuyển scan report thành action plan và áp dụng thay đổi trên filesystem, cùng manual folder move.
+  Cấu trúc UI hiện tại và API nội bộ frontend đang dùng.
 
 - [scanning-and-detection.md](./scanning-and-detection.md)
-  Chi tiết logic scan filesystem và phát hiện duplicate.
+  Logic scan, duplicate detection, storage abstraction, và cancel behavior.
+
+- [planning-and-apply.md](./planning-and-apply.md)
+  Build plan, apply, move folder, move-to-provider, và sync.
+
+- [integrations.md](./integrations.md)
+  Cấu hình Radarr/Sonarr, test connectivity, provider item list, và sync.
+
+- [state-and-artifacts.md](./state-and-artifacts.md)
+  State persistence, artifact JSON, current job model, activity log.
 
 - [cli-and-config.md](./cli-and-config.md)
-  Cách dùng CLI và cấu hình từ command line hoặc TOML.
+  CLI hiện có, config file, và quan hệ giữa CLI với dashboard runtime.
 
 ## Cách đọc nhanh
 
-Nếu cần nắm product hiện tại:
+Nếu cần nắm dự án hiện tại:
 
 1. đọc `current-features.md`
 2. đọc `architecture.md`
 3. đọc `dashboard-and-api.md`
 
-Nếu cần đi sâu vào logic scan và apply:
+Nếu cần backend behavior:
 
 1. đọc `scanning-and-detection.md`
 2. đọc `planning-and-apply.md`
 3. đọc `integrations.md`
-
-## Phạm vi
-
-Các tài liệu trong thư mục này mô tả hành vi hiện tại của codebase sau khi dashboard được rút về 2 page `Operations` và `Settings`.
+4. đọc `state-and-artifacts.md`

@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Col,
-  Descriptions,
   Divider,
   Empty,
   Flex,
@@ -34,17 +33,14 @@ import {
   SaveOutlined
 } from "@ant-design/icons";
 import {
-  addManagedFolder,
   addRoot,
   deleteLanConnection,
-  deleteManagedFolder,
   discoverLanDevices,
   fetchSettingsState,
   removeRoot,
   runManualSync,
   saveIntegrations,
   saveLanConnection,
-  saveTargetPaths,
   testIntegrations,
   testLanConnection
 } from "../api";
@@ -62,11 +58,6 @@ const SMB_VERSION_OPTIONS = ["3.0", "2.1", "2.0", "1.0"].map((value) => ({ label
 
 const emptyState = {
   roots: [],
-  targets: {
-    movie_root: "",
-    series_root: "",
-    review_root: ""
-  },
   integrations: {
     radarr: { enabled: false, base_url: "", api_key: "", root_folder_path: "" },
     sonarr: { enabled: false, base_url: "", api_key: "", root_folder_path: "" },
@@ -77,7 +68,6 @@ const emptyState = {
     }
   },
   lan_connections: { smb: [] },
-  managed_folders: [],
   sync_result: null,
   activity_log: []
 };
@@ -136,6 +126,7 @@ function ProviderSettingsCard({ provider, testResult, onSave, onTest, saving, te
 
   return (
     <Card
+      className="integration-provider-card-react"
       title={
         <Space>
           <RadarChartOutlined />
@@ -191,41 +182,28 @@ export function SettingsView() {
   const [syncing, setSyncing] = useState(false);
   const [rootModalOpen, setRootModalOpen] = useState(false);
   const [connectionModalOpen, setConnectionModalOpen] = useState(false);
-  const [managedModalOpen, setManagedModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState(null);
-  const [savingTargets, setSavingTargets] = useState(false);
   const [savingIntegrations, setSavingIntegrations] = useState(false);
   const [testingIntegration, setTestingIntegration] = useState("");
   const [testingConnectionId, setTestingConnectionId] = useState("");
   const [savingConnection, setSavingConnection] = useState(false);
   const [deletingConnectionId, setDeletingConnectionId] = useState("");
-  const [savingManagedFolder, setSavingManagedFolder] = useState(false);
-  const [deletingManagedFolderId, setDeletingManagedFolderId] = useState("");
   const [removingRootPath, setRemovingRootPath] = useState("");
-  const [targetsForm] = Form.useForm();
   const [rootForm] = Form.useForm();
   const [connectionForm] = Form.useForm();
-  const [managedForm] = Form.useForm();
   const [integrationsForm] = Form.useForm();
   const [lanTestResults, setLanTestResults] = useState({});
 
   const connections = state.lan_connections?.smb || [];
-  const managedFolders = state.managed_folders || [];
   const selectedConnectionId = Form.useWatch("connection_id", rootForm);
-  const selectedManagedConnectionId = Form.useWatch("connection_id", managedForm);
   const selectedRootConnection = useMemo(
     () => connections.find((item) => item.id === selectedConnectionId) || null,
     [connections, selectedConnectionId]
-  );
-  const selectedManagedConnection = useMemo(
-    () => connections.find((item) => item.id === selectedManagedConnectionId) || null,
-    [connections, selectedManagedConnectionId]
   );
 
   const refreshSettings = async () => {
     const payload = await fetchSettingsState();
     setState(payload || emptyState);
-    targetsForm.setFieldsValue(payload?.targets || emptyState.targets);
     integrationsForm.setFieldsValue(payload?.integrations || emptyState.integrations);
   };
 
@@ -233,7 +211,7 @@ export function SettingsView() {
     refreshSettings()
       .catch((error) => message.error(error.message))
       .finally(() => setLoading(false));
-  }, [message, targetsForm, integrationsForm]);
+  }, [message, integrationsForm]);
 
   const providerCards = ["radarr", "sonarr"].map((provider) => ({
     provider,
@@ -409,53 +387,6 @@ export function SettingsView() {
     }
   ];
 
-  const managedFolderColumns = [
-    {
-      title: "Folder",
-      key: "label",
-      render: (_, record) => (
-        <Flex vertical gap={4}>
-          <Text strong>{record.label}</Text>
-          <Text type="secondary">{record.connection_label || record.share_name}</Text>
-        </Flex>
-      )
-    },
-    {
-      title: "Path",
-      dataIndex: "path",
-      key: "path",
-      render: (value) => <Text className="mono">{value}</Text>
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 120,
-      render: (_, record) => (
-        <Popconfirm
-          title="Remove managed SMB folder?"
-          description={record.label}
-          okText="Remove"
-          onConfirm={async () => {
-            setDeletingManagedFolderId(record.id);
-            try {
-              await deleteManagedFolder(record.id);
-              await refreshSettings();
-              message.success("Managed SMB folder removed.");
-            } catch (error) {
-              message.error(error.message);
-            } finally {
-              setDeletingManagedFolderId("");
-            }
-          }}
-        >
-          <Button danger loading={deletingManagedFolderId === record.id}>
-            Remove
-          </Button>
-        </Popconfirm>
-      )
-    }
-  ];
-
   if (loading) {
     return (
       <div className="app-loading">
@@ -466,67 +397,6 @@ export function SettingsView() {
 
   return (
     <Flex vertical gap={16}>
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={8}>
-          <Card>
-            <Descriptions
-              column={1}
-              items={[
-                { key: "roots", label: "Connected roots", children: state.roots.length },
-                { key: "managed", label: "Managed SMB folders", children: managedFolders.length },
-                { key: "connections", label: "SMB connections", children: connections.length }
-              ]}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} xl={8}>
-          <Card>
-            <Descriptions
-              column={1}
-              items={[
-                {
-                  key: "radarr",
-                  label: "Radarr",
-                  children: state.integrations?.radarr?.enabled ? "Enabled" : "Disabled"
-                },
-                {
-                  key: "sonarr",
-                  label: "Sonarr",
-                  children: state.integrations?.sonarr?.enabled ? "Enabled" : "Disabled"
-                },
-                {
-                  key: "last-sync",
-                  label: "Last sync",
-                  children: formatDate(state.sync_result?.generated_at || state.last_sync_at)
-                }
-              ]}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} xl={8}>
-          <Card>
-            <List
-              size="small"
-              dataSource={(state.activity_log || []).slice(0, 3)}
-              locale={{ emptyText: "No recent activity." }}
-              renderItem={(item) => (
-                <List.Item>
-                  <List.Item.Meta
-                    title={
-                      <Space size={8}>
-                        <Tag color={item.status === "error" ? "error" : "success"}>{item.status}</Tag>
-                        <span>{item.message}</span>
-                      </Space>
-                    }
-                    description={formatDate(item.created_at)}
-                  />
-                </List.Item>
-              )}
-            />
-          </Card>
-        </Col>
-      </Row>
-
       <Tabs
         items={[
           {
@@ -554,72 +424,6 @@ export function SettingsView() {
                     pagination={false}
                     scroll={{ x: 960 }}
                     locale={{ emptyText: <Empty description="No connected folders configured." /> }}
-                  />
-                </Card>
-
-                <Card title="Canonical Targets">
-                  <Form
-                    form={targetsForm}
-                    layout="vertical"
-                    onFinish={async (values) => {
-                      setSavingTargets(true);
-                      try {
-                        await saveTargetPaths(values);
-                        await refreshSettings();
-                        message.success("Canonical targets saved.");
-                      } catch (error) {
-                        message.error(error.message);
-                      } finally {
-                        setSavingTargets(false);
-                      }
-                    }}
-                  >
-                    <Row gutter={[16, 0]}>
-                      <Col xs={24} xl={8}>
-                        <Form.Item label="Movie Root" name="movie_root">
-                          <Input placeholder="/library/movies" />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={24} xl={8}>
-                        <Form.Item label="Series Root" name="series_root">
-                          <Input placeholder="/library/series" />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={24} xl={8}>
-                        <Form.Item label="Review Root" name="review_root">
-                          <Input placeholder="/library/review" />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                    <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={savingTargets}>
-                      Save Targets
-                    </Button>
-                  </Form>
-                </Card>
-
-                <Card
-                  title="Managed SMB Folders"
-                  extra={
-                    <Button icon={<PlusOutlined />} onClick={() => setManagedModalOpen(true)} disabled={!connections.length}>
-                      Add Managed Folder
-                    </Button>
-                  }
-                >
-                  {!connections.length ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="Create an SMB connection first"
-                      description="Managed folders are attached to a saved SMB connection profile."
-                    />
-                  ) : null}
-                  <Table
-                    rowKey="id"
-                    columns={managedFolderColumns}
-                    dataSource={managedFolders}
-                    pagination={false}
-                    scroll={{ x: 720 }}
-                    locale={{ emptyText: <Empty description="No managed SMB folders configured." /> }}
                   />
                 </Card>
               </Flex>
@@ -763,7 +567,7 @@ export function SettingsView() {
             label: "Integrations",
             children: (
               <Flex vertical gap={16}>
-                <Form form={integrationsForm} layout="vertical">
+                <Form form={integrationsForm} layout="vertical" className="integrations-form-react">
                   <Row gutter={[16, 16]}>
                     {providerCards.map(({ provider, testResult }) => (
                       <Col key={provider} xs={24} xl={12}>
@@ -808,6 +612,7 @@ export function SettingsView() {
                   </Row>
 
                   <Card
+                    className="integration-sync-card-react"
                     title={
                       <Space>
                         <ApiOutlined />
@@ -856,10 +661,12 @@ export function SettingsView() {
                   >
                     <Row gutter={[16, 16]}>
                       <Col xs={24} xl={8}>
-                        <Card size="small">
-                          <Form.Item name={["sync_options", "sync_after_apply"]} valuePropName="checked" noStyle>
-                            <Switch />
-                          </Form.Item>
+                        <Card size="small" className="sync-option-card-react">
+                          <div className="sync-option-head-react">
+                            <Form.Item name={["sync_options", "sync_after_apply"]} valuePropName="checked" noStyle>
+                              <Switch />
+                            </Form.Item>
+                          </div>
                           <Divider />
                           <Text strong>Sync after apply</Text>
                           <div>
@@ -868,10 +675,12 @@ export function SettingsView() {
                         </Card>
                       </Col>
                       <Col xs={24} xl={8}>
-                        <Card size="small">
-                          <Form.Item name={["sync_options", "rescan_after_update"]} valuePropName="checked" noStyle>
-                            <Switch />
-                          </Form.Item>
+                        <Card size="small" className="sync-option-card-react">
+                          <div className="sync-option-head-react">
+                            <Form.Item name={["sync_options", "rescan_after_update"]} valuePropName="checked" noStyle>
+                              <Switch />
+                            </Form.Item>
+                          </div>
                           <Divider />
                           <Text strong>Rescan after update</Text>
                           <div>
@@ -880,14 +689,16 @@ export function SettingsView() {
                         </Card>
                       </Col>
                       <Col xs={24} xl={8}>
-                        <Card size="small">
-                          <Form.Item
-                            name={["sync_options", "create_root_folder_if_missing"]}
-                            valuePropName="checked"
-                            noStyle
-                          >
-                            <Switch />
-                          </Form.Item>
+                        <Card size="small" className="sync-option-card-react">
+                          <div className="sync-option-head-react">
+                            <Form.Item
+                              name={["sync_options", "create_root_folder_if_missing"]}
+                              valuePropName="checked"
+                              noStyle
+                            >
+                              <Switch />
+                            </Form.Item>
+                          </div>
                           <Divider />
                           <Text strong>Create missing provider roots</Text>
                           <div>
@@ -1095,52 +906,6 @@ export function SettingsView() {
           </Form.Item>
           <Form.Item name="enabled" label="Enabled" valuePropName="checked">
             <Switch />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        open={managedModalOpen}
-        title="Add Managed SMB Folder"
-        okText="Add Folder"
-        confirmLoading={savingManagedFolder}
-        onCancel={() => setManagedModalOpen(false)}
-        onOk={() => managedForm.submit()}
-      >
-        <Form
-          form={managedForm}
-          layout="vertical"
-          initialValues={{ path: "/" }}
-          onFinish={async (values) => {
-            setSavingManagedFolder(true);
-            try {
-              await addManagedFolder({
-                connection_id: values.connection_id,
-                path: buildSmbPath(values.path),
-                label: values.label
-              });
-              await refreshSettings();
-              setManagedModalOpen(false);
-              managedForm.resetFields();
-              message.success("Managed SMB folder added.");
-            } catch (error) {
-              message.error(error.message);
-            } finally {
-              setSavingManagedFolder(false);
-            }
-          }}
-        >
-          <Form.Item name="connection_id" label="SMB Connection" rules={[{ required: true }]}>
-            <Select options={connections.map((item) => ({ label: item.label, value: item.id }))} />
-          </Form.Item>
-          <Form.Item label="Default Share" shouldUpdate>
-            <Text type="secondary">{selectedManagedConnection?.share_name || "Use the connection default share."}</Text>
-          </Form.Item>
-          <Form.Item name="path" label="Folder Path" rules={[{ required: true }]}>
-            <Input placeholder="/Completed" />
-          </Form.Item>
-          <Form.Item name="label" label="Label">
-            <Input placeholder="Completed Downloads" />
           </Form.Item>
         </Form>
       </Modal>

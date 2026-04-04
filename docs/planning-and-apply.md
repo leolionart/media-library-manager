@@ -1,98 +1,85 @@
 # Planning And Apply Logic
 
-Tài liệu này mô tả hai nhóm thao tác filesystem hiện có:
+## 1. Hai nhóm operation chính
 
-1. duplicate workflow `scan -> plan -> apply`
-2. manual folder move kiểu cut/paste
+Hiện có hai nhóm thao tác filesystem:
 
-## 1. Duplicate workflow
+1. duplicate workflow: `scan -> plan -> apply`
+2. manual operations: move folder, delete folder, move vào provider path
 
-Planner biến `ScanReport` thành plan JSON gồm:
+## 2. Plan
+
+`planner.py` nhận `ScanReport` và build action plan gồm:
 
 - `move`
 - `delete`
 - `review`
 
-`operations.apply_plan()` sẽ:
+`review` chỉ là suggestion, không apply trực tiếp.
 
-- skip action `review`
-- move file bundle cho action `move`
-- delete file bundle cho action `delete`
+## 3. Apply
 
-Dry-run vẫn là mặc định an toàn.
+`operations.apply_plan()` hỗ trợ:
 
-## 2. Apply execute
+- dry-run
+- execute
+- prune empty dirs
+- progress callback
+- cancel callback
 
-Khi `execute=true`:
+Trong dashboard mode, apply còn:
 
-- tạo destination parent nếu cần
-- move/delete thật trên filesystem
-- có thể prune thư mục rỗng nếu bật option
+- ghi log vào `current_job`
+- lưu `last-apply.json`
+- có thể sync providers sau execute
 
-## 3. Manual folder move
+## 4. Manual move
 
-Ngoài duplicate workflow, `operations.py` hiện có thêm `move_folder()`.
+`move_folder()`:
 
-Luồng này nhận:
-
-- `source` là một thư mục
-- `destination_parent` là thư mục cha đích
-
-Hành vi:
-
+- nhận `source`
+- nhận `destination_parent`
 - preview nếu `execute=false`
-- move thật bằng `shutil.move()` nếu `execute=true`
+- move thật nếu `execute=true`
 
-Kết quả trả về:
+Hiện hỗ trợ:
 
-- `source`
-- `destination_parent`
-- `destination`
-- `status`
-- `operations`
+- local path
+- SMB storage path
 
-## 4. Điều kiện lỗi của manual move
+## 5. Move into provider path
 
-`move_folder()` trả lỗi nếu:
-
-- source không tồn tại
-- source không phải directory
-- destination parent không tồn tại
-- destination parent không phải directory
-- destination cuối cùng đã tồn tại
-- destination parent nằm bên trong source
-
-## 5. Mối quan hệ giữa hai luồng
-
-Duplicate workflow và manual move là hai bề mặt khác nhau:
-
-- duplicate workflow dùng cho phát hiện và xử lý duplicate
-- manual move dùng cho thao tác cut/paste folder trực tiếp
-
-Chúng cùng nằm trong page `Operations`, nhưng không phụ thuộc lẫn nhau.
-
-## 6. Move folder contents into provider path
-
-`operations.py` hiện còn có `move_folder_contents()`.
-
-Hàm này phục vụ use case:
+`move_folder_contents()` dùng khi:
 
 - source là folder download
-- destination là folder movie hoặc series đã được Radarr/Sonarr quản lý
+- destination là path movie/series đang được provider quản lý
 
 Hành vi:
 
-- preview danh sách item sẽ được move nếu `execute=false`
-- move từng child entry của source vào destination nếu `execute=true`
-- nếu source rỗng sau khi move thì xóa source folder
+- dry-run hoặc execute
+- move từng child entry vào destination
+- thử remove source folder nếu rỗng
 
-Backend `web.py` dùng hàm này trong endpoint `POST /api/folders/move-to-provider`.
+## 6. Delete folder
 
-## 7. Delete folder
-
-`operations.py` hiện có `delete_folder()` cho action dropdown ở folder list.
-
-Hành vi:
+`delete_folder()`:
 
 - preview nếu `execute=false`
-- xóa recursive directory tree nếu `execute=true`
+- delete recursive nếu `execute=true`
+
+## 7. Cancel behavior
+
+`apply_plan()` hiện nhận `should_cancel`.
+
+Nếu user đã request cancel:
+
+- apply dừng trước action tiếp theo
+- backend finish job với `status = cancelled`
+
+## 8. Sync relation
+
+Sau execute apply:
+
+- nếu `sync_after_apply = true`
+- backend gọi `sync_after_apply()`
+- sync result được lưu vào state

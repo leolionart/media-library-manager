@@ -185,6 +185,29 @@ body {
   user-select: none;
 }
 
+.ant-switch {
+  min-width: 44px;
+  height: 24px;
+  line-height: 24px;
+  background: #4a4a56;
+}
+
+.ant-switch:hover:not(.ant-switch-disabled) {
+  background: #565664;
+}
+
+.ant-switch.ant-switch-checked {
+  background: var(--plex-accent);
+}
+
+.ant-switch .ant-switch-handle {
+  inset-block-start: 2px;
+}
+
+.ant-switch .ant-switch-handle::before {
+  border-radius: 999px;
+}
+
 .eyebrow-label {
   display: block;
   text-transform: uppercase;
@@ -267,6 +290,41 @@ body {
 
 .toggle-row-react + .toggle-row-react {
   margin-top: 10px;
+}
+
+.integrations-form-react {
+  display: grid;
+  gap: 16px;
+}
+
+.integration-provider-card-react,
+.integration-sync-card-react {
+  height: 100%;
+}
+
+.integration-sync-card-react {
+  margin-top: 2px;
+}
+
+.sync-option-card-react {
+  height: 100%;
+}
+
+.sync-option-card-react .ant-card-body {
+  display: grid;
+  gap: 12px;
+  min-height: 168px;
+}
+
+.sync-option-head-react {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  min-height: 28px;
+}
+
+.sync-option-card-react .ant-divider {
+  margin: 0;
 }
 
 .two-up-react {

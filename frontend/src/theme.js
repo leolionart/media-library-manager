@@ -38,6 +38,19 @@ export const antTheme = {
       siderBg: "#18181e",
       triggerBg: "#18181e"
     },
+    Menu: {
+      darkItemBg: "#18181e",
+      darkSubMenuItemBg: "#18181e",
+      darkPopupBg: "#18181e",
+      darkItemColor: "#a0a0a0",
+      darkItemHoverColor: "#eaeaea",
+      darkItemHoverBg: "rgba(229, 160, 13, 0.08)",
+      darkItemSelectedBg: "#d09329",
+      darkItemSelectedColor: "#ffffff",
+      itemBorderRadius: 999,
+      itemMarginInline: 12,
+      itemMarginBlock: 8
+    },
     Card: {
       bodyPadding: 24,
       headerBg: "transparent"

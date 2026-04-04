@@ -1,56 +1,104 @@
 # Architecture Overview
 
-Tài liệu này mô tả kiến trúc logic hiện tại của dự án.
+## 1. Tổng quan
 
-## 1. Kiến trúc tổng thể
+Project hiện gồm 3 lớp chính:
 
-Project vẫn là một hệ thống filesystem-first, nhưng bề mặt vận hành được tổ chức lại thành 2 lớp dashboard rõ ràng:
+1. React frontend trong [frontend/](/Volumes/DATA/Coding Projects/media-library-manager/frontend)
+2. Python backend HTTP server trong `src/media_library_manager`
+3. state + artifact files trong `data/`
 
-- `Operations`: chạy scan, review duplicate, build/apply plan, và move folder thủ công
-- `Settings`: quản lý SMB profiles, connected folders, và Radarr/Sonarr
+Backend vừa:
 
-Luồng chính hiện tại:
+- serve static frontend
+- expose API nội bộ
+- giữ state của app
+- thao tác local filesystem hoặc SMB storage
+- nói chuyện với Radarr và Sonarr
 
-1. người dùng cấu hình SMB profiles và connected folders trong `Settings`
-2. connected folders được lưu dưới dạng scan roots có thêm metadata SMB profile
-3. `scanner.py` quét các roots này và sinh report duplicate
-4. `planner.py` build plan `move/delete/review`
-5. `operations.py` apply plan hoặc preview
-6. `operations.py` cũng cung cấp manual folder move cho use case cut/paste folder từ A sang B
-7. `sync_integrations.py` đồng bộ path về Radarr/Sonarr sau apply execute hoặc sync thủ công
-8. `state.py` lưu mọi snapshot để dashboard render lại sau restart
+## 2. Product shape hiện tại
 
-## 2. Các module chính
+UI hiện tại có 3 view:
 
-### `models.py`
+- `Overview`
+- `Operations`
+- `Settings`
 
-Chứa dataclass lõi:
+Trọng tâm nghiệp vụ nằm ở `Operations`.
+`Settings` chỉ giữ phần kết nối và provider setup.
 
-- `RootConfig`
-- `MediaFile`
-- `ScanReport`
-- `LibraryTargets`
-- `Action`
+## 3. Module chính
 
-`RootConfig` hiện ngoài `path/label/priority/kind` còn có:
+### `web.py`
 
-- `connection_id`
-- `connection_label`
-
-Hai field này giúp dashboard biết connected folder nào thuộc SMB profile nào, nhưng engine scan vẫn làm việc trên filesystem path thực tế. Popup add folder sẽ cố match SMB profile với mounted path hiện có để giảm nhập tay phần runtime path.
-
-### `scanner.py`
+Là entry point của dashboard server.
 
 Chịu trách nhiệm:
 
-- đi qua từng connected folder
+- route static assets
+- route API
+- scan / plan / apply
+- provider APIs
+- operations inventory và tree
+- current job logs và cancel
+
+### `state.py`
+
+Nguồn sự thật của dashboard runtime.
+
+Lưu:
+
+- roots
+- integrations
+- lan_connections
+- activity_log
+- current_job
+- timestamps
+- report / plan / apply / sync artifacts
+
+### `lan_connections.py`
+
+Quản lý SMB profile và thao tác SMB mức connection:
+
+- save / delete profile
+- test SMB connection
+- browse SMB path
+- create / delete SMB directory
+- parse output của `smbclient`
+
+### `storage/`
+
+Là storage abstraction mới.
+
+Gồm:
+
+- `paths.py`
+- `backends.py`
+- `manager.py`
+
+Cho phép code cấp cao làm việc thống nhất với:
+
+- local path
+- SMB path
+
+### `scanner_storage.py`
+
+Adapter giữa engine scan và storage abstraction.
+
+Nhờ vậy scan không còn phụ thuộc tuyệt đối vào local mounted path.
+
+### `scanner.py`
+
+Engine scan:
+
+- walk roots
 - index video files
-- phát hiện exact duplicates
-- phát hiện media collisions
+- exact duplicate detection
+- media collision detection
 
 ### `planner.py`
 
-Biến `ScanReport` thành plan JSON gồm:
+Biến `ScanReport` thành action plan gồm:
 
 - `move`
 - `delete`
@@ -58,130 +106,108 @@ Biến `ScanReport` thành plan JSON gồm:
 
 ### `operations.py`
 
-Chứa hai nhóm thao tác:
+Chứa:
 
-- apply plan từ duplicate workflow
-- move folder thủ công bằng kiểu cut/paste từ source sang destination parent
-- move contents của folder download vào folder đang được provider quản lý
-- delete folder
+- `apply_plan()`
+- `move_folder()`
+- `move_folder_contents()`
+- `delete_folder()`
 
-### `state.py`
+Hiện hỗ trợ cả local path và SMB path.
 
-Lưu:
+### `providers/`
 
-- connected folders
-- SMB profiles
-- integration settings
-- latest report/plan/apply/sync
-- activity log
-- current job
+Client cho:
 
-### `web.py`
+- Radarr
+- Sonarr
 
-Phục vụ:
-
-- static dashboard
-- API cho `Operations`
-- API cho `Settings`
-
-### `lan_connections.py`
-
-Quản lý:
-
-- SMB profile persistence
-- connection test qua `smbclient`
-- SMB folder helper cho browse/create/delete khi cần
+Base client hiện gửi `User-Agent` browser-like để tránh reverse proxy chặn API request.
 
 ### `sync_integrations.py`
 
 Giữ logic:
 
-- normalize cấu hình Radarr/Sonarr
+- normalize integration config
 - test connectivity
-- sync path sau apply execute
-
-## 3. Hai mặt vận hành của dashboard
-
-### `Operations`
-
-Đây là working layer.
-
-Nó tập trung vào:
-
-- xem connected folders
-- preview manual folder move
-- execute manual folder move
-- run scan
-- review duplicate findings
-- build plan
-- dry-run apply
-- execute apply
-- theo dõi process logs và activity
-
-### `Settings`
-
-Đây là support layer.
-
-Nó tập trung vào:
-
-- save nhiều SMB profiles với credential khác nhau
-- add connected folders qua modal
-- gán connected folder với SMB profile khi cần
-- cấu hình Radarr
-- cấu hình Sonarr
-- cấu hình sync options
+- list provider items
+- refresh provider item
+- sync sau apply
 
 ## 4. Luồng dữ liệu chính
 
-### Connected folder setup
+### SMB root setup
 
-`Settings form -> /api/roots -> StateStore -> app-state.json`
+`Settings -> /api/lan/connections -> state`
 
-### Scan flow
+`Settings -> /api/roots hoặc /api/roots/bulk -> state`
 
-`connected roots -> scanner.scan_roots() -> ScanReport -> last-report.json`
+### Folder inventory
 
-### Plan flow
+`roots -> storage manager -> /api/operations/folders`
 
-`ScanReport + LibraryTargets -> planner.plan_actions() -> last-plan.json`
+`roots -> recursive storage walk -> /api/operations/folders/tree`
 
-### Apply flow
+### Scan
+
+`roots -> scanner_storage -> scanner.scan_roots() -> last-report.json`
+
+### Plan
+
+`last-report.json -> planner.plan_actions() -> last-plan.json`
+
+### Apply
 
 `last-plan.json -> operations.apply_plan() -> last-apply.json`
 
-### Manual move flow
+### Provider move
 
-`Operations form -> /api/folders/move -> operations.move_folder()`
+`Operations -> provider items -> move_folder_contents() -> provider refresh`
 
-### Provider move flow
-
-`Folder list action -> /api/integrations/<provider>/items -> /api/folders/move-to-provider -> operations.move_folder_contents() -> provider refresh`
-
-### Sync flow
+### Sync
 
 `plan + apply_result + integrations -> sync_after_apply() -> last-sync.json`
 
-## 5. Nguyên tắc thiết kế hiện tại
+## 5. Current job model
 
-### Filesystem-first
+Các job dài hiện chạy đồng bộ trong request handler nhưng state được cập nhật liên tục.
 
-Project ưu tiên trạng thái thật trên ổ đĩa trước.
-SMB profile chỉ là lớp kết nối hỗ trợ setup; scan/apply vẫn dựa vào path mà runtime đọc và ghi được.
+Mỗi job có:
 
-### Operations vs Settings
+- `logs`
+- `summary`
+- `details`
+- `cancel_requested`
 
-Mọi thứ gây nhiễu vận hành được dồn về `Settings`.
-`Operations` chỉ giữ lại hành động mà người dùng thực sự làm hàng ngày.
+Frontend chỉ cần poll `GET /api/process`.
 
-### Safe by default
+Cancel hoạt động theo cooperative model:
 
-- duplicate workflow vẫn có dry-run
-- manual folder move có preview trước execute
+- `POST /api/process/cancel`
+- state ghi `cancel_requested`
+- engine dừng ở safe point tiếp theo
 
-## 6. Những coupling quan trọng
+## 6. Nguyên tắc thiết kế hiện tại
 
-- `RootConfig.path` vẫn là input thật cho scanner
-- metadata SMB trong `RootConfig` chỉ hỗ trợ bề mặt dashboard, không thay thế filesystem path
-- `planner.py` vẫn phụ thuộc vào scan report và target roots
-- `sync_integrations.py` vẫn phụ thuộc vào plan/apply result
-- frontend `app.js` phụ thuộc trực tiếp vào payload từ `StateStore.api_payload()`
+### SMB-first cho network storage
+
+Mount local không còn là workflow chính.
+SMB roots được truy cập trực tiếp qua `smbclient`.
+
+### Persisted runtime state
+
+Refresh trang không được làm mất `current_job`.
+
+### Provider là layer bổ trợ
+
+Radarr/Sonarr không điều khiển scan engine.
+Chúng chỉ tham gia ở:
+
+- provider item lookup
+- provider refresh
+- sync sau apply
+
+### UI mới không dùng mọi state cũ
+
+Backend vẫn còn vài field legacy như `targets` hoặc `managed_folders`, nhưng UI hiện tại không còn dùng chúng.
+Chúng nên xem là phần đang chờ dọn tiếp.

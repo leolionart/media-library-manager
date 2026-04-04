@@ -1,40 +1,10 @@
 # State And Artifacts
 
-Tài liệu này mô tả cách project lưu state và các file JSON trung gian.
+## 1. StateStore
 
-## 1. StateStore lưu những gì
+`StateStore` là nguồn sự thật cho dashboard runtime.
 
-`StateStore` hiện là nguồn sự thật cho dashboard.
-
-Nó lưu:
-
-- connected folders
-- targets
-- integrations
-- SMB profiles
-- managed folder metadata nếu có
-- timestamps
-- activity log
-- current job
-
-## 2. Các file được dùng
-
-Nếu state file là:
-
-```text
-./data/app-state.json
-```
-
-thì artifact files là:
-
-- `last-report.json`
-- `last-plan.json`
-- `last-apply.json`
-- `last-sync.json`
-
-## 3. Payload state hiện tại
-
-State cơ bản hiện có:
+State cơ bản hiện gồm:
 
 - `version`
 - `roots`
@@ -42,24 +12,86 @@ State cơ bản hiện có:
 - `integrations`
 - `lan_connections`
 - `managed_folders`
-- timestamps
+- `last_scan_at`
+- `last_plan_at`
+- `last_apply_at`
+- `last_sync_at`
 - `activity_log`
 - `current_job`
 
-## 4. Connected folders trong state
+Lưu ý:
 
-Connected folder vẫn được lưu trong `roots`, nhưng nghĩa product hiện tại là:
+- `targets` và `managed_folders` vẫn còn trong backend state
+- UI mới hiện không còn dùng chúng
 
-- root scan
-- root vận hành
-- root thuộc page `Settings`
+## 2. Artifact files
 
-Mỗi item có thể mang metadata SMB:
+Nếu state file là:
 
-- `connection_id`
-- `connection_label`
+```text
+data/app-state.json
+```
 
-## 5. API payload tổng hợp
+thì artifacts là:
+
+- `data/last-report.json`
+- `data/last-plan.json`
+- `data/last-apply.json`
+- `data/last-sync.json`
+
+## 3. Current job
+
+`current_job` hiện được persist trong state để refresh không mất tiến trình.
+
+Field chính:
+
+- `id`
+- `kind`
+- `status`
+- `message`
+- `summary`
+- `details`
+- `logs`
+- `cancel_requested`
+- `started_at`
+- `updated_at`
+- `finished_at`
+
+## 4. Job logs
+
+Job logs hiện lưu các bước chi tiết của:
+
+- scan
+- plan
+- apply
+
+Giới hạn:
+
+```text
+JOB_LOG_LIMIT = 120
+```
+
+## 5. Activity log
+
+Activity log là history cấp cao hơn, dùng để xem event gần đây.
+
+Kinds hiện có thể gồm:
+
+- `config`
+- `lan`
+- `folder`
+- `scan`
+- `plan`
+- `apply`
+- `integration`
+
+Giới hạn:
+
+```text
+ACTIVITY_LOG_LIMIT = 200
+```
+
+## 6. API payload
 
 `api_payload()` trả:
 
@@ -69,22 +101,8 @@ Mỗi item có thể mang metadata SMB:
 - `apply_result`
 - `sync_result`
 
-Frontend dùng một payload này để render cả `Operations` lẫn `Settings`.
+Frontend hiện tải phần lớn UI từ payload này cộng với một số endpoint riêng như:
 
-## 6. Activity log
-
-Activity log hiện chứa event của:
-
-- config
-- lan
-- folder
-- scan
-- plan
-- apply
-- integration
-
-Giới hạn hiện tại:
-
-```text
-ACTIVITY_LOG_LIMIT = 200
-```
+- `/api/process`
+- `/api/operations/folders`
+- `/api/operations/folders/tree`
