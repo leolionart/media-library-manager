@@ -1,4 +1,5 @@
 const PROCESS_POLL_INTERVAL_MS = 1500;
+const DASHBOARD_VIEW_STORAGE_KEY = "media-library-manager.current-view";
 
 const state = {
   payload: null,
@@ -18,6 +19,7 @@ const state = {
   processPoller: null,
   runtimePathAutoValue: "",
   runtimePathManualOverride: false,
+  manualConnectionRequested: false,
 };
 
 const viewMeta = {
@@ -30,6 +32,22 @@ const viewMeta = {
     description: "Manage SMB profiles, connected folders, and Radarr or Sonarr integration settings.",
   },
 };
+
+function isKnownView(view) {
+  return Object.prototype.hasOwnProperty.call(viewMeta, view);
+}
+
+function loadInitialView() {
+  try {
+    const savedView = window.localStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY);
+    if (savedView && isKnownView(savedView)) {
+      return savedView;
+    }
+  } catch {
+    // Ignore storage access failures and fall back to the default view.
+  }
+  return state.currentView;
+}
 
 function defaultPayload() {
   return {
@@ -109,6 +127,42 @@ function showMessage(text, isError = false) {
   }, 4500);
 }
 
+function setActivityBanner(text = "", { active = false, isError = false } = {}) {
+  const addFolderModalOpen = !document.querySelector("#addFolderModal").hidden;
+  const providerMoveModalOpen = !document.querySelector("#providerMoveModal").hidden;
+  const cleanText = String(text || "").trim();
+  const targets = [
+    { banner: "#addFolderActivityBanner", title: "#addFolderActivityTitle", body: "#addFolderActivityText", show: addFolderModalOpen },
+    { banner: "#providerMoveActivityBanner", title: "#providerMoveActivityTitle", body: "#providerMoveActivityText", show: providerMoveModalOpen },
+  ];
+
+  if ((!active && !isError) || (!cleanText && active)) {
+    targets.forEach((target) => {
+      const banner = document.querySelector(target.banner);
+      if (!banner) return;
+      banner.hidden = true;
+      banner.classList.remove("error");
+    });
+    return;
+  }
+
+  const content = {
+    title: isError ? "Failed" : "Working",
+    text: cleanText || "The latest action failed.",
+  };
+
+  targets.forEach((target) => {
+    const banner = document.querySelector(target.banner);
+    const title = document.querySelector(target.title);
+    const body = document.querySelector(target.body);
+    if (!banner || !title || !body) return;
+    banner.hidden = !target.show || (!active && !isError);
+    banner.classList.toggle("error", isError);
+    title.textContent = content.title;
+    body.textContent = content.text;
+  });
+}
+
 function setServerStatus(text) {
   document.querySelector("#serverStatus").textContent = text;
 }
@@ -168,36 +222,58 @@ function chooseDefaultLanConnection() {
 
 function applySavedConnection(connection, { forcePath = true, announce = false } = {}) {
   if (!connection) return false;
+  state.manualConnectionRequested = false;
   state.selectedLanConnectionId = connection.id;
   setAddFolderMode("smb");
   fillLanConnectionForm(connection);
   applyConnectionToFolderForm(connection, { forcePath });
   renderAddFolderConnectionOptions();
+  renderLanConnections();
   if (announce) {
     showMessage("Saved SMB profile applied automatically.");
   }
   return true;
 }
 
+function renderConnectionSetupVisibility() {
+  const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId) || null;
+  const hasSelectedProfile = state.addFolderMode === "smb" && Boolean(connection);
+  const discoveryCard = document.querySelector("#lanDiscoveryCard");
+  const manualForm = document.querySelector("#lanConnectionForm");
+  const testSummary = document.querySelector("#lanConnectionTestSummary");
+
+  discoveryCard.hidden = hasSelectedProfile;
+  manualForm.hidden = state.addFolderMode !== "manual" || !state.manualConnectionRequested;
+  testSummary.hidden = state.addFolderMode !== "manual" || !state.manualConnectionRequested;
+}
+
 function setView(view) {
-  state.currentView = view;
+  const nextView = isKnownView(view) ? view : "operations";
+  state.currentView = nextView;
+  try {
+    window.localStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, nextView);
+  } catch {
+    // Ignore storage access failures and keep the UI responsive.
+  }
   document.querySelectorAll(".nav-item").forEach((item) => {
-    item.classList.toggle("active", item.dataset.view === view);
+    item.classList.toggle("active", item.dataset.view === nextView);
   });
   document.querySelectorAll(".view").forEach((node) => {
-    node.classList.toggle("active", node.id === `${view}View`);
+    node.classList.toggle("active", node.id === `${nextView}View`);
   });
-  const meta = viewMeta[view] || viewMeta.operations;
+  const meta = viewMeta[nextView] || viewMeta.operations;
   document.querySelector("#viewTitle").textContent = meta.title;
   document.querySelector("#viewDescription").textContent = meta.description;
 }
 
 function openModal(modalId) {
   document.querySelector(modalId).hidden = false;
+  setActivityBanner();
 }
 
 function closeModal(modalId) {
   document.querySelector(modalId).hidden = true;
+  setActivityBanner();
 }
 
 function setProviderForm(form, provider) {
@@ -242,8 +318,10 @@ function resetLanConnectionForm({ clearSelection = true } = {}) {
 
 function setAddFolderMode(mode) {
   state.addFolderMode = mode;
-  const connectionForm = document.querySelector("#lanConnectionForm");
-  connectionForm.hidden = mode !== "manual";
+  if (mode !== "manual") {
+    state.manualConnectionRequested = false;
+  }
+  renderConnectionSetupVisibility();
   renderConnectionSummary();
   renderFolderStep();
   syncRuntimePathSuggestions({ force: mode === "direct" });
@@ -624,8 +702,14 @@ function renderLanConnections() {
     savedSelect.value = state.selectedLanConnectionId;
   }
 
+  const deleteButton = document.querySelector("#deleteSelectedLanConnectionButton");
+  deleteButton.hidden = !state.selectedLanConnectionId;
+  deleteButton.disabled = !state.selectedLanConnectionId;
+
   const result = state.lanConnectionTestResult;
-  document.querySelector("#lanConnectionTestSummary").innerHTML = result
+  const testSummary = document.querySelector("#lanConnectionTestSummary");
+  testSummary.hidden = !result;
+  testSummary.innerHTML = result
     ? `
       <div class="collection-item vertical">
         <div class="row split">
@@ -663,54 +747,31 @@ function renderLanConnections() {
             : ""
         }
       </div>`
-    : `<div class="empty-state">No SMB connection test has been run yet.</div>`;
+    : "";
 }
 
 function renderConnectionSummary() {
   const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId);
   const connectionSummary = document.querySelector("#selectedConnectionSummary");
-  const folderSummary = document.querySelector("#folderConnectionSummary");
+  renderConnectionSetupVisibility();
 
   if (state.addFolderMode === "direct") {
-    const html = `
-      <div class="collection-item vertical compact-connection-summary">
-        <div class="row split">
-          <strong>Direct Path Mode</strong>
-          <span class="pill small">No SMB</span>
-        </div>
-        <div class="muted">Use this when the runtime path is already mounted and does not need an SMB profile.</div>
-      </div>`;
+    const html = `<div class="connection-inline-summary">Using direct runtime path. No SMB profile is attached.</div>`;
     connectionSummary.innerHTML = html;
-    folderSummary.innerHTML = html;
     renderRuntimePathAssist();
     return;
   }
 
   if (!connection) {
-    const hasSavedProfiles = getLanConnections().length > 0;
-    const html = `<div class="empty-state">${
-      hasSavedProfiles
-        ? "Select a saved profile above. Manual fields stay hidden unless you need the fallback."
-        : "No saved SMB profile yet. Discover a host or use manual fallback to create one."
-    }</div>`;
-    connectionSummary.innerHTML = html;
-    folderSummary.innerHTML = html;
+    connectionSummary.innerHTML = "";
     renderRuntimePathAssist();
     return;
   }
 
-  const html = `
-    <div class="collection-item vertical compact-connection-summary">
-      <div class="row split">
-        <strong>${escapeHtml(connection.label)}</strong>
-        <span class="pill small accent">Ready</span>
-      </div>
-      <div class="muted">//${escapeHtml(connection.host)}/${escapeHtml(connection.share_name)}</div>
-      <div class="sub-row"><span>Base Path</span><span>${escapeHtml(connection.base_path || "/")}</span></div>
-      <div class="sub-row"><span>User</span><span>${escapeHtml(connection.username || "-")}</span></div>
-    </div>`;
+  const html = `<div class="connection-inline-summary">Using <strong>${escapeHtml(connection.label)}</strong> • //${escapeHtml(
+    connection.host
+  )}/${escapeHtml(connection.share_name)} • base path ${escapeHtml(connection.base_path || "/")}</div>`;
   connectionSummary.innerHTML = html;
-  folderSummary.innerHTML = html;
   renderRuntimePathAssist();
 }
 
@@ -740,7 +801,7 @@ function renderLanDevices() {
     ? payload.devices
         .map((device) => {
           const services = device.services || [];
-          const preferredHost = device.hostname || device.ip_address || device.device_key;
+          const preferredHost = device.ip_address || device.hostname || device.device_key;
           const preferredSmb = services.find((service) => service.service_type === "_smb._tcp");
           const smbTarget = preferredSmb ? `smb://${preferredHost}` : preferredHost;
           return `
@@ -754,13 +815,6 @@ function renderLanDevices() {
                 </div>
                 <span class="pill small ${preferredSmb ? "accent" : ""}">${preferredSmb ? "SMB" : "Host"}</span>
               </div>
-              ${
-                preferredSmb
-                  ? `<div class="item-meta lan-device-meta">
-                      <span class="pill small accent">Port ${escapeHtml(String(preferredSmb.port))}</span>
-                    </div>`
-                  : ""
-              }
             </button>`;
         })
         .join("")
@@ -1045,6 +1099,7 @@ function render() {
   renderRoots();
   renderAddFolderConnectionOptions();
   renderLanConnections();
+  renderConnectionSetupVisibility();
   renderConnectionSummary();
   renderLanDevices();
   renderFolderStep();
@@ -1105,11 +1160,13 @@ async function refreshAll() {
 
 async function runAction(label, action, successMessage) {
   setServerStatus(label);
+  setActivityBanner(label, { active: true });
   startProcessPolling();
   try {
     const result = await action();
     await refreshAll();
     setServerStatus("Dashboard ready");
+    setActivityBanner();
     if (successMessage) showMessage(successMessage);
     return result;
   } catch (error) {
@@ -1119,6 +1176,7 @@ async function runAction(label, action, successMessage) {
       // keep original error
     }
     setServerStatus("Action failed");
+    setActivityBanner(error.message, { isError: true });
     showMessage(error.message, true);
     return null;
   }
@@ -1132,6 +1190,7 @@ document.querySelector("#openAddFolderModalButton").addEventListener("click", ()
   document.querySelector("#addFolderForm").reset();
   state.runtimePathAutoValue = "";
   state.runtimePathManualOverride = false;
+  state.manualConnectionRequested = false;
   state.selectedLanConnectionId = "";
   state.addFolderMode = "smb";
   document.querySelector("#lanConnectionForm").hidden = true;
@@ -1176,6 +1235,7 @@ document.querySelector("#addFolderForm").addEventListener("submit", async (event
 document.querySelector("#savedLanConnectionSelect").addEventListener("change", (event) => {
   const connection = getLanConnections().find((item) => item.id === event.currentTarget.value);
   if (!connection) {
+    state.manualConnectionRequested = false;
     state.selectedLanConnectionId = "";
     renderConnectionSummary();
     renderFolderStep();
@@ -1184,19 +1244,43 @@ document.querySelector("#savedLanConnectionSelect").addEventListener("change", (
   applySavedConnection(connection, { forcePath: true, announce: false });
 });
 
-document.querySelector("#useSavedLanConnectionButton").addEventListener("click", () => {
+document.querySelector("#deleteSelectedLanConnectionButton").addEventListener("click", async () => {
   const connection = getLanConnections().find((item) => item.id === state.selectedLanConnectionId);
   if (!connection) {
     showMessage("Select a saved profile first.", true);
     return;
   }
-  applySavedConnection(connection, { forcePath: true, announce: false });
-  showMessage("Saved SMB profile applied to the folder form.");
+
+  const affectedRoots = (getPayload().roots || []).filter((root) => root.connection_id === connection.id);
+  const warning = affectedRoots.length
+    ? ` This profile is still linked to ${affectedRoots.length} connected folder(s).`
+    : "";
+  if (!window.confirm(`Delete SMB profile ${connection.label}?${warning}`)) return;
+
+  const result = await runAction(
+    "Removing SMB connection...",
+    () =>
+      request(`/api/lan/connections?id=${encodeURIComponent(connection.id)}`, {
+        method: "DELETE",
+      }),
+    "SMB connection removed."
+  );
+  if (!result) return;
+
+  state.selectedLanConnectionId = "";
+  state.editingLanConnectionId = null;
+  state.manualConnectionRequested = false;
+  resetLanConnectionForm();
+  renderAddFolderConnectionOptions();
+  renderConnectionSetupVisibility();
+  renderConnectionSummary();
+  renderFolderStep();
 });
 
 document.querySelector("#openManualSmbButton").addEventListener("click", () => {
+  state.manualConnectionRequested = true;
   setAddFolderMode("manual");
-  showMessage("Manual fallback enabled.");
+  showMessage("Manual SMB form opened.");
 });
 
 document.querySelector("#useDirectPathButton").addEventListener("click", () => {
@@ -1268,8 +1352,10 @@ document.querySelector("#addFolderConnectionSelect").addEventListener("change", 
 
 document.querySelector("#refreshLanDevicesButton").addEventListener("click", async () => {
   setServerStatus("Discovering LAN devices...");
+  setActivityBanner("Discovering LAN devices...", { active: true });
   await refreshLanDevices(true);
   setServerStatus("Dashboard ready");
+  setActivityBanner();
 });
 
 document.querySelector("#saveIntegrationsButton").addEventListener("click", async () => {
@@ -1477,6 +1563,7 @@ document.body.addEventListener("click", async (event) => {
 
   const prefillSmbButton = event.target.closest("[data-prefill-smb-host]");
   if (prefillSmbButton) {
+    state.manualConnectionRequested = true;
     setAddFolderMode("manual");
     const form = document.querySelector("#lanConnectionForm");
     form.querySelector('[name="label"]').value = prefillSmbButton.dataset.prefillSmbLabel || "";
@@ -1654,4 +1741,5 @@ document.querySelector('#addFolderForm [name="path"]').addEventListener("input",
 
 resetLanConnectionForm();
 renderAddFolderConnectionOptions();
+setView(loadInitialView());
 refreshAll().catch((error) => showMessage(error.message, true));

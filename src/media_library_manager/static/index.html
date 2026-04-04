@@ -64,7 +64,6 @@
             </p>
           </div>
         </header>
-
         <section id="operationsView" class="view active">
           <section class="system-strip operations-metrics-strip">
             <article class="system-card system-card-compact">
@@ -387,11 +386,16 @@
           <div>
             <h3 class="title-with-icon">
               <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
-              <span>Add Connected Folder</span>
+              <span>Connect Folder</span>
             </h3>
-            <p>Connect to the SMB host first, then pick the mounted runtime folder the app can actually scan and move.</p>
+            <p>Pick an SMB profile the app already knows, or fall back to LAN discovery or a direct runtime path.</p>
           </div>
           <button class="btn btn-small" type="button" data-close-modal="add-folder">Close</button>
+        </div>
+        <div id="addFolderActivityBanner" class="activity-card" hidden>
+          <span class="status-dot"></span>
+          <strong id="addFolderActivityTitle">Working</strong>
+          <span id="addFolderActivityText">Processing request...</span>
         </div>
         <div class="form-stack">
           <article class="card modal-section-card">
@@ -399,30 +403,25 @@
               <div>
                 <h3 class="title-with-icon">
                   <span class="icon-badge" data-icon="network" aria-hidden="true"></span>
-                  <span>Step 1. Connection</span>
+                  <span>Connection</span>
                 </h3>
-                <p>Choose a saved profile, pick a discovered host, or enter an IP manually. Once the connection is ready, the folder step opens below.</p>
+                <p>Use a saved SMB profile first. Only fall back to LAN discovery or manual entry when needed.</p>
               </div>
             </div>
             <div class="form-stack">
             <div class="field-row modal-connection-row">
-              <label class="field">
-                <span>Saved Profile</span>
+              <label class="field connection-primary-field">
+                <span>Use Saved SMB Profile</span>
+                <div class="field-row connection-primary-row">
                   <select id="savedLanConnectionSelect">
-                    <option value="">Select saved profile</option>
+                    <option value="">Select saved SMB profile</option>
                   </select>
-              </label>
-              <div class="field modal-inline-actions">
-                  <span>Fallback</span>
-                  <div class="field-row modal-button-row">
-                    <button id="useSavedLanConnectionButton" class="btn btn-small" type="button">Re-Apply</button>
-                    <button id="openManualSmbButton" class="btn btn-small" type="button">Enter Manually</button>
-                    <button id="useDirectPathButton" class="btn btn-small" type="button">Direct Path</button>
-                  </div>
+                  <button id="deleteSelectedLanConnectionButton" class="btn btn-small" type="button" hidden>Delete</button>
                 </div>
-              </div>
+              </label>
+            </div>
 
-              <div class="card compact-nested-card">
+              <div id="lanDiscoveryCard" class="card compact-nested-card">
                 <div class="row split compact-subhead">
                   <strong>Discovered Hosts</strong>
                   <div class="item-meta">
@@ -431,6 +430,13 @@
                   </div>
                 </div>
                 <div id="lanDevicesList" class="compact-chip-grid"></div>
+                <div class="lan-fallback-row">
+                  <span class="runtime-path-note">Can't find the SMB host you need?</span>
+                  <div class="field-row modal-button-row">
+                    <button id="openManualSmbButton" class="btn btn-small" type="button">Add SMB Manually</button>
+                    <button id="useDirectPathButton" class="btn btn-small" type="button">Use Direct Path Instead</button>
+                  </div>
+                </div>
               </div>
 
               <form id="lanConnectionForm" class="form-stack" hidden>
@@ -483,12 +489,11 @@
                 <div>
                   <h3 class="title-with-icon">
                     <span class="icon-badge" data-icon="folder" aria-hidden="true"></span>
-                    <span>Step 2. Folder</span>
+                    <span>Folder</span>
                   </h3>
-                  <p>The connection above is already selected. Adjust the folder fields only if needed.</p>
+                  <p>The connection above is ready. Only adjust these fields if the defaults are not correct.</p>
                 </div>
               </div>
-              <div id="folderConnectionSummary" class="collection compact"></div>
               <div class="field-row">
                 <label class="field">
                   <span>Label</span>
@@ -540,6 +545,11 @@
             <p>Select the movie or series already managed by the provider, then move the folder contents into that existing managed path.</p>
           </div>
           <button class="btn btn-small" type="button" data-close-modal="provider-move">Close</button>
+        </div>
+        <div id="providerMoveActivityBanner" class="activity-card" hidden>
+          <span class="status-dot"></span>
+          <strong id="providerMoveActivityTitle">Working</strong>
+          <span id="providerMoveActivityText">Processing request...</span>
         </div>
         <form id="providerMoveForm" class="form-stack">
           <input name="provider" type="hidden" />
