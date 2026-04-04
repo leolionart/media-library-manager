@@ -20,16 +20,7 @@ export const antTheme = {
     colorText: "#eaeaea",
     colorTextSecondary: "#a0a0a0",
     colorTextTertiary: "#6a6a6a",
-    colorTextQuaternary: "#6a6a6a",
-    borderRadius: 12,
-    borderRadiusSM: 10,
-    borderRadiusLG: 16,
-    controlHeight: 40,
-    controlHeightLG: 44,
-    controlHeightSM: 34,
-    wireframe: false,
-    fontFamily: "\"IBM Plex Sans\", \"Segoe UI\", sans-serif",
-    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.35)"
+    colorTextQuaternary: "#6a6a6a"
   },
   components: {
     Layout: {
@@ -46,23 +37,16 @@ export const antTheme = {
       darkItemHoverColor: "#eaeaea",
       darkItemHoverBg: "rgba(229, 160, 13, 0.08)",
       darkItemSelectedBg: "#d09329",
-      darkItemSelectedColor: "#ffffff",
-      itemBorderRadius: 999,
-      itemMarginInline: 12,
-      itemMarginBlock: 8
+      darkItemSelectedColor: "#ffffff"
     },
     Card: {
-      bodyPadding: 24,
       headerBg: "transparent"
     },
     Table: {
       headerBg: "#2d2d35",
       headerColor: "#6a6a6a",
       rowHoverBg: "#32323c",
-      borderColor: "#3a3a44",
-      headerBorderRadius: 16,
-      cellPaddingBlock: 14,
-      cellPaddingInline: 16
+      borderColor: "#3a3a44"
     },
     Modal: {
       contentBg: "#282830",
@@ -86,17 +70,13 @@ export const antTheme = {
     },
     Switch: {
       colorPrimary: "#e5a00d",
-      colorPrimaryHover: "#cc8b00",
-      colorTextQuaternary: "#44444e",
-      trackHeight: 28,
-      trackMinWidth: 48,
-      trackPadding: 3
+      colorPrimaryHover: "#cc8b00"
     },
     Checkbox: {
       colorPrimary: "#e5a00d",
       colorPrimaryHover: "#cc8b00",
       colorBorder: "#55555f",
-      borderRadiusSM: 8
+      colorBgContainer: "#282830"
     }
   }
 };

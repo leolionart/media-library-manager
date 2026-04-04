@@ -48,15 +48,16 @@ export async function fetchOperationsData() {
     process: process.current_job || null,
     mounts: mounts.mounts || [],
     operationsFolders: folders.items || [],
-    operationsSummary: folders.summary || { items: 0, roots: 0 },
-    operationsFolderTree: [],
-    operationsTreeSummary: { roots: folders.summary?.roots || 0, nodes: 0, max_depth: 0 }
+    operationsSummary: folders.summary || { items: 0, roots: 0 }
   };
 }
 
-export function fetchOperationsTree({ depth = 2, timeoutMs = 5000 } = {}) {
-  const params = new URLSearchParams({ depth: String(depth) });
-  return request(`/api/operations/folders/tree?${params.toString()}`, { timeoutMs });
+export function fetchOperationsFolderChildren({ storageUri, rootStorageUri, timeoutMs = 8000 }) {
+  const params = new URLSearchParams({
+    storage_uri: storageUri,
+    root_storage_uri: rootStorageUri,
+  });
+  return request(`/api/operations/folders/children?${params.toString()}`, { timeoutMs });
 }
 
 export function fetchProviderItems(provider) {
@@ -72,6 +73,13 @@ export function discoverLanDevices() {
 }
 
 export function addRoot(payload) {
+  return request("/api/roots", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateRoot(payload) {
   return request("/api/roots", {
     method: "POST",
     body: JSON.stringify(payload)
@@ -131,8 +139,11 @@ export function executeMoveToProvider(payload) {
   });
 }
 
-export function runScan() {
-  return request("/api/scan", { method: "POST", body: "{}" });
+export function runScan(selectedFolders) {
+  return request("/api/scan", {
+    method: "POST",
+    body: JSON.stringify({ folders: selectedFolders || [] })
+  });
 }
 
 export function buildPlan(deleteLowerQuality) {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,13 +32,17 @@ class StoragePath:
     def from_uri(cls, value: str) -> "StoragePath":
         parsed = urlparse(str(value or ""))
         if parsed.scheme == "local":
-            target = parsed.path or "/"
+            target = _decode_uri_component(parsed.path or "/")
             return cls.local(target)
         if parsed.scheme == "smb":
             params = parse_qs(parsed.query)
             connection_id = params.get("connection_id", [""])[0]
-            share_name = parsed.netloc or params.get("share_name", [""])[0]
-            return cls.smb(connection_id=connection_id, share_name=share_name, path=parsed.path or "/")
+            share_name = _decode_uri_component(parsed.netloc or params.get("share_name", [""])[0])
+            return cls.smb(
+                connection_id=connection_id,
+                share_name=share_name,
+                path=_decode_uri_component(parsed.path or "/"),
+            )
         if value.startswith("/"):
             return cls.local(value)
         raise ValueError(f"unsupported storage uri: {value}")
@@ -124,3 +128,13 @@ class StoragePath:
         if not text or text == ".":
             return "/"
         return "/" + text.strip("/")
+
+
+def _decode_uri_component(value: str) -> str:
+    current = str(value or "")
+    for _ in range(4):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return current

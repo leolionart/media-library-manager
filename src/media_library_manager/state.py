@@ -95,14 +95,27 @@ class StateStore:
 
     def add_root(self, root: RootConfig) -> dict[str, Any]:
         roots = self.list_roots()
-        roots = [item for item in roots if str(item.path) != str(root.path)]
+        target_path = root.path.expanduser().resolve()
+        roots = [item for item in roots if item.path.expanduser().resolve() != target_path]
+        roots.append(root)
+        roots.sort(key=lambda item: (-item.priority, str(item.path)))
+        return self.save_roots(roots)
+
+    def update_root(self, original_root_path: str | Path, root: RootConfig) -> dict[str, Any]:
+        original_path = Path(original_root_path).expanduser().resolve()
+        next_path = root.path.expanduser().resolve()
+        roots = [
+            item
+            for item in self.list_roots()
+            if item.path.expanduser().resolve() != original_path and item.path.expanduser().resolve() != next_path
+        ]
         roots.append(root)
         roots.sort(key=lambda item: (-item.priority, str(item.path)))
         return self.save_roots(roots)
 
     def remove_root(self, root_path: str | Path) -> dict[str, Any]:
         path = Path(root_path).expanduser().resolve()
-        roots = [item for item in self.list_roots() if item.path != path]
+        roots = [item for item in self.list_roots() if item.path.expanduser().resolve() != path]
         return self.save_roots(roots)
 
     def load_targets(self) -> LibraryTargets:

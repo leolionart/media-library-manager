@@ -26,6 +26,7 @@ import {
 } from "antd";
 import {
   ApiOutlined,
+  EditOutlined,
   FolderOpenOutlined,
   LinkOutlined,
   PlusOutlined,
@@ -42,7 +43,8 @@ import {
   saveIntegrations,
   saveLanConnection,
   testIntegrations,
-  testLanConnection
+  testLanConnection,
+  updateRoot
 } from "../api";
 
 const { Text } = Typography;
@@ -121,6 +123,36 @@ function createSmbRootPayload(values, connection) {
   };
 }
 
+function buildRootFormValues(root) {
+  if (!root) {
+    return { mode: "local", priority: 50, kind: "mixed", share_path: "/" };
+  }
+
+  if (root.storage_uri) {
+    const parsed = new URL(root.storage_uri);
+    return {
+      mode: "smb",
+      original_path: root.path,
+      connection_id: root.connection_id || "",
+      share_name: root.share_name || decodeURIComponent(parsed.hostname || ""),
+      share_path: decodeURIComponent(parsed.pathname || "/"),
+      label: root.label || "",
+      priority: Number(root.priority || 50),
+      kind: root.kind || "mixed",
+    };
+  }
+
+  return {
+    mode: "local",
+    original_path: root.path,
+    path: root.path,
+    label: root.label || "",
+    priority: Number(root.priority || 50),
+    kind: root.kind || "mixed",
+    share_path: "/",
+  };
+}
+
 function ProviderSettingsCard({ provider, testResult, onSave, onTest, saving, testing }) {
   const title = provider === "radarr" ? "Radarr" : "Sonarr";
 
@@ -181,6 +213,7 @@ export function SettingsView() {
   const [integrationTestResults, setIntegrationTestResults] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [rootModalOpen, setRootModalOpen] = useState(false);
+  const [editingRoot, setEditingRoot] = useState(null);
   const [connectionModalOpen, setConnectionModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState(null);
   const [savingIntegrations, setSavingIntegrations] = useState(false);
@@ -261,29 +294,41 @@ export function SettingsView() {
     {
       title: "",
       key: "actions",
-      width: 120,
+      width: 220,
       render: (_, record) => (
-        <Popconfirm
-          title="Remove connected folder?"
-          description={record.label}
-          okText="Remove"
-          onConfirm={async () => {
-            setRemovingRootPath(record.path);
-            try {
-              await removeRoot(record.path);
-              await refreshSettings();
-              message.success("Connected folder removed.");
-            } catch (error) {
-              message.error(error.message);
-            } finally {
-              setRemovingRootPath("");
-            }
-          }}
-        >
-          <Button danger loading={removingRootPath === record.path}>
-            Remove
+        <Space wrap>
+          <Button
+            icon={<EditOutlined />}
+            onClick={() => {
+              setEditingRoot(record);
+              rootForm.setFieldsValue(buildRootFormValues(record));
+              setRootModalOpen(true);
+            }}
+          >
+            Edit
           </Button>
-        </Popconfirm>
+          <Popconfirm
+            title="Remove connected folder?"
+            description={record.label}
+            okText="Remove"
+            onConfirm={async () => {
+              setRemovingRootPath(record.path);
+              try {
+                await removeRoot(record.path);
+                await refreshSettings();
+                message.success("Connected folder removed.");
+              } catch (error) {
+                message.error(error.message);
+              } finally {
+                setRemovingRootPath("");
+              }
+            }}
+          >
+            <Button danger loading={removingRootPath === record.path}>
+              Remove
+            </Button>
+          </Popconfirm>
+        </Space>
       )
     }
   ];
@@ -412,7 +457,15 @@ export function SettingsView() {
                     </Space>
                   }
                   extra={
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => setRootModalOpen(true)}>
+                    <Button
+                      type="primary"
+                      icon={<PlusOutlined />}
+                      onClick={() => {
+                        setEditingRoot(null);
+                        rootForm.setFieldsValue(buildRootFormValues(null));
+                        setRootModalOpen(true);
+                      }}
+                    >
                       Add Root
                     </Button>
                   }
@@ -727,9 +780,13 @@ export function SettingsView() {
 
       <Modal
         open={rootModalOpen}
-        title="Add Connected Folder"
-        okText="Add Root"
-        onCancel={() => setRootModalOpen(false)}
+        title={editingRoot ? "Edit Connected Folder" : "Add Connected Folder"}
+        okText={editingRoot ? "Save Changes" : "Add Root"}
+        onCancel={() => {
+          setRootModalOpen(false);
+          setEditingRoot(null);
+          rootForm.resetFields();
+        }}
         onOk={() => rootForm.submit()}
       >
         <Form
@@ -738,6 +795,7 @@ export function SettingsView() {
           initialValues={{ mode: "local", priority: 50, kind: "mixed", share_path: "/" }}
           onFinish={async (values) => {
             try {
+              const originalPath = String(values.original_path || editingRoot?.path || "").trim();
               const payload =
                 values.mode === "smb"
                   ? createSmbRootPayload(values, selectedRootConnection)
@@ -752,16 +810,24 @@ export function SettingsView() {
                 throw new Error("SMB root requires a connection and share name.");
               }
 
-              await addRoot(payload);
+              if (originalPath) {
+                await updateRoot({ ...payload, original_path: originalPath });
+              } else {
+                await addRoot(payload);
+              }
               await refreshSettings();
               setRootModalOpen(false);
+              setEditingRoot(null);
               rootForm.resetFields();
-              message.success("Connected folder added.");
+              message.success(originalPath ? "Connected folder updated." : "Connected folder added.");
             } catch (error) {
               message.error(error.message);
             }
           }}
         >
+          <Form.Item name="original_path" hidden>
+            <Input />
+          </Form.Item>
           <Form.Item name="mode" label="Source Type">
             <Select
               options={[

@@ -18,14 +18,15 @@ import {
   Spin,
   Statistic,
   Switch,
+  Table,
   Tag,
-  Tree,
   Typography,
 } from "antd";
 import {
   FolderOpenOutlined,
   MoreOutlined,
   PlayCircleOutlined,
+  ReloadOutlined,
   SyncOutlined,
 } from "@ant-design/icons";
 import {
@@ -34,7 +35,7 @@ import {
   deleteFolder,
   executeMoveToProvider,
   fetchOperationsData,
-  fetchOperationsTree,
+  fetchOperationsFolderChildren,
   fetchProviderItems,
   previewMoveToProvider,
   removeRoot,
@@ -111,6 +112,121 @@ function scoreProviderItem(item, query) {
   return queryTokens.filter((token) => titleTokens.has(token)).length * 10;
 }
 
+function buildFolderTableData(roots, items) {
+  const rootsByKey = new Map();
+  const rootRows = (roots || [])
+    .map((root) => {
+      const rootKey = root.storage_uri || root.path;
+      const row = {
+        key: rootKey,
+        label: root.label,
+        path: root.path,
+        display_path: root.label,
+        root_path: root.path,
+        root_label: root.label,
+        connection_id: root.connection_id,
+        connection_label: root.connection_label,
+        kind: root.kind,
+        priority: root.priority,
+        storage_uri: root.storage_uri || root.path,
+        root_storage_uri: root.storage_uri || root.path,
+        is_root: true,
+        has_children: true,
+        children_loaded: false,
+      };
+      rootsByKey.set(rootKey, row);
+      return row;
+    })
+    .sort((left, right) => String(left.label).localeCompare(String(right.label)));
+
+  const groupedItems = new Map();
+  (items || []).forEach((item) => {
+    const rootKey = item.root_storage_uri || item.root_path || item.root_label;
+    if (!groupedItems.has(rootKey)) groupedItems.set(rootKey, []);
+    groupedItems.get(rootKey).push({
+      ...item,
+      key: item.storage_uri || item.path,
+      is_root: false,
+      has_children: true,
+      children_loaded: false,
+    });
+  });
+
+  return rootRows.map((root) => {
+    const children = (groupedItems.get(root.key) || []).sort(
+      (left, right) =>
+        String(left.display_path || left.label).localeCompare(String(right.display_path || right.label)) ||
+        String(left.label).localeCompare(String(right.label))
+    );
+    return {
+      ...root,
+      has_children: children.length > 0,
+      children_loaded: children.length > 0,
+      children: children.length ? children : undefined,
+    };
+  });
+}
+
+function buildDuplicateScanSelection(records) {
+  return (records || [])
+    .filter((record) => record && !record.is_root)
+    .map((record) => ({
+      label: record.label,
+      path: record.path,
+      root_path: record.root_path,
+      root_label: record.root_label,
+      connection_id: record.connection_id,
+      connection_label: record.connection_label,
+      kind: record.kind,
+      priority: record.priority,
+      storage_uri: record.storage_uri,
+      root_storage_uri: record.root_storage_uri,
+    }));
+}
+
+function replaceNodeChildren(rows, targetKey, children) {
+  return rows.map((row) => {
+    if (row.key === targetKey) {
+      return {
+        ...row,
+        children: children.length ? children : undefined,
+        has_children: children.length > 0,
+        children_loaded: true,
+      };
+    }
+    if (!row.children?.length) return row;
+    return { ...row, children: replaceNodeChildren(row.children, targetKey, children) };
+  });
+}
+
+function filterFolderTableData(rows, query) {
+  if (!query) return rows;
+
+  return rows
+    .map((row) => {
+      const matchesRow = [row.label, row.path, row.display_path, row.root_label, row.connection_label, row.kind]
+        .filter(Boolean)
+        .some((value) => normalizeSearchText(value).includes(query));
+
+      if (matchesRow) {
+        return row;
+      }
+
+      const children = (row.children || []).filter((child) =>
+        [child.label, child.path, child.display_path, child.root_label, child.connection_label, child.kind]
+          .filter(Boolean)
+          .some((value) => normalizeSearchText(value).includes(query))
+      );
+
+      if (!children.length) {
+        return null;
+      }
+
+      return { ...row, children };
+    })
+    .filter(Boolean);
+}
+
 function StatusTag({ value }) {
   const status = String(value || "").toLowerCase();
   let color = "default";
@@ -120,66 +236,6 @@ function StatusTag({ value }) {
   if (["dry-run", "review"].includes(status)) color = "processing";
 
   return <Tag color={color}>{value || "unknown"}</Tag>;
-}
-
-function SummaryCards({ payload, folderSummary }) {
-  const reportSummary = payload.report?.summary || {};
-  const connectedRoots = folderSummary.roots || payload.roots?.length || 0;
-  const duplicateGroups = (reportSummary.exact_duplicate_groups || 0) + (reportSummary.media_collision_groups || 0);
-  const enabledIntegrations = ["radarr", "sonarr"].filter((name) => payload.integrations?.[name]?.enabled);
-  const items = [
-    {
-      key: "folders",
-      title: "Connected Folders",
-      value: folderSummary.items || 0,
-      suffix: connectedRoots ? `${connectedRoots} roots connected` : "Add folders from Settings",
-    },
-    {
-      key: "duplicates",
-      title: "Duplicate Summary",
-      value: payload.report ? `${duplicateGroups} groups` : "No scan",
-      suffix: payload.report
-        ? `${reportSummary.exact_duplicate_groups || 0} exact • ${reportSummary.media_collision_groups || 0} collision`
-        : "Run scan to analyze",
-    },
-    {
-      key: "providers",
-      title: "Integrations",
-      value: enabledIntegrations.length ? enabledIntegrations.join(" + ") : "Disabled",
-      suffix: enabledIntegrations.length ? "Provider moves available" : "Configure providers in Settings",
-    },
-    {
-      key: "scan",
-      title: "Latest Scan",
-      value: formatDate(payload.last_scan_at),
-      suffix: "Most recent duplicate analysis snapshot",
-    },
-    {
-      key: "plan",
-      title: "Latest Plan",
-      value: formatDate(payload.last_plan_at),
-      suffix: "Latest generated action plan",
-    },
-    {
-      key: "apply",
-      title: "Latest Apply",
-      value: formatDate(payload.last_apply_at),
-      suffix: "Most recent dry-run or execute result",
-    },
-  ];
-
-  return (
-    <Row gutter={[16, 16]}>
-      {items.map((item) => (
-        <Col key={item.key} xs={24} sm={12} xl={8} xxl={4}>
-          <Card size="small">
-            <Statistic title={item.title} value={item.value} valueStyle={{ fontSize: 22 }} />
-            <Text type="secondary">{item.suffix}</Text>
-          </Card>
-        </Col>
-      ))}
-    </Row>
-  );
 }
 
 function ProviderMoveModal({
@@ -310,11 +366,10 @@ export function OperationsView() {
   const [payload, setPayload] = useState(emptyState);
   const [currentJob, setCurrentJob] = useState(null);
   const [folderItems, setFolderItems] = useState([]);
-  const [folderTree, setFolderTree] = useState([]);
+  const [folderTreeRows, setFolderTreeRows] = useState([]);
   const [folderSummary, setFolderSummary] = useState({ items: 0, roots: 0 });
-  const [treeSummary, setTreeSummary] = useState({ roots: 0, nodes: 0, max_depth: 4 });
-  const [treeLoading, setTreeLoading] = useState(false);
-  const [treeError, setTreeError] = useState("");
+  const [expandedRowKeys, setExpandedRowKeys] = useState([]);
+  const [loadingBranchKeys, setLoadingBranchKeys] = useState([]);
   const [search, setSearch] = useState("");
   const [selectedNodeKeys, setSelectedNodeKeys] = useState([]);
   const [deleteLowerQuality, setDeleteLowerQuality] = useState(false);
@@ -327,34 +382,26 @@ export function OperationsView() {
     setCurrentJob(data.process || data.state?.current_job || null);
     setFolderItems(data.operationsFolders || []);
     setFolderSummary(data.operationsSummary || { items: 0, roots: 0 });
-    setTreeSummary({ roots: data.operationsSummary?.roots || 0, nodes: 0, max_depth: 0 });
-    setSelectedNodeKeys((current) => current.filter((key) => (data.operationsFolders || []).some((item) => item.path === key)));
+    const initialRows = buildFolderTableData(data.state?.roots || [], data.operationsFolders || []);
+    setFolderTreeRows(initialRows);
+    setExpandedRowKeys(initialRows.filter((row) => row.children?.length).map((row) => row.key));
+    const allowedKeys = new Set();
+    const visit = (rows) => rows.forEach((row) => {
+      allowedKeys.add(row.key);
+      if (row.children?.length) visit(row.children);
+    });
+    visit(initialRows);
+    setSelectedNodeKeys((current) => current.filter((key) => allowedKeys.has(key)));
     return data;
-  };
-
-  const refreshTree = async (summary = folderSummary) => {
-    setTreeLoading(true);
-    setTreeError("");
-
-    try {
-      const folderTree = await fetchOperationsTree();
-      setFolderTree(folderTree.items || []);
-      setTreeSummary(folderTree.summary || { roots: summary.roots || 0, nodes: 0, max_depth: 0 });
-    } catch (error) {
-      setFolderTree([]);
-      setTreeSummary({ roots: summary.roots || 0, nodes: 0, max_depth: 0 });
-      setTreeError(error.message || "Folder tree is unavailable right now.");
-    } finally {
-      setTreeLoading(false);
-    }
   };
 
   useEffect(() => {
     refreshAll()
-      .then((data) => refreshTree(data.operationsSummary || { items: 0, roots: 0 }))
       .catch((error) => message.error(error.message))
       .finally(() => setLoading(false));
   }, [message]);
+
+  const tableData = folderTreeRows;
 
   const nodeMap = useMemo(() => {
     const map = new Map();
@@ -364,46 +411,32 @@ export function OperationsView() {
         if (node.children?.length) visit(node.children);
       });
     };
-    visit(folderTree);
+    visit(tableData);
     return map;
-  }, [folderTree]);
+  }, [tableData]);
 
-  const filteredTree = useMemo(() => {
+  const filteredTableData = useMemo(() => {
     const query = normalizeSearchText(search);
-    if (!query) return folderTree;
+    return filterFolderTableData(tableData, query);
+  }, [search, tableData]);
 
-    const filterNodes = (nodes) =>
-      nodes
-        .map((node) => {
-          const children = filterNodes(node.children || []);
-          const matches = [node.label, node.path, node.display_path, node.root_label, node.connection_label, node.kind]
-            .filter(Boolean)
-            .some((value) => normalizeSearchText(value).includes(query));
-          if (!matches && !children.length) return null;
-          return { ...node, children };
-        })
-        .filter(Boolean);
-
-    return filterNodes(folderTree);
-  }, [folderTree, search]);
-
-  const expandedKeys = useMemo(() => {
-    const keys = [];
-    const walk = (nodes) => {
-      nodes.forEach((node) => {
-        if (node.children?.length) {
-          keys.push(node.key);
-          walk(node.children);
-        }
-      });
-    };
-    walk(filteredTree);
-    return keys;
-  }, [filteredTree]);
-
-  const selectedFolder = selectedNodeKeys.length === 1 ? nodeMap.get(selectedNodeKeys[0]) || null : null;
+  const selectedRecords = useMemo(
+    () => selectedNodeKeys.map((key) => nodeMap.get(key)).filter(Boolean),
+    [nodeMap, selectedNodeKeys]
+  );
+  const selectedFolders = useMemo(() => selectedRecords.filter((record) => !record.is_root), [selectedRecords]);
+  const selectedRoots = useMemo(() => selectedRecords.filter((record) => record.is_root), [selectedRecords]);
+  const selectedFolder = selectedFolders.length === 1 && selectedRoots.length === 0 ? selectedFolders[0] : null;
   const canMoveToRadarr = Boolean(payload.integrations?.radarr?.enabled && selectedFolder);
   const canMoveToSonarr = Boolean(payload.integrations?.sonarr?.enabled && selectedFolder);
+  const selectedPaths = selectedFolders.map((record) => record.path);
+  const selectedRootPaths = selectedRoots.map((record) => record.path);
+  const duplicateScanSelection = useMemo(() => buildDuplicateScanSelection(selectedFolders), [selectedFolders]);
+  const treeSummary = {
+    roots: folderSummary.roots || payload.roots?.length || 0,
+    nodes: folderSummary.items || folderItems.length || 0,
+    max_depth: "Unlimited",
+  };
 
   const rankedProviderItems = useMemo(
     () =>
@@ -435,8 +468,7 @@ export function OperationsView() {
     setActionLoading(actionKey);
     try {
       const result = await action();
-      const data = await refreshAll();
-      await refreshTree(data.operationsSummary || { items: 0, roots: 0 });
+      await refreshAll();
       if (successMessage) message.success(successMessage);
       return result;
     } catch (error) {
@@ -444,6 +476,43 @@ export function OperationsView() {
       return null;
     } finally {
       setActionLoading("");
+    }
+  };
+
+  const handleRefreshFolders = async () => {
+    setActionLoading("refresh-folders");
+    try {
+      await refreshAll();
+      message.success("Folder list refreshed.");
+    } catch (error) {
+      message.error(error.message);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const loadBranch = async (record) => {
+    if (!record?.storage_uri || !record?.root_storage_uri || record.children_loaded || record.has_children === false) {
+      return;
+    }
+
+    setLoadingBranchKeys((current) => (current.includes(record.key) ? current : [...current, record.key]));
+
+    try {
+      const result = await fetchOperationsFolderChildren({
+        storageUri: record.storage_uri,
+        rootStorageUri: record.root_storage_uri,
+      });
+      const children = (result.items || []).map((item) => ({
+        ...item,
+        key: item.storage_uri || item.path,
+        children_loaded: false,
+      }));
+      setFolderTreeRows((current) => replaceNodeChildren(current, record.key, children));
+    } catch (error) {
+      message.error(error.message);
+    } finally {
+      setLoadingBranchKeys((current) => current.filter((key) => key !== record.key));
     }
   };
 
@@ -517,72 +586,94 @@ export function OperationsView() {
     });
   };
 
-  const renderTreeTitle = (record) => (
-    <Flex align="center" justify="space-between" gap={12} style={{ width: "100%" }}>
-      <Flex vertical gap={2} style={{ minWidth: 0 }}>
-        <Space size={[4, 4]} wrap>
-          <Text strong>{record.label}</Text>
-          {record.priority ? (
-            <Tag color="gold" bordered={false}>
-              P{record.priority}
-            </Tag>
-          ) : null}
-          {record.kind ? <Tag>{record.kind}</Tag> : null}
-          {record.is_root ? <Tag color="blue">Root</Tag> : null}
-        </Space>
-        <Text type="secondary" className="mono">
-          {record.display_path || record.path}
-        </Text>
-        {record.connection_label || record.root_label ? (
-          <Text type="secondary">{record.connection_label || record.root_label}</Text>
-        ) : null}
-      </Flex>
-      <Dropdown
-        trigger={["click"]}
-        menu={{
-          items: [
-            { key: "move-radarr", label: "Move To Radarr...", disabled: !payload.integrations?.radarr?.enabled },
-            { key: "move-sonarr", label: "Move To Sonarr...", disabled: !payload.integrations?.sonarr?.enabled },
-            { type: "divider" },
-            { key: "remove-root", label: "Remove From App", disabled: !record.is_root },
-            { key: "delete-folder", label: "Delete Folder...", danger: true },
-          ],
-          onClick: async ({ domEvent, key }) => {
-            domEvent.stopPropagation();
-            setSelectedNodeKeys([record.key]);
-            if (key === "move-radarr" || key === "move-sonarr") {
-              await openProviderModal(key === "move-radarr" ? "radarr" : "sonarr", record);
-              return;
-            }
-            if (key === "remove-root") {
-              await handleRemoveRoots([record.path]);
-              return;
-            }
-            if (key === "delete-folder") {
-              await handleDeleteFolders([record.path]);
-            }
-          },
-        }}
-      >
-        <Button
-          size="small"
-          icon={<MoreOutlined />}
-          aria-label={`More actions for ${record.label}`}
-          onClick={(event) => event.stopPropagation()}
-        />
-      </Dropdown>
-    </Flex>
+  const renderRowActions = (record) => (
+    <Dropdown
+      trigger={["click"]}
+      menu={{
+        items: [
+          { key: "move-radarr", label: "Move To Radarr...", disabled: record.is_root || !payload.integrations?.radarr?.enabled },
+          { key: "move-sonarr", label: "Move To Sonarr...", disabled: record.is_root || !payload.integrations?.sonarr?.enabled },
+          { type: "divider" },
+          { key: "remove-root", label: "Remove From App", disabled: !record.is_root },
+          { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: record.is_root },
+        ],
+        onClick: async ({ domEvent, key }) => {
+          domEvent.stopPropagation();
+          setSelectedNodeKeys(record.is_root ? [] : [record.key]);
+          if (key === "move-radarr" || key === "move-sonarr") {
+            await openProviderModal(key === "move-radarr" ? "radarr" : "sonarr", record);
+            return;
+          }
+          if (key === "remove-root") {
+            await handleRemoveRoots([record.path]);
+            return;
+          }
+          if (key === "delete-folder") {
+            await handleDeleteFolders([record.path]);
+          }
+        },
+      }}
+    >
+      <Button
+        size="small"
+        icon={<MoreOutlined />}
+        aria-label={`More actions for ${record.label}`}
+        onClick={(event) => event.stopPropagation()}
+      />
+    </Dropdown>
   );
 
-  const treeData = useMemo(() => {
-    const mapNodes = (nodes) =>
-      nodes.map((node) => ({
-        ...node,
-        title: renderTreeTitle(node),
-        children: node.children?.length ? mapNodes(node.children) : undefined,
-      }));
-    return mapNodes(filteredTree);
-  }, [filteredTree, payload.integrations]);
+  const tableColumns = [
+    {
+      title: "Folder",
+      dataIndex: "label",
+      key: "folder",
+      width: "42%",
+      render: (_, record) => (
+        <Flex vertical gap={6} style={{ minWidth: 0 }}>
+          <Space size={[4, 4]} wrap>
+            <Text strong>{record.label}</Text>
+            {record.priority ? (
+              <Tag color="gold" bordered={false}>
+                P{record.priority}
+              </Tag>
+            ) : null}
+            {record.kind ? <Tag>{record.kind}</Tag> : null}
+            {record.is_root ? <Tag color="blue">Root</Tag> : null}
+          </Space>
+          {!record.is_root ? (
+            <Text type="secondary" className="mono">
+              {record.display_path || record.path}
+            </Text>
+          ) : null}
+        </Flex>
+      ),
+    },
+    {
+      title: "Path",
+      dataIndex: "display_path",
+      key: "path",
+      width: "30%",
+      render: (_, record) => (
+        <Text type="secondary" className="mono">
+          {record.path}
+        </Text>
+      ),
+    },
+    {
+      title: "Source",
+      key: "source",
+      width: "16%",
+      render: (_, record) => <Text>{record.connection_label || record.root_label || "Direct path"}</Text>,
+    },
+    {
+      title: "",
+      key: "actions",
+      width: 64,
+      align: "right",
+      render: (_, record) => renderRowActions(record),
+    },
+  ];
 
   const optionItems = [
     {
@@ -638,34 +729,57 @@ export function OperationsView() {
                     >
                       Move To Sonarr
                     </Button>
+                    <Button
+                      type="primary"
+                      ghost
+                      disabled={!duplicateScanSelection.length}
+                      loading={actionLoading === "scan"}
+                      onClick={() =>
+                        runAction(
+                          "scan",
+                          () => runScan(duplicateScanSelection),
+                          duplicateScanSelection.length === 1
+                            ? "Duplicate detection finished for 1 folder."
+                            : `Duplicate detection finished for ${duplicateScanSelection.length} folders.`
+                        )
+                      }
+                    >
+                      Detect Duplicates
+                    </Button>
                     <Dropdown
                       trigger={["click"]}
                       menu={{
                         items: [
-                          { key: "remove-root", label: "Remove From App" },
-                          { key: "delete-folder", label: "Delete Folder...", danger: true },
+                          { key: "remove-root", label: "Remove From App", disabled: !selectedRootPaths.length },
+                          { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: !selectedPaths.length },
                         ],
                         onClick: async ({ key }) => {
-                          if (!selectedFolder) return;
                           if (key === "remove-root") {
-                            await handleRemoveRoots([selectedFolder.path]);
+                            await handleRemoveRoots(selectedRootPaths);
                             return;
                           }
                           if (key === "delete-folder") {
-                            await handleDeleteFolders([selectedFolder.path]);
+                            await handleDeleteFolders(selectedPaths);
                           }
                         },
                       }}
                     >
-                      <Button disabled={!selectedFolder}>More</Button>
+                      <Button disabled={!selectedRootPaths.length && !selectedPaths.length}>More</Button>
                     </Dropdown>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      loading={actionLoading === "refresh-folders"}
+                      onClick={handleRefreshFolders}
+                    >
+                      Refresh
+                    </Button>
                   </Space>
                 </Col>
                 <Col xs={24} lg={10} xl={8}>
                   <Input.Search
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Filter tree by label, path, profile, or kind"
+                    placeholder="Filter folders by name, path, source, or kind"
                     allowClear
                   />
                 </Col>
@@ -675,36 +789,50 @@ export function OperationsView() {
                 column={{ xs: 1, md: 3 }}
                 style={{ marginTop: 16, marginBottom: 16 }}
                 items={[
-                  { key: "roots", label: "Roots", children: treeSummary.roots || folderSummary.roots || 0 },
-                  { key: "nodes", label: "Folders", children: treeSummary.nodes || folderSummary.items || 0 },
-                  { key: "depth", label: "Depth", children: treeSummary.max_depth || 0 },
+                  { key: "roots", label: "Roots", children: treeSummary.roots },
+                  { key: "nodes", label: "Folders", children: treeSummary.nodes },
+                  {
+                    key: "selected",
+                    label: "Selected",
+                    children: `${duplicateScanSelection.length} folder${duplicateScanSelection.length === 1 ? "" : "s"}`,
+                  },
                 ]}
               />
-              {treeError ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginBottom: 16 }}
-                  message="Folder tree is temporarily unavailable"
-                  description={treeError}
-                />
-              ) : null}
-              {treeLoading && !treeData.length ? (
-                <Flex justify="center" style={{ padding: 32 }}>
-                  <Spin />
-                </Flex>
-              ) : treeData.length ? (
-                <Tree
-                  blockNode
-                  showLine
-                  selectable
-                  expandedKeys={expandedKeys}
-                  selectedKeys={selectedNodeKeys}
-                  onSelect={(keys) => setSelectedNodeKeys(keys)}
-                  treeData={treeData}
+              {filteredTableData.length ? (
+                <Table
+                  rowKey="key"
+                  size="middle"
+                  pagination={false}
+                  columns={tableColumns}
+                  dataSource={filteredTableData}
+                  expandable={{
+                    childrenColumnName: "children",
+                    expandedRowKeys,
+                    onExpand: async (expanded, record) => {
+                      setExpandedRowKeys((current) =>
+                        expanded ? [...new Set([...current, record.key])] : current.filter((key) => key !== record.key)
+                      );
+                      if (expanded) {
+                        await loadBranch(record);
+                      }
+                    },
+                    rowExpandable: (record) => record.has_children !== false,
+                  }}
+                  loading={loadingBranchKeys.length > 0 && !filteredTableData.length}
+                  rowSelection={{
+                    selectedRowKeys: selectedNodeKeys,
+                    checkStrictly: true,
+                    onChange: (keys) => setSelectedNodeKeys(keys),
+                    getCheckboxProps: (record) => ({ disabled: record.is_root }),
+                  }}
+                  locale={{
+                    emptyText: search
+                      ? "No folders match the current filter."
+                      : "No connected folders yet. Add one from Settings.",
+                  }}
                 />
               ) : (
-                <Empty description={folderSummary.items ? "Folder tree is unavailable right now." : "No connected folders yet. Add one from Settings."} />
+                <Empty description={search ? "No folders match the current filter." : "No connected folders yet. Add one from Settings."} />
               )}
             </Card>
 
@@ -717,9 +845,6 @@ export function OperationsView() {
               }
               extra={
                 <Space wrap>
-                  <Button type="primary" loading={actionLoading === "scan"} onClick={() => runAction("scan", runScan, "Scan finished.")}>
-                    Run Scan
-                  </Button>
                   <Button
                     loading={actionLoading === "plan"}
                     onClick={() => runAction("plan", () => buildPlan(deleteLowerQuality), "Plan created.")}
@@ -788,6 +913,12 @@ export function OperationsView() {
                     <List.Item.Meta title={item.title} />
                   </List.Item>
                 )}
+              />
+              <Alert
+                style={{ marginTop: 16 }}
+                type="info"
+                showIcon
+                message="Duplicate detection runs on the folders currently selected in Folder List."
               />
             </Card>
 
@@ -889,12 +1020,16 @@ export function OperationsView() {
             >
               {currentJob ? (
                 <Flex vertical gap={16}>
-                  <Alert
-                    type={currentJob.status === "error" ? "error" : "info"}
-                    message={currentJob.message}
-                    description={`${currentJob.kind} • started ${formatDate(currentJob.started_at)}`}
-                    showIcon
-                  />
+                  <Card size="small">
+                    <Flex vertical gap={12}>
+                      <Space wrap>
+                        <StatusTag value={currentJob.status || "running"} />
+                        <Tag>{currentJob.kind || "process"}</Tag>
+                      </Space>
+                      <Text strong>{currentJob.message}</Text>
+                      <Text type="secondary">Started {formatDate(currentJob.started_at)}</Text>
+                    </Flex>
+                  </Card>
                   <List
                     itemLayout="horizontal"
                     dataSource={(currentJob.logs || []).slice().reverse()}

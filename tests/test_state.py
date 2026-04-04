@@ -84,3 +84,24 @@ class StateStoreTests(unittest.TestCase):
             self.assertTrue(store.is_current_job_cancel_requested())
             self.assertIn("Cancellation requested", job["message"])
             self.assertEqual(store.load_current_job()["logs"][-1]["message"], "Cancellation requested by user.")
+
+    def test_state_store_updates_existing_root_by_original_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+            original_root = tmp_path / "Incoming"
+            updated_root = tmp_path / "Processed"
+            original_root.mkdir()
+            updated_root.mkdir()
+
+            store.add_root(RootConfig(path=original_root, label="Incoming", priority=50, kind="mixed"))
+            store.update_root(
+                original_root,
+                RootConfig(path=updated_root, label="Processed", priority=90, kind="movie"),
+            )
+
+            roots = store.list_roots()
+            self.assertEqual(len(roots), 1)
+            self.assertEqual(roots[0].path, updated_root)
+            self.assertEqual(roots[0].label, "Processed")
+            self.assertEqual(roots[0].priority, 90)

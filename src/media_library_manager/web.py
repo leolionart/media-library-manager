@@ -116,6 +116,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
+        if parsed.path == "/api/operations/folders/children":
+            params = parse_qs(parsed.query)
+            storage_uri = params.get("storage_uri", [None])[0]
+            root_storage_uri = params.get("root_storage_uri", [None])[0]
+            if not storage_uri or not root_storage_uri:
+                self._send_json(
+                    {"error": "storage_uri and root_storage_uri query parameters are required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            try:
+                self._send_json(
+                    build_operations_folder_children(
+                        self.store.list_roots(),
+                        self.store.load_lan_connections(),
+                        storage_uri=storage_uri,
+                        root_storage_uri=root_storage_uri,
+                    )
+                )
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/operations/folders/tree":
             params = parse_qs(parsed.query)
             try:
@@ -184,12 +206,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if root_requires_local_directory(root) and not root.path.is_dir():
                 self._send_json({"error": format_root_directory_error(root)}, status=HTTPStatus.BAD_REQUEST)
                 return
-            self.store.add_root(root)
+            original_path = str(payload.get("original_path") or "").strip()
+            if original_path:
+                self.store.update_root(original_path, root)
+            else:
+                self.store.add_root(root)
             self.store.append_activity(
                 kind="config",
                 status="success",
-                message="Added scan root.",
+                message="Updated connected folder." if original_path else "Added scan root.",
                 details={
+                    "original_path": original_path or None,
                     "label": root.label,
                     "path": str(root.path),
                     "priority": root.priority,
@@ -198,7 +225,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "connection_label": root.connection_label,
                 },
             )
-            self._send_json(self.store.api_payload(), status=HTTPStatus.CREATED)
+            self._send_json(self.store.api_payload(), status=HTTPStatus.OK if original_path else HTTPStatus.CREATED)
             return
 
         if parsed.path == "/api/roots/bulk":
@@ -485,6 +512,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/scan":
+            payload = self._read_json()
             roots = self.store.list_roots()
             if not roots:
                 self.store.append_activity(
@@ -496,56 +524,71 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "no roots configured"}, status=HTTPStatus.BAD_REQUEST)
                 return
 
-            roots_summary = summarize_roots(roots)
-            job_details = {"root_count": len(roots), "roots": roots_summary}
+            scan_roots_selection = build_selected_scan_roots(payload.get("folders", []), roots=roots)
+            if not scan_roots_selection:
+                self.store.append_activity(
+                    kind="scan",
+                    status="error",
+                    message="Duplicate detection needs at least one selected folder.",
+                    details={"error": "no folders selected"},
+                )
+                self._send_json({"error": "select at least one folder to scan"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            roots_summary = summarize_roots(scan_roots_selection)
+            job_details = {
+                "root_count": len(scan_roots_selection),
+                "roots": roots_summary,
+                "source_root_count": len(roots),
+            }
             self.store.start_job(
                 kind="scan",
-                message="Started library scan.",
-                summary={"total": len(roots), "completed": 0},
+                message="Started duplicate detection for selected folders.",
+                summary={"total": len(scan_roots_selection), "completed": 0},
                 details=job_details,
             )
             self.store.append_activity(
                 kind="scan",
                 status="running",
-                message="Started library scan.",
+                message="Started duplicate detection for selected folders.",
                 details=job_details,
             )
 
             lan_connections = self.store.load_lan_connections()
-            scan_backend = build_scan_storage_backend(roots=roots, lan_connections=lan_connections)
+            scan_backend = build_scan_storage_backend(roots=scan_roots_selection, lan_connections=lan_connections)
             if scan_backend is not None:
-                smb_root_count = sum(1 for root in roots if (root.storage_uri or "").startswith("smb://"))
+                smb_root_count = sum(1 for root in scan_roots_selection if (root.storage_uri or "").startswith("smb://"))
                 self.store.append_job_log(
                     level="info",
                     message="Using storage abstraction for scan roots.",
-                    details={"smb_roots": smb_root_count, "total_roots": len(roots)},
+                    details={"smb_roots": smb_root_count, "total_roots": len(scan_roots_selection)},
                 )
 
             try:
                 report = scan_roots(
-                    roots,
+                    scan_roots_selection,
                     progress_callback=self._scan_progress_callback,
                     storage_backend=scan_backend,
                     should_cancel=self.store.is_current_job_cancel_requested,
                 ).to_dict()
             except JobCancelledError:
                 cancel_details = {**job_details, "cancel_requested": True}
-                self.store.finish_job(status="cancelled", message="Library scan cancelled.", details=cancel_details)
+                self.store.finish_job(status="cancelled", message="Duplicate detection cancelled.", details=cancel_details)
                 self.store.append_activity(
                     kind="scan",
                     status="cancelled",
-                    message="Library scan cancelled.",
+                    message="Duplicate detection cancelled.",
                     details=cancel_details,
                 )
                 self._send_json({"error": "scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
                 return
             except Exception as exc:
                 error_details = {"error": str(exc), **job_details}
-                self.store.finish_job(status="error", message="Library scan failed.", details=error_details)
+                self.store.finish_job(status="error", message="Duplicate detection failed.", details=error_details)
                 self.store.append_activity(
                     kind="scan",
                     status="error",
-                    message="Library scan failed.",
+                    message="Duplicate detection failed.",
                     details=error_details,
                 )
                 self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -559,14 +602,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             }
             self.store.finish_job(
                 status="success",
-                message="Library scan completed.",
+                message="Duplicate detection completed.",
                 details=success_details,
-                summary={"total": len(roots), "completed": len(roots), "indexed_files": report.get("summary", {}).get("files", 0)},
+                summary={
+                    "total": len(scan_roots_selection),
+                    "completed": len(scan_roots_selection),
+                    "indexed_files": report.get("summary", {}).get("files", 0),
+                },
             )
             self.store.append_activity(
                 kind="scan",
                 status="success",
-                message="Library scan completed.",
+                message="Duplicate detection completed.",
                 details=success_details,
             )
             self._send_json(report)
@@ -1035,6 +1082,8 @@ def normalize_root_payload(payload: dict) -> RootConfig:
 def build_root_path(*, storage_uri: str, raw_path: str) -> Path:
     if raw_path:
         return Path(raw_path).expanduser().resolve()
+    if storage_uri.startswith("local://"):
+        return Path(unquote(urlparse(storage_uri).path or "/")).expanduser().resolve()
     if storage_uri.startswith("smb://"):
         parsed = urlparse(storage_uri)
         params = parse_qs(parsed.query)
@@ -1059,6 +1108,58 @@ def normalize_optional_path(value: str | None) -> Path | None:
     if not value:
         return None
     return Path(value).expanduser().resolve()
+
+
+def build_selected_scan_roots(folder_payloads: list[dict[str, Any]], *, roots: list[RootConfig]) -> list[RootConfig]:
+    selected_roots: list[RootConfig] = []
+    seen: set[tuple[str, str]] = set()
+
+    for folder in folder_payloads:
+        storage_uri = str(folder.get("storage_uri") or "").strip()
+        path_value = str(folder.get("path") or "").strip()
+        root_path_value = str(folder.get("root_path") or "").strip()
+        root_storage_uri_value = str(folder.get("root_storage_uri") or "").strip()
+
+        matching_root = next(
+            (
+                root
+                for root in roots
+                if (
+                    (
+                        root_storage_uri_value
+                        and root.storage_uri
+                        and root.storage_uri == root_storage_uri_value
+                    )
+                    or (not root_storage_uri_value and root_path_value and str(root.path) == root_path_value)
+                )
+            ),
+            None,
+        )
+        if matching_root is None:
+            continue
+
+        effective_storage_uri = storage_uri or (path_value if path_value.startswith(("local://", "smb://")) else "")
+        effective_path = path_value if path_value and not path_value.startswith(("local://", "smb://")) else ""
+        resolved_path = build_root_path(storage_uri=effective_storage_uri, raw_path=effective_path)
+        dedupe_key = (effective_storage_uri or str(resolved_path), str(matching_root.path))
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        selected_roots.append(
+            RootConfig(
+                path=resolved_path,
+                label=str(folder.get("label") or resolved_path.name).strip() or resolved_path.name,
+                priority=int(folder.get("priority", matching_root.priority)),
+                kind=str(folder.get("kind") or matching_root.kind or "mixed").strip() or "mixed",
+                connection_id=str(folder.get("connection_id") or matching_root.connection_id or "").strip(),
+                connection_label=str(folder.get("connection_label") or matching_root.connection_label or "").strip(),
+                storage_uri=effective_storage_uri,
+                share_name=matching_root.share_name,
+            )
+        )
+
+    return selected_roots
 
 
 
@@ -1167,12 +1268,63 @@ def build_operations_folder_inventory(roots: list[RootConfig], lan_connections: 
                     "kind": root.kind,
                     "priority": root.priority,
                     "storage_uri": entry.path.to_uri(),
-                    "root_storage_uri": root.storage_uri,
+                    "root_storage_uri": root.storage_uri or str(root.path),
                 }
             )
 
     items.sort(key=lambda item: (item["label"].lower(), item["display_path"].lower()))
     return {"items": items, "summary": {"items": len(items), "roots": len(roots)}}
+
+
+def build_operations_folder_children(
+    roots: list[RootConfig],
+    lan_connections: dict[str, Any],
+    *,
+    storage_uri: str,
+    root_storage_uri: str,
+) -> dict[str, Any]:
+    root = next((candidate for candidate in roots if (candidate.storage_uri or str(candidate.path)) == root_storage_uri), None)
+    if root is None:
+        raise ValueError(f"unknown root: {root_storage_uri}")
+
+    manager = default_storage_manager(lan_connections=lan_connections)
+    root_storage_path = root_to_scan_storage_path(root)
+    current_path = ScanStoragePath.from_uri(storage_uri)
+
+    try:
+        entries = manager.list_dir(current_path)
+    except Exception:
+        entries = []
+
+    items: list[dict[str, Any]] = []
+    for entry in entries:
+        if not entry.is_dir:
+            continue
+        try:
+            relative_path = entry.path.relative_to(root_storage_path)
+        except Exception:
+            relative_path = entry.name
+        items.append(
+            {
+                "label": entry.name,
+                "key": entry.path.to_uri() if entry.path.backend == "smb" else entry.path.normalized_path(),
+                "path": entry.path.to_uri() if entry.path.backend == "smb" else entry.path.normalized_path(),
+                "display_path": relative_path,
+                "root_path": str(root.path),
+                "root_label": root.label,
+                "connection_id": root.connection_id,
+                "connection_label": root.connection_label,
+                "kind": root.kind,
+                "priority": root.priority,
+                "storage_uri": entry.path.to_uri(),
+                "root_storage_uri": root.storage_uri or str(root.path),
+                "is_root": False,
+                "has_children": _storage_path_has_dir_children(manager, entry.path),
+            }
+        )
+
+    items.sort(key=lambda item: (item["label"].lower(), item["display_path"].lower()))
+    return {"items": items}
 
 
 def build_operations_folder_tree(
@@ -1279,6 +1431,13 @@ def _build_storage_tree_nodes(
 
 def _count_tree_nodes(nodes: list[dict[str, Any]]) -> int:
     return sum(1 + _count_tree_nodes(node.get("children", [])) for node in nodes)
+
+
+def _storage_path_has_dir_children(manager: Any, path: ScanStoragePath) -> bool:
+    try:
+        return any(entry.is_dir for entry in manager.list_dir(path))
+    except Exception:
+        return False
 
 
 def root_to_scan_storage_path(root: RootConfig) -> ScanStoragePath:
