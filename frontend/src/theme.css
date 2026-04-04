@@ -1,0 +1,331 @@
+:root {
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --plex-bg-top: #141418;
+  --plex-bg-mid: #1f1f23;
+  --plex-bg-base: #111113;
+  --plex-surface-sidebar: #18181e;
+  --plex-surface-card: #282830;
+  --plex-surface-field: #32323c;
+  --plex-border-subtle: #3a3a44;
+  --plex-border-default: #44444e;
+  --plex-text-primary: #eaeaea;
+  --plex-text-secondary: #a0a0a0;
+  --plex-text-muted: #6a6a6a;
+  --plex-accent: #e5a00d;
+  --plex-accent-hover: #cc8b00;
+  --plex-accent-soft: rgba(229, 160, 13, 0.14);
+  background:
+    radial-gradient(circle at top right, rgba(229, 160, 13, 0.08), transparent 28%),
+    linear-gradient(180deg, var(--plex-bg-top), var(--plex-bg-mid) 18%, var(--plex-bg-base));
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top right, rgba(229, 160, 13, 0.08), transparent 28%),
+    linear-gradient(180deg, var(--plex-bg-top), var(--plex-bg-mid) 18%, var(--plex-bg-base));
+}
+
+body {
+  color: var(--plex-text-primary);
+}
+
+.app-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.app-shell-react {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.app-sider {
+  border-right: 1px solid var(--plex-border-subtle);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.sidebar-brand-react {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 18px;
+  border-bottom: 1px solid var(--plex-border-subtle);
+}
+
+.logo-react {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--plex-accent);
+  color: #1a1a1a;
+  font-weight: 700;
+}
+
+.brand-title-react {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.brand-subtitle-react {
+  color: var(--plex-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.topbar-react {
+  height: auto;
+  line-height: 1.2;
+  padding: 24px 32px 0;
+  background: transparent;
+}
+
+.eyebrow-react {
+  color: var(--plex-accent);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+}
+
+.topbar-title-react.ant-typography {
+  margin: 0;
+  color: var(--plex-text-primary);
+}
+
+.content-react {
+  padding: 24px 32px 32px;
+}
+
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.summary-card {
+  min-height: 116px;
+}
+
+.ant-layout,
+.ant-layout-content,
+.ant-layout-sider,
+.ant-app {
+  background: transparent;
+}
+
+.ant-card,
+.ant-modal-content,
+.ant-dropdown .ant-dropdown-menu,
+.ant-select-dropdown,
+.ant-table-wrapper .ant-table,
+.ant-table-wrapper .ant-table-container,
+.ant-empty {
+  backdrop-filter: saturate(120%) blur(2px);
+}
+
+.ant-card,
+.ant-table-wrapper .ant-table,
+.ant-modal-content {
+  border-color: var(--plex-border-subtle) !important;
+}
+
+.ant-btn {
+  font-weight: 600;
+}
+
+.ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous) {
+  background: var(--plex-surface-card);
+}
+
+.ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous):hover {
+  background: var(--plex-surface-field);
+  border-color: var(--plex-accent);
+  color: var(--plex-text-primary);
+}
+
+.ant-btn-primary {
+  box-shadow: none;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector {
+  background: var(--plex-surface-field) !important;
+}
+
+.ant-input::placeholder,
+.ant-select-selection-placeholder {
+  color: var(--plex-text-muted) !important;
+}
+
+.ant-table-wrapper .ant-table-thead > tr > th {
+  border-bottom-color: var(--plex-border-subtle) !important;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr > td {
+  border-bottom-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+.ant-checkbox-wrapper,
+.ant-switch {
+  user-select: none;
+}
+
+.eyebrow-label {
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+.summary-value {
+  margin: 8px 0 10px;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.workflow-grid-react {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  align-items: start;
+}
+
+.workflow-main-react,
+.workflow-side-react {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.card-title-react {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.folder-toolbar-react {
+  display: grid;
+  grid-template-columns: auto minmax(320px, 420px);
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.folder-toolbar-react .ant-input,
+.folder-toolbar-react .ant-input-affix-wrapper {
+  justify-self: end;
+}
+
+.operations-table-react .ant-table-thead > tr > th {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.operations-table-react .ant-table-cell {
+  vertical-align: middle;
+}
+
+.metrics-grid-react {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.toggle-stack-react {
+  display: grid;
+  gap: 10px;
+}
+
+.toggle-row-react {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--plex-surface-field);
+  border: 1px solid var(--plex-border-subtle);
+  border-radius: 12px;
+}
+
+.toggle-row-react + .toggle-row-react {
+  margin-top: 10px;
+}
+
+.two-up-react {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.panel-list-react .ant-list-item {
+  padding-inline: 0;
+}
+
+.modal-source-react {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--plex-surface-field);
+  border: 1px solid var(--plex-border-subtle);
+  border-radius: 10px;
+  color: var(--plex-text-primary);
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: var(--plex-accent-soft);
+}
+
+.ant-table-wrapper .ant-table-tbody > tr:hover > td {
+  background: var(--plex-surface-field);
+}
+
+@media (max-width: 1360px) {
+  .workflow-grid-react,
+  .two-up-react {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1180px) {
+  .folder-toolbar-react,
+  .metrics-grid-react {
+    grid-template-columns: 1fr;
+  }
+
+  .folder-toolbar-react .ant-input {
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 960px) {
+  .content-react,
+  .topbar-react {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -1,0 +1,93 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  color: #eaeaea;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(229, 160, 13, 0.08), transparent 28%),
+    linear-gradient(180deg, #141418, #1f1f23 18%, #111113);
+}
+
+.app-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.app-shell-react {
+  min-height: 100vh;
+  background: transparent !important;
+}
+
+.app-sider {
+  border-right: 1px solid #3a3a44;
+}
+
+.sidebar-brand-react {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border-bottom: 1px solid #3a3a44;
+}
+
+.logo-react {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #e5a00d;
+  color: #171717;
+  font-weight: 700;
+}
+
+.brand-title-react {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.brand-subtitle-react {
+  color: #8f8f97;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.topbar-react {
+  height: auto;
+  padding: 24px 24px 0;
+  line-height: 1.2;
+  background: transparent !important;
+}
+
+.content-react {
+  padding: 24px;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 960px) {
+  .topbar-react,
+  .content-react {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}

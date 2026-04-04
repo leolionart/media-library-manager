@@ -248,6 +248,7 @@ class StateStore:
             "kind": kind,
             "status": "running",
             "message": message,
+            "cancel_requested": False,
             "started_at": now,
             "updated_at": now,
             "finished_at": None,
@@ -259,6 +260,27 @@ class StateStore:
         state["current_job"] = job
         self._write_state(state)
         return job
+
+    def request_job_cancel(self) -> dict[str, Any] | None:
+        state = self.load_state()
+        job = self._normalize_job(state.get("current_job"))
+        if job is None or job.get("status") != "running":
+            return None
+        if job.get("cancel_requested"):
+            return job
+        job["cancel_requested"] = True
+        job["message"] = "Cancellation requested. Waiting for the current step to stop safely."
+        job["updated_at"] = self._now_iso()
+        logs = job.get("logs", [])
+        logs.append(self._job_log_entry(level="warning", message="Cancellation requested by user."))
+        job["logs"] = logs[-JOB_LOG_LIMIT:]
+        state["current_job"] = job
+        self._write_state(state)
+        return job
+
+    def is_current_job_cancel_requested(self) -> bool:
+        job = self.load_current_job()
+        return bool(job and job.get("status") == "running" and job.get("cancel_requested"))
 
     def _normalize_managed_folders(self, raw: Any) -> list[dict[str, Any]]:
         folders: list[dict[str, Any]] = []
@@ -417,6 +439,7 @@ class StateStore:
             logs = []
         return {
             **job,
+            "cancel_requested": bool(job.get("cancel_requested", False)),
             "summary": self._normalize_job_summary(job.get("summary")),
             "details": details,
             "logs": logs[-JOB_LOG_LIMIT:],

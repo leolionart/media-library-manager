@@ -115,6 +115,7 @@ MULTISPACE_RE = re.compile(r"\s+")
 
 
 ScanProgressCallback = Callable[[dict[str, object]], None]
+ScanCancellationCallback = Callable[[], bool]
 
 
 def scan_roots(
@@ -122,6 +123,7 @@ def scan_roots(
     *,
     progress_callback: ScanProgressCallback | None = None,
     storage_backend: ScannerStorageBackend | None = None,
+    should_cancel: ScanCancellationCallback | None = None,
 ) -> ScanReport:
     files: list[MediaFile] = []
     size_groups: dict[int, list[MediaFile]] = defaultdict(list)
@@ -131,6 +133,8 @@ def scan_roots(
     backend = storage_backend or LocalPathScannerStorage()
 
     for index, root in enumerate(roots, start=1):
+        if should_cancel and should_cancel():
+            raise RuntimeError("job cancelled")
         root_file_count = 0
         if progress_callback:
             progress_callback(
@@ -144,6 +148,8 @@ def scan_roots(
                 }
             )
         for entry in backend.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS):
+            if should_cancel and should_cancel():
+                raise RuntimeError("job cancelled")
             media = inspect_media_file(entry, root)
             files.append(media)
             size_groups[media.size].append(media)

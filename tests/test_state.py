@@ -69,3 +69,18 @@ class StateStoreTests(unittest.TestCase):
             self.assertEqual(payload["report"]["summary"]["files"], 1)
             self.assertEqual(payload["apply_result"]["summary"]["applied"], 0)
             self.assertEqual(payload["sync_result"]["summary"]["updated"], 1)
+
+    def test_state_store_persists_job_cancel_request(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+            store.start_job(kind="scan", message="Started library scan.")
+
+            job = store.request_job_cancel()
+
+            self.assertIsNotNone(job)
+            assert job is not None
+            self.assertTrue(job["cancel_requested"])
+            self.assertTrue(store.is_current_job_cancel_requested())
+            self.assertIn("Cancellation requested", job["message"])
+            self.assertEqual(store.load_current_job()["logs"][-1]["message"], "Cancellation requested by user.")

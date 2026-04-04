@@ -56,7 +56,7 @@ This page contains all application setup:
 - save multiple SMB host profiles
 - each profile can have its own host, username, and password
 - add folders through a modal
-- when adding a folder, select one of the saved SMB profiles and let the modal suggest the mounted runtime path automatically when possible
+- when adding a folder, select one saved SMB profile and browse shares or folders directly over SMB
 - add multiple folders when needed, because media may be spread across multiple disks
 - in most cases, add a high-level root folder and let the app scan and operate inside that root
 - configure Radarr connection
@@ -72,8 +72,8 @@ The expected workflow for folder setup is:
 2. Open the add-folder modal.
 3. Discover a LAN SMB host or enter an IP manually.
 4. Save or reuse an SMB profile.
-5. Select that saved profile and let the modal match it to an existing mounted runtime path.
-6. Confirm or adjust the suggested folder path.
+5. Select that saved profile and browse the SMB host directly.
+6. Choose one or more shares or folders to connect in one pass.
 7. Repeat if you need to work across multiple disks or multiple hosts.
 
 The common case is still simple:
@@ -172,7 +172,7 @@ HOST=127.0.0.1 PORT=8766 ./run-dashboard.sh
 
 On the current macOS setup used during development, `8766` is the active local dashboard port because `8765` conflicts with another app.
 
-When running outside Docker, the host also needs the Samba CLI client because SMB browsing and folder discovery call `smbclient`.
+When running outside Docker, the host also needs the Samba CLI client because SMB browsing, folder discovery, and SMB-native operations call `smbclient`.
 
 Examples:
 

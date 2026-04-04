@@ -10,6 +10,13 @@ class ProviderError(RuntimeError):
     pass
 
 
+DEFAULT_PROVIDER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/123.0.0.0 Safari/537.36"
+)
+
+
 @dataclass(slots=True)
 class ProviderConfig:
     enabled: bool = False
@@ -47,6 +54,7 @@ class JsonApiClient:
         headers = {
             "Accept": "application/json",
             "X-Api-Key": self.config.api_key,
+            "User-Agent": DEFAULT_PROVIDER_USER_AGENT,
         }
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")

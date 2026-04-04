@@ -1,0 +1,19 @@
+{
+  "name": "media-library-manager-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "verify-build": "npm run build && test -f ../src/media_library_manager/static/app.js && test -f ../src/media_library_manager/static/styles.css"
+  },
+  "dependencies": {
+    "antd": "^5.27.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.3"
+  }
+}

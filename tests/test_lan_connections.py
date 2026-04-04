@@ -5,6 +5,7 @@ from media_library_manager.lan_connections import (
     browse_smb_path,
     create_smb_directory,
     delete_smb_directory,
+    parse_smbclient_entries,
     redact_lan_connections,
     resolve_smb_connection_for_test,
     test_smb_connection,
@@ -145,6 +146,19 @@ class LanConnectionTests(unittest.TestCase):
         self.assertEqual(result["scope"], "host")
         self.assertEqual(result["entries"][0]["type"], "share")
         self.assertEqual(result["entries"][0]["share_name"], "DATA")
+
+    def test_parse_smbclient_entries_supports_column_output(self) -> None:
+        entries = parse_smbclient_entries(
+            "  .                                  DA        0  Sat Apr  4 15:03:37 2026\n"
+            "  ..                                  D        0  Sat Mar 21 03:34:32 2026\n"
+            "  social-download                     D        0  Thu Nov 20 23:22:35 2025\n"
+            "  Hoppers.2026.1080p.WEBRIP.mkv      A      123  Sat Apr  4 11:25:02 2026\n"
+        )
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["name"], "social-download")
+        self.assertEqual(entries[0]["type"], "directory")
+        self.assertEqual(entries[1]["name"], "Hoppers.2026.1080p.WEBRIP.mkv")
+        self.assertEqual(entries[1]["type"], "file")
 
     @patch("media_library_manager.lan_connections.subprocess.run")
     def test_test_smb_connection_with_share_also_lists_available_shares(self, run_mock) -> None:

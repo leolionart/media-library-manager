@@ -10,6 +10,7 @@ from .scanner import companion_files, compute_sha256
 
 
 ApplyProgressCallback = Callable[[dict[str, Any]], None]
+ShouldCancelCallback = Callable[[], bool]
 
 
 def load_plan(plan_path: str | Path) -> dict[str, Any]:
@@ -23,6 +24,7 @@ def apply_plan(
     prune_empty_dirs: bool = False,
     progress_callback: ApplyProgressCallback | None = None,
     storage_router: OperationStorageRouter | None = None,
+    should_cancel: ShouldCancelCallback | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     total_actions = len(plan["actions"])
@@ -36,6 +38,13 @@ def apply_plan(
     }
 
     for index, action in enumerate(plan["actions"], start=1):
+        if should_cancel and should_cancel():
+            return {
+                "summary": summarize_results(results),
+                "results": results,
+                "status": "cancelled",
+                "cancelled_at_action": index,
+            }
         action_type = action["type"]
         if progress_callback:
             progress_callback(
@@ -209,6 +218,9 @@ def move_folder(
     if destination_error:
         return {"status": "error", "message": destination_error}
     assert source_ref is not None and destination_parent_ref is not None
+    router_error = _validate_router_for_storage_paths(router, source_ref, destination_parent_ref)
+    if router_error:
+        return {"status": "error", "message": router_error}
 
     source_value = router.stringify(source_ref)
     destination_parent_value = router.stringify(destination_parent_ref)
@@ -218,12 +230,12 @@ def move_folder(
             return {"status": "error", "message": f"source does not exist: {source_value}"}
         if not router.is_dir(source_ref):
             return {"status": "error", "message": f"source is not a directory: {source_value}"}
+        if not router.same_backend_namespace(source_ref, destination_parent_ref):
+            return {"status": "error", "message": "cross-backend move is not supported yet"}
         if not router.exists(destination_parent_ref):
             return {"status": "error", "message": f"destination does not exist: {destination_parent_value}"}
         if not router.is_dir(destination_parent_ref):
             return {"status": "error", "message": f"destination is not a directory: {destination_parent_value}"}
-        if not router.same_backend_namespace(source_ref, destination_parent_ref):
-            return {"status": "error", "message": "cross-backend move is not supported yet"}
 
         destination_ref = router.join(destination_parent_ref, source_ref.name)
         destination_value = router.stringify(destination_ref)
@@ -275,6 +287,9 @@ def move_folder_contents(
     if destination_error:
         return {"status": "error", "message": destination_error}
     assert source_ref is not None and destination_ref is not None
+    router_error = _validate_router_for_storage_paths(router, source_ref, destination_ref)
+    if router_error:
+        return {"status": "error", "message": router_error}
 
     source_value = router.stringify(source_ref)
     destination_value = router.stringify(destination_ref)
@@ -284,12 +299,12 @@ def move_folder_contents(
             return {"status": "error", "message": f"source does not exist: {source_value}"}
         if not router.is_dir(source_ref):
             return {"status": "error", "message": f"source is not a directory: {source_value}"}
+        if not router.same_backend_namespace(source_ref, destination_ref):
+            return {"status": "error", "message": "cross-backend move is not supported yet"}
         if not router.exists(destination_ref):
             return {"status": "error", "message": f"destination does not exist: {destination_value}"}
         if not router.is_dir(destination_ref):
             return {"status": "error", "message": f"destination is not a directory: {destination_value}"}
-        if not router.same_backend_namespace(source_ref, destination_ref):
-            return {"status": "error", "message": "cross-backend move is not supported yet"}
         if router.is_relative_to(destination_ref, source_ref):
             return {"status": "error", "message": "destination cannot be inside the source folder"}
 
@@ -356,6 +371,12 @@ def delete_folder(path: str | Path, *, execute: bool = False, storage_router: Op
 
 def _uses_storage_abstraction(*values: object) -> bool:
     return any(str(value or "").strip().startswith("smb://") for value in values)
+
+
+def _validate_router_for_storage_paths(router: OperationStorageRouter, *paths: object) -> str | None:
+    if router.smb_connection_resolver is None and any(getattr(path, "backend", "") == "smb" for path in paths):
+        return "SMB operation requires a connection resolver"
+    return None
 
 
 def _parse_storage_path(router: OperationStorageRouter, value: str | Path) -> tuple[Any | None, str | None]:

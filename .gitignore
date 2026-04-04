@@ -4,6 +4,7 @@
 .omc/
 .pytest_cache/
 .venv/
+frontend/node_modules/
 
 __pycache__/
 *.py[cod]

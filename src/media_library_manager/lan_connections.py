@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 import time
@@ -243,8 +244,9 @@ def browse_smb_path(
     connection: dict[str, Any],
     raw_path: str | None = None,
     *,
-    timeout: int = 10,
+    timeout: int = 20,
     share_name: str | None = None,
+    host_scope: bool = False,
 ) -> dict[str, Any]:
     normalized = normalize_stored_smb_connection(connection)
     if not normalized["host"]:
@@ -252,7 +254,7 @@ def browse_smb_path(
     if not normalized["username"]:
         return {"status": "error", "message": "username is required"}
 
-    effective_share_name = str(share_name or normalized["share_name"] or "").strip().strip("/")
+    effective_share_name = "" if host_scope else str(share_name or normalized["share_name"] or "").strip().strip("/")
     if not effective_share_name:
         share_result = list_smb_shares(normalized, timeout=timeout)
         if share_result["status"] != "success":
@@ -529,6 +531,7 @@ def build_share_breadcrumbs(path: str, *, share_name: str = "") -> list[dict[str
 
 def parse_smbclient_entries(output: str) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
+    structured_line = re.compile(r"^\s*(?P<name>.+?)\s{2,}(?P<attrs>[A-Z]+)\s+(?P<size>\d+)\s+(?P<modified>.+?)\s*$")
     for raw_line in output.splitlines():
         line = raw_line.strip()
         if not line:
@@ -547,6 +550,23 @@ def parse_smbclient_entries(output: str) -> list[dict[str, str]]:
                     "type": entry_type,
                     "size": parts[1] if len(parts) > 1 else "",
                     "modified_at": " ".join(part for part in parts[2:4] if part),
+                }
+            )
+            continue
+
+        match = structured_line.match(raw_line.rstrip())
+        if match:
+            name = match.group("name").strip()
+            if name in {".", ".."}:
+                continue
+            attributes = match.group("attrs").upper()
+            entries.append(
+                {
+                    "name": name,
+                    "path": normalize_share_path(name),
+                    "type": "directory" if "D" in attributes else "file",
+                    "size": match.group("size"),
+                    "modified_at": match.group("modified").strip(),
                 }
             )
             continue

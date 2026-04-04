@@ -41,6 +41,10 @@ PLAN_PROGRESS_TOTAL = 3
 SMB_SCAN_HASH_TIMEOUT = 180
 
 
+class JobCancelledError(RuntimeError):
+    pass
+
+
 def format_root_directory_error(root: RootConfig) -> str:
     if root.storage_uri.startswith("smb://"):
         return "Selected SMB root is invalid or unavailable."
@@ -73,14 +77,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self._serve_static("index.html", "text/html; charset=utf-8")
             return
+        if parsed.path == "/legacy":
+            self._serve_static("legacy-index.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/favicon.svg":
             self._serve_static("favicon.svg", "image/svg+xml")
             return
         if parsed.path == "/app.js":
             self._serve_static("app.js", "application/javascript; charset=utf-8")
             return
+        if parsed.path == "/legacy-app.js":
+            self._serve_static("legacy-app.js", "application/javascript; charset=utf-8")
+            return
         if parsed.path == "/styles.css":
             self._serve_static("styles.css", "text/css; charset=utf-8")
+            return
+        if parsed.path == "/legacy-styles.css":
+            self._serve_static("legacy-styles.css", "text/css; charset=utf-8")
             return
         if parsed.path == "/api/state":
             self._send_json(self.store.api_payload())
@@ -103,6 +116,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
+        if parsed.path == "/api/operations/folders/tree":
+            params = parse_qs(parsed.query)
+            try:
+                max_depth = int(params.get("depth", ["4"])[0])
+            except ValueError:
+                self._send_json({"error": "depth must be an integer"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                self._send_json(
+                    build_operations_folder_tree(
+                        self.store.list_roots(),
+                        self.store.load_lan_connections(),
+                        max_depth=max_depth,
+                    )
+                )
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/smb/browse":
             params = parse_qs(parsed.query)
             connection_id = params.get("connection_id", [None])[0]
@@ -117,6 +148,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 connection,
                 params.get("path", [None])[0],
                 share_name=params.get("share_name", [None])[0],
+                host_scope=params.get("scope", [None])[0] == "host",
             )
             if result.get("status") != "success":
                 self._send_json({"error": result.get("message", "SMB browse failed")}, status=HTTPStatus.BAD_REQUEST)
@@ -444,6 +476,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(sync_result)
             return
 
+        if parsed.path == "/api/process/cancel":
+            job = self.store.request_job_cancel()
+            if job is None:
+                self._send_json({"error": "no running job to cancel"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"current_job": job})
+            return
+
         if parsed.path == "/api/scan":
             roots = self.store.list_roots()
             if not roots:
@@ -482,7 +522,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
 
             try:
-                report = scan_roots(roots, progress_callback=self._scan_progress_callback, storage_backend=scan_backend).to_dict()
+                report = scan_roots(
+                    roots,
+                    progress_callback=self._scan_progress_callback,
+                    storage_backend=scan_backend,
+                    should_cancel=self.store.is_current_job_cancel_requested,
+                ).to_dict()
+            except JobCancelledError:
+                cancel_details = {**job_details, "cancel_requested": True}
+                self.store.finish_job(status="cancelled", message="Library scan cancelled.", details=cancel_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="cancelled",
+                    message="Library scan cancelled.",
+                    details=cancel_details,
+                )
+                self._send_json({"error": "scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+                return
             except Exception as exc:
                 error_details = {"error": str(exc), **job_details}
                 self.store.finish_job(status="error", message="Library scan failed.", details=error_details)
@@ -547,14 +603,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 self.store.append_job_log(level="info", message="Loading scan report snapshot.")
                 self.store.update_job_progress({"total": PLAN_PROGRESS_TOTAL, "completed": 1})
+                self._raise_if_cancel_requested()
                 report = load_report(self.store.report_file)
                 self.store.append_job_log(level="info", message="Building action plan from report.")
+                self._raise_if_cancel_requested()
                 plan = plan_actions(
                     report,
                     self.store.load_targets(),
                     delete_lower_quality=delete_lower_quality,
                 )
                 self.store.update_job_progress({"total": PLAN_PROGRESS_TOTAL, "completed": 2})
+                self._raise_if_cancel_requested()
+            except JobCancelledError:
+                cancel_details = {**job_details, "cancel_requested": True}
+                self.store.finish_job(status="cancelled", message="Action plan build cancelled.", details=cancel_details)
+                self.store.append_activity(
+                    kind="plan",
+                    status="cancelled",
+                    message="Action plan build cancelled.",
+                    details=cancel_details,
+                )
+                self._send_json({"error": "plan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+                return
             except Exception as exc:
                 error_details = {"error": str(exc), **job_details}
                 self.store.finish_job(status="error", message="Action plan build failed.", details=error_details)
@@ -633,7 +703,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     execute=execute,
                     prune_empty_dirs=prune_empty_dirs,
                     progress_callback=self._apply_progress_callback,
+                    should_cancel=self.store.is_current_job_cancel_requested,
                 )
+                if result.get("status") == "cancelled" or self.store.is_current_job_cancel_requested():
+                    raise JobCancelledError()
+            except JobCancelledError:
+                cancel_details = {**job_details, "cancel_requested": True}
+                self.store.finish_job(
+                    status="cancelled",
+                    message=f"{'Execute' if execute else 'Dry-run'} apply cancelled.",
+                    details=cancel_details,
+                )
+                self.store.append_activity(
+                    kind="apply",
+                    status="cancelled",
+                    message=f"{'Execute' if execute else 'Dry-run'} apply cancelled.",
+                    details=cancel_details,
+                )
+                self._send_json({"error": "apply cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+                return
             except Exception as exc:
                 error_details = {"error": str(exc), **job_details}
                 self.store.finish_job(status="error", message="Plan apply failed.", details=error_details)
@@ -851,6 +939,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def _scan_progress_callback(self, event: dict[str, object]) -> None:
+        self._raise_if_cancel_requested()
         event_name = event.get("event")
         if event_name == "root_started":
             self.store.append_job_log(
@@ -890,6 +979,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
 
     def _apply_progress_callback(self, event: dict[str, Any]) -> None:
+        self._raise_if_cancel_requested()
         event_name = event.get("event")
         summary = dict(event.get("summary", {}))
         summary["total"] = int(event.get("total", summary.get("total", 0)))
@@ -919,6 +1009,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 },
             )
             self.store.update_job_progress(summary)
+
+    def _raise_if_cancel_requested(self) -> None:
+        if self.store.is_current_job_cancel_requested():
+            raise JobCancelledError()
 
 
 
@@ -1079,6 +1173,112 @@ def build_operations_folder_inventory(roots: list[RootConfig], lan_connections: 
 
     items.sort(key=lambda item: (item["label"].lower(), item["display_path"].lower()))
     return {"items": items, "summary": {"items": len(items), "roots": len(roots)}}
+
+
+def build_operations_folder_tree(
+    roots: list[RootConfig],
+    lan_connections: dict[str, Any],
+    *,
+    max_depth: int = 4,
+) -> dict[str, Any]:
+    bounded_depth = max(1, min(max_depth, 12))
+    manager = default_storage_manager(lan_connections=lan_connections)
+    tree: list[dict[str, Any]] = []
+    total_nodes = 0
+
+    for root in roots:
+        root_storage_path = root_to_scan_storage_path(root)
+        children = _build_storage_tree_nodes(
+            manager,
+            root_storage_path,
+            root_storage_path,
+            current_depth=1,
+            max_depth=bounded_depth,
+        )
+        total_nodes += _count_tree_nodes(children)
+        tree.append(
+            {
+                "label": root.label,
+                "key": root.storage_uri or str(root.path),
+                "path": str(root.path),
+                "display_path": root.label,
+                "storage_uri": root.storage_uri or root_storage_path.to_uri(),
+                "root_path": str(root.path),
+                "root_label": root.label,
+                "connection_id": root.connection_id,
+                "connection_label": root.connection_label,
+                "kind": root.kind,
+                "priority": root.priority,
+                "share_name": root.share_name,
+                "depth": 0,
+                "is_root": True,
+                "has_children": bool(children),
+                "children": children,
+            }
+        )
+
+    tree.sort(key=lambda item: (item["label"].lower(), item["root_label"].lower()))
+    return {
+        "items": tree,
+        "summary": {
+            "roots": len(roots),
+            "nodes": total_nodes,
+            "max_depth": bounded_depth,
+        },
+    }
+
+
+def _build_storage_tree_nodes(
+    manager: Any,
+    base_path: ScanStoragePath,
+    current_path: ScanStoragePath,
+    *,
+    current_depth: int,
+    max_depth: int,
+) -> list[dict[str, Any]]:
+    try:
+        entries = manager.list_dir(current_path)
+    except Exception:
+        return []
+
+    nodes: list[dict[str, Any]] = []
+    for entry in entries:
+        if not entry.is_dir:
+            continue
+        try:
+            relative_path = entry.path.relative_to(base_path)
+        except Exception:
+            relative_path = entry.name
+        children = (
+            _build_storage_tree_nodes(
+                manager,
+                base_path,
+                entry.path,
+                current_depth=current_depth + 1,
+                max_depth=max_depth,
+            )
+            if current_depth < max_depth
+            else []
+        )
+        nodes.append(
+            {
+                "label": entry.name,
+                "key": entry.path.to_uri() if entry.path.backend == "smb" else entry.path.normalized_path(),
+                "path": entry.path.to_uri() if entry.path.backend == "smb" else entry.path.normalized_path(),
+                "display_path": relative_path,
+                "storage_uri": entry.path.to_uri(),
+                "depth": current_depth,
+                "has_children": bool(children),
+                "children": children,
+            }
+        )
+
+    nodes.sort(key=lambda item: (item["label"].lower(), item["display_path"].lower()))
+    return nodes
+
+
+def _count_tree_nodes(nodes: list[dict[str, Any]]) -> int:
+    return sum(1 + _count_tree_nodes(node.get("children", [])) for node in nodes)
 
 
 def root_to_scan_storage_path(root: RootConfig) -> ScanStoragePath:
