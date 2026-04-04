@@ -9,3 +9,9 @@ __pycache__/
 *.py[cod]
 
 data/*.json
+
+# Local browser/screenshot artifacts
+.playwright-mcp/
+operations-*.png
+settings-*.png
+add-folder-*.png

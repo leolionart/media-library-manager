@@ -447,6 +447,8 @@ h1 {
   display: grid;
   gap: var(--space-3);
   text-align: left;
+  align-content: start;
+  min-height: 132px;
 }
 
 .lan-device-header {
@@ -1027,21 +1029,14 @@ select:focus {
   margin-top: var(--space-3);
 }
 
-.lan-device-services {
-  margin-top: 0;
-}
-
-.lan-device-card .row,
 .lan-device-header,
 .lan-device-copy,
-.lan-device-card .muted,
-.lan-device-card .sub-row {
+.lan-device-card .muted {
   min-width: 0;
 }
 
 .lan-device-card strong,
-.lan-device-card .muted,
-.lan-device-card .sub-row span:last-child {
+.lan-device-card .muted {
   overflow-wrap: anywhere;
 }
 
@@ -1049,8 +1044,8 @@ select:focus {
   line-height: var(--line-height-heading);
 }
 
-.lan-device-connect {
-  align-items: start;
+.lan-device-meta {
+  margin-top: auto;
 }
 
 .network-device-actions,

@@ -742,7 +742,7 @@ function renderLanDevices() {
           const services = device.services || [];
           const preferredHost = device.hostname || device.ip_address || device.device_key;
           const preferredSmb = services.find((service) => service.service_type === "_smb._tcp");
-          const secondaryLabel = [device.hostname, device.ip_address].filter(Boolean).join(" • ") || preferredHost;
+          const smbTarget = preferredSmb ? `smb://${preferredHost}` : preferredHost;
           return `
             <button class="collection-item action-card lan-device-card" type="button" data-prefill-smb-host="${escapeHtml(
               preferredHost
@@ -750,27 +750,15 @@ function renderLanDevices() {
               <div class="lan-device-header">
                 <div class="lan-device-copy">
                   <strong>${escapeHtml(device.display_name || preferredHost)}</strong>
-                  <div class="muted">${escapeHtml(secondaryLabel)}</div>
+                  <div class="muted">${escapeHtml(smbTarget)}</div>
                 </div>
                 <span class="pill small ${preferredSmb ? "accent" : ""}">${preferredSmb ? "SMB" : "Host"}</span>
               </div>
               ${
-                services.length
-                  ? `<div class="service-tags lan-device-services">
-                      ${services
-                        .map(
-                          (service) =>
-                            `<span class="pill small ${service.service_type === "_smb._tcp" ? "accent" : ""}">${escapeHtml(
-                              service.service_label
-                            )} • ${escapeHtml(String(service.port))}</span>`
-                        )
-                        .join("")}
+                preferredSmb
+                  ? `<div class="item-meta lan-device-meta">
+                      <span class="pill small accent">Port ${escapeHtml(String(preferredSmb.port))}</span>
                     </div>`
-                  : ""
-              }
-              ${
-                device.connect_urls?.length
-                  ? `<div class="sub-row lan-device-connect"><span>Connect</span><span>${escapeHtml(device.connect_urls[0])}</span></div>`
                   : ""
               }
             </button>`;
