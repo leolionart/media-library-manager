@@ -196,6 +196,7 @@ Payload:
 
 Scan item Radarr/Sonarr có path lỗi.
 Flow này chỉ phát hiện item có `path` bị thiếu, không còn là directory hợp lệ, hoặc không map được vào bất kỳ connected root nào đã connect.
+Với Radarr, scan hiện chỉ đưa vào report các movie đã available/released và đang `missing` trong provider để tránh lẫn các item chưa phát hành hoặc đã có file.
 
 ### `POST /api/path-repair/search`
 

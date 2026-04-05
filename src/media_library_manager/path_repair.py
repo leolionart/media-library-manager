@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from datetime import UTC, datetime
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -125,8 +126,27 @@ def scan_provider_path_issues(
         issues_before = len(issues)
         total_items = len(items)
         for item_index, item in enumerate(items, start=1):
+            if not _should_include_item_in_path_repair_scan(provider, item):
+                if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
+                    progress_callback(
+                        {
+                            "event": "provider_item_progress",
+                            "provider": provider,
+                            "index": index,
+                            "total_providers": total_providers,
+                            "item_index": item_index,
+                            "total_items": total_items,
+                            "total_issues": len(issues),
+                        }
+                    )
+                continue
             raw_path = str(item.get("path") or "").strip()
             status = _provider_path_status(raw_path, roots=roots)
+            if provider == "radarr":
+                status = "item_missing"
+            elif status == "ok" and _is_item_missing_in_provider(provider, item):
+                status = "item_missing"
+
             if status != "ok":
                 issues.append(_build_issue(provider, item, reason=status))
 
@@ -176,6 +196,51 @@ def scan_provider_path_issues(
         "issues": issues,
         "errors": errors,
     }
+
+
+def _is_item_missing_in_provider(provider: str, item: dict[str, Any]) -> bool:
+    if provider == "radarr":
+        if "hasFile" not in item:
+            return False
+        return not bool(item.get("hasFile"))
+    if provider == "sonarr":
+        if "statistics" not in item:
+            return False
+        stats = item.get("statistics") or {}
+        # A series is missing if it has monitored episodes but no files
+        return int(stats.get("episodeFileCount") or 0) == 0 and int(stats.get("episodeCount") or 0) > 0
+    return False
+
+
+def _should_include_item_in_path_repair_scan(provider: str, item: dict[str, Any]) -> bool:
+    if provider == "radarr":
+        return _is_item_released_in_provider(provider, item) and _is_item_missing_in_provider(provider, item)
+    return True
+
+
+def _is_item_released_in_provider(provider: str, item: dict[str, Any]) -> bool:
+    if provider != "radarr":
+        return True
+    if "isAvailable" in item:
+        return bool(item.get("isAvailable"))
+    for key in ("physicalRelease", "digitalRelease", "inCinemas"):
+        if _provider_date_has_reached(item.get(key)):
+            return True
+    return False
+
+
+def _provider_date_has_reached(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    normalized = text.replace("Z", "+00:00")
+    try:
+        release_at = datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    if release_at.tzinfo is None:
+        release_at = release_at.replace(tzinfo=UTC)
+    return release_at <= datetime.now(UTC)
 
 
 def _provider_path_status(raw_path: str, *, roots: list[RootConfig]) -> str:

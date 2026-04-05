@@ -10,7 +10,16 @@ from media_library_manager.path_repair import delete_provider_item, scan_provide
 class PathRepairTests(unittest.TestCase):
     @patch("media_library_manager.path_repair.RadarrClient.list_movies")
     def test_scan_provider_path_issues_lists_missing_path_without_suggestions(self, list_movies_mock) -> None:
-        list_movies_mock.return_value = [{"id": 11, "title": "Dune Part Two", "year": 2024, "path": "/missing/Dune Part Two (2024)"}]
+        list_movies_mock.return_value = [
+            {
+                "id": 11,
+                "title": "Dune Part Two",
+                "year": 2024,
+                "path": "/missing/Dune Part Two (2024)",
+                "hasFile": False,
+                "isAvailable": True,
+            }
+        ]
 
         result = scan_provider_path_issues(
             {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
@@ -19,7 +28,7 @@ class PathRepairTests(unittest.TestCase):
         )
 
         self.assertEqual(result["summary"]["issues"], 1)
-        self.assertEqual(result["issues"][0]["reason"], "path_not_found")
+        self.assertEqual(result["issues"][0]["reason"], "item_missing")
 
     @patch("media_library_manager.path_repair.RadarrClient.refresh_movie")
     @patch("media_library_manager.path_repair.RadarrClient.update_movie")
@@ -242,6 +251,8 @@ class PathRepairTests(unittest.TestCase):
                 "title": "Edge of Tomorrow",
                 "year": 2014,
                 "path": "/volume2/DATA/rclone/drive/Movies/Edge of Tomorrow (2014)",
+                "hasFile": True,
+                "isAvailable": True,
             }
         ]
 
@@ -288,6 +299,8 @@ class PathRepairTests(unittest.TestCase):
                 "title": "Borderlands",
                 "year": 2024,
                 "path": "/volume2/DATA/rclone/gdrive/Movies/Borderlands (2024)",
+                "hasFile": True,
+                "isAvailable": True,
             }
         ]
 
@@ -318,6 +331,8 @@ class PathRepairTests(unittest.TestCase):
                 "title": "Borderlands",
                 "year": 2024,
                 "path": "/volume2/DATA/rclone/gdrive/Movies/Borderlands (2024)",
+                "hasFile": True,
+                "isAvailable": True,
             }
         ]
 
@@ -345,6 +360,8 @@ class PathRepairTests(unittest.TestCase):
                 "title": "The Witcher",
                 "year": 2019,
                 "path": "/volumeUSB1/usbshare/Series/The Witcher",
+                "hasFile": False,
+                "isAvailable": True,
             }
         ]
 
@@ -362,7 +379,7 @@ class PathRepairTests(unittest.TestCase):
         )
 
         self.assertEqual(result["summary"]["issues"], 1)
-        self.assertEqual(result["issues"][0]["reason"], "path_not_found")
+        self.assertEqual(result["issues"][0]["reason"], "item_missing")
 
     @patch("media_library_manager.path_repair.RadarrClient.list_movies")
     def test_scan_provider_path_issues_flags_path_when_it_does_not_map_to_any_connected_root(self, list_movies_mock) -> None:
@@ -372,6 +389,8 @@ class PathRepairTests(unittest.TestCase):
                 "title": "Unknown Root",
                 "year": 2024,
                 "path": "/other/system/Movies/Unknown Root (2024)",
+                "hasFile": False,
+                "isAvailable": True,
             }
         ]
 
@@ -382,7 +401,51 @@ class PathRepairTests(unittest.TestCase):
         )
 
         self.assertEqual(result["summary"]["issues"], 1)
-        self.assertEqual(result["issues"][0]["reason"], "path_not_found")
+        self.assertEqual(result["issues"][0]["reason"], "item_missing")
+
+    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
+    def test_scan_provider_path_issues_skips_unreleased_radarr_movies_even_when_path_is_missing(self, list_movies_mock) -> None:
+        list_movies_mock.return_value = [
+            {
+                "id": 12,
+                "title": "Future Movie",
+                "year": 2026,
+                "path": "/missing/Future Movie (2026)",
+                "hasFile": False,
+                "isAvailable": False,
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
+            [RootConfig(path=Path("/volume2/DATA/rclone/gdrive/Movies"), label="Movies", kind="movie", storage_uri="rclone://aitran/Movies")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        self.assertEqual(result["issues"], [])
+
+    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
+    def test_scan_provider_path_issues_skips_radarr_movies_that_are_not_missing_in_provider(self, list_movies_mock) -> None:
+        list_movies_mock.return_value = [
+            {
+                "id": 13,
+                "title": "Existing Movie",
+                "year": 2024,
+                "path": "/missing/Existing Movie (2024)",
+                "hasFile": True,
+                "isAvailable": True,
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
+            [RootConfig(path=Path("/volume2/DATA/rclone/gdrive/Movies"), label="Movies", kind="movie", storage_uri="rclone://aitran/Movies")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        self.assertEqual(result["issues"], [])
 
     @patch("media_library_manager.path_repair.RadarrClient.delete_movie")
     def test_delete_provider_item_removes_radarr_item_without_deleting_files(self, delete_movie_mock) -> None:

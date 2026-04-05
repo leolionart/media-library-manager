@@ -115,6 +115,7 @@ function formatIssueReason(reason) {
   if (value === "path_not_found") return "path not found";
   if (value === "path_not_directory") return "not a directory";
   if (value === "missing_path") return "missing path";
+  if (value === "item_missing") return "missing in provider";
   return value || "unknown";
 }
 
