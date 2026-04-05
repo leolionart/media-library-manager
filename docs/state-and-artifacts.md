@@ -4,6 +4,12 @@
 
 `StateStore` là nguồn sự thật cho dashboard runtime.
 
+Các mutation của state phải đi qua serialized update trong cùng process.
+
+- không dùng pattern đọc state cũ rồi ghi đè cả file từ snapshot stale
+- mỗi lần mutate cần đọc lại state mới nhất dưới lock rồi mới ghi
+- mục tiêu là tránh làm rơi `lan_connections`, `roots`, hoặc `current_job` khi nhiều workflow cập nhật state gần nhau
+
 State cơ bản hiện gồm:
 
 - `version`

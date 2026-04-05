@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -7,6 +8,65 @@ from media_library_manager.state import StateStore
 
 
 class StateStoreTests(unittest.TestCase):
+    def test_state_store_serializes_concurrent_updates_without_losing_lan_connections(self) -> None:
+        class DelayedStateStore(StateStore):
+            def __init__(self, state_file: Path):
+                super().__init__(state_file)
+                self.first_load_started = threading.Event()
+                self.allow_first_load_to_finish = threading.Event()
+                self._delay_first_load = True
+
+            def _load_state_unlocked(self) -> dict:
+                state = super()._load_state_unlocked()
+                if self._delay_first_load:
+                    self._delay_first_load = False
+                    self.first_load_started.set()
+                    self.allow_first_load_to_finish.wait(timeout=5)
+                return state
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = DelayedStateStore(tmp_path / "state" / "app-state.json")
+
+            def save_connections() -> None:
+                store.save_lan_connections(
+                    {
+                        "smb": [
+                            {
+                                "id": "smb-1",
+                                "label": "NAS",
+                                "host": "nas.local",
+                                "share_name": "Media",
+                                "username": "leo",
+                                "password": "secret",
+                            }
+                        ]
+                    }
+                )
+
+            save_thread = threading.Thread(target=save_connections)
+            save_thread.start()
+            self.assertTrue(store.first_load_started.wait(timeout=5))
+
+            integrations_thread = threading.Thread(
+                target=lambda: store.save_integrations(
+                    {
+                        "radarr": {"enabled": True, "base_url": "http://radarr.local:7878", "api_key": "abc", "root_folder_path": "/movies"},
+                        "sonarr": {"enabled": False, "base_url": "", "api_key": "", "root_folder_path": ""},
+                        "sync_options": {"sync_after_apply": True, "rescan_after_update": True, "create_root_folder_if_missing": True},
+                    }
+                )
+            )
+            integrations_thread.start()
+
+            store.allow_first_load_to_finish.set()
+            save_thread.join(timeout=5)
+            integrations_thread.join(timeout=5)
+
+            payload = store.api_payload()
+            self.assertEqual(payload["lan_connections"]["smb"][0]["id"], "smb-1")
+            self.assertTrue(payload["integrations"]["radarr"]["enabled"])
+
     def test_state_store_can_clear_saved_plan(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)

@@ -5,6 +5,7 @@ import time
 from datetime import UTC, datetime
 from json import JSONDecodeError
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from .lan_connections import default_lan_connections, normalize_lan_connections, redact_lan_connections
@@ -20,6 +21,7 @@ DEFAULT_WAIT_SECONDS = 300
 
 class StateStore:
     def __init__(self, state_file: str | Path):
+        self._state_lock = RLock()
         self.state_file = Path(state_file)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.report_file = self.state_file.parent / "last-report.json"
@@ -56,6 +58,10 @@ class StateStore:
         }
 
     def load_state(self) -> dict[str, Any]:
+        with self._state_lock:
+            return self._load_state_unlocked()
+
+    def _load_state_unlocked(self) -> dict[str, Any]:
         defaults = self.default_state()
         try:
             state = json.loads(self.state_file.read_text(encoding="utf-8"))
@@ -79,11 +85,17 @@ class StateStore:
         merged["current_job"] = self._normalize_job(state.get("current_job"))
         return merged
 
+    def _update_state(self, mutator: Any) -> dict[str, Any]:
+        with self._state_lock:
+            state = self._load_state_unlocked()
+            updated = mutator(state)
+            if updated is not None:
+                state = updated
+            self._write_state(state)
+            return state
+
     def save_roots(self, roots: list[RootConfig]) -> dict[str, Any]:
-        state = self.load_state()
-        state["roots"] = [root.to_dict() for root in roots]
-        self._write_state(state)
-        return state
+        return self._update_state(lambda state: {**state, "roots": [root.to_dict() for root in roots]})
 
     def list_roots(self) -> list[RootConfig]:
         return [
@@ -101,29 +113,70 @@ class StateStore:
         ]
 
     def add_root(self, root: RootConfig) -> dict[str, Any]:
-        roots = self.list_roots()
         target_path = root.path.expanduser().resolve()
-        roots = [item for item in roots if item.path.expanduser().resolve() != target_path]
-        roots.append(root)
-        roots.sort(key=lambda item: (-item.priority, str(item.path)))
-        return self.save_roots(roots)
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            roots = [
+                RootConfig(
+                    path=Path(item["path"]),
+                    label=item["label"],
+                    priority=int(item.get("priority", 50)),
+                    kind=item.get("kind", "mixed"),
+                    connection_id=str(item.get("connection_id", "") or ""),
+                    connection_label=str(item.get("connection_label", "") or ""),
+                    storage_uri=str(item.get("storage_uri", "") or ""),
+                    share_name=str(item.get("share_name", "") or ""),
+                )
+                for item in state["roots"]
+            ]
+            roots = [item for item in roots if item.path.expanduser().resolve() != target_path]
+            roots.append(root)
+            roots.sort(key=lambda item: (-item.priority, str(item.path)))
+            return {**state, "roots": [item.to_dict() for item in roots]}
+
+        return self._update_state(mutate)
 
     def update_root(self, original_root_path: str | Path, root: RootConfig) -> dict[str, Any]:
         original_path = Path(original_root_path).expanduser().resolve()
         next_path = root.path.expanduser().resolve()
-        roots = [
-            item
-            for item in self.list_roots()
-            if item.path.expanduser().resolve() != original_path and item.path.expanduser().resolve() != next_path
-        ]
-        roots.append(root)
-        roots.sort(key=lambda item: (-item.priority, str(item.path)))
-        return self.save_roots(roots)
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            roots = [
+                RootConfig(
+                    path=Path(item["path"]),
+                    label=item["label"],
+                    priority=int(item.get("priority", 50)),
+                    kind=item.get("kind", "mixed"),
+                    connection_id=str(item.get("connection_id", "") or ""),
+                    connection_label=str(item.get("connection_label", "") or ""),
+                    storage_uri=str(item.get("storage_uri", "") or ""),
+                    share_name=str(item.get("share_name", "") or ""),
+                )
+                for item in state["roots"]
+            ]
+            roots = [
+                item
+                for item in roots
+                if item.path.expanduser().resolve() != original_path and item.path.expanduser().resolve() != next_path
+            ]
+            roots.append(root)
+            roots.sort(key=lambda item: (-item.priority, str(item.path)))
+            return {**state, "roots": [item.to_dict() for item in roots]}
+
+        return self._update_state(mutate)
 
     def remove_root(self, root_path: str | Path) -> dict[str, Any]:
         path = Path(root_path).expanduser().resolve()
-        roots = [item for item in self.list_roots() if item.path.expanduser().resolve() != path]
-        return self.save_roots(roots)
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            roots = [
+                item
+                for item in state["roots"]
+                if Path(item["path"]).expanduser().resolve() != path
+            ]
+            return {**state, "roots": roots}
+
+        return self._update_state(mutate)
 
     def load_targets(self) -> LibraryTargets:
         data = self.load_state()["targets"]
@@ -134,41 +187,36 @@ class StateStore:
         )
 
     def save_targets(self, targets: LibraryTargets) -> dict[str, Any]:
-        state = self.load_state()
-        state["targets"] = {
-            "movie_root": str(targets.movie_root) if targets.movie_root else None,
-            "series_root": str(targets.series_root) if targets.series_root else None,
-            "review_root": str(targets.review_root) if targets.review_root else None,
-        }
-        self._write_state(state)
-        return state
+        return self._update_state(
+            lambda state: {
+                **state,
+                "targets": {
+                    "movie_root": str(targets.movie_root) if targets.movie_root else None,
+                    "series_root": str(targets.series_root) if targets.series_root else None,
+                    "review_root": str(targets.review_root) if targets.review_root else None,
+                },
+            }
+        )
 
     def load_integrations(self) -> dict[str, Any]:
         return self.load_state()["integrations"]
 
     def save_integrations(self, integrations: dict[str, Any]) -> dict[str, Any]:
-        state = self.load_state()
-        state["integrations"] = integrations
-        self._write_state(state)
-        return state
+        return self._update_state(lambda state: {**state, "integrations": integrations})
 
     def load_lan_connections(self) -> dict[str, Any]:
         return normalize_lan_connections(self.load_state().get("lan_connections"))
 
     def save_lan_connections(self, connections: dict[str, Any]) -> dict[str, Any]:
-        state = self.load_state()
-        state["lan_connections"] = normalize_lan_connections(connections)
-        self._write_state(state)
-        return state
+        normalized = normalize_lan_connections(connections)
+        return self._update_state(lambda state: {**state, "lan_connections": normalized})
 
     def list_managed_folders(self) -> list[dict[str, Any]]:
         return list(self.load_state().get("managed_folders", []))
 
     def save_managed_folders(self, folders: list[dict[str, Any]]) -> dict[str, Any]:
-        state = self.load_state()
-        state["managed_folders"] = self._normalize_managed_folders(folders)
-        self._write_state(state)
-        return state
+        normalized = self._normalize_managed_folders(folders)
+        return self._update_state(lambda state: {**state, "managed_folders": normalized})
 
     def add_managed_folder(self, folder: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         folders = [item for item in self.list_managed_folders() if not self._same_managed_folder(item, folder)]
@@ -187,9 +235,7 @@ class StateStore:
 
     def save_report(self, report: dict[str, Any]) -> None:
         self.report_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_scan_at"] = report.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_scan_at": report.get("generated_at")})
 
     def load_report(self) -> dict[str, Any] | None:
         if not self.report_file.exists():
@@ -198,9 +244,7 @@ class StateStore:
 
     def save_plan(self, plan: dict[str, Any]) -> None:
         self.plan_file.write_text(json.dumps(plan, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_plan_at"] = plan.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_plan_at": plan.get("generated_at")})
 
     def load_plan(self) -> dict[str, Any] | None:
         if not self.plan_file.exists():
@@ -213,9 +257,7 @@ class StateStore:
 
     def save_apply_result(self, result: dict[str, Any]) -> None:
         self.apply_file.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_apply_at"] = result.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_apply_at": result.get("generated_at")})
 
     def load_apply_result(self) -> dict[str, Any] | None:
         if not self.apply_file.exists():
@@ -224,9 +266,7 @@ class StateStore:
 
     def save_sync_result(self, result: dict[str, Any]) -> None:
         self.sync_file.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_sync_at"] = result.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_sync_at": result.get("generated_at")})
 
     def load_sync_result(self) -> dict[str, Any] | None:
         if not self.sync_file.exists():
@@ -235,9 +275,7 @@ class StateStore:
 
     def save_cleanup_report(self, report: dict[str, Any]) -> None:
         self.cleanup_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_cleanup_at"] = report.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_cleanup_at": report.get("generated_at")})
 
     def load_cleanup_report(self) -> dict[str, Any] | None:
         if not self.cleanup_file.exists():
@@ -246,9 +284,7 @@ class StateStore:
 
     def save_empty_folder_cleanup_report(self, report: dict[str, Any]) -> None:
         self.empty_folder_cleanup_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_empty_folder_cleanup_at"] = report.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_empty_folder_cleanup_at": report.get("generated_at")})
 
     def load_empty_folder_cleanup_report(self) -> dict[str, Any] | None:
         if not self.empty_folder_cleanup_file.exists():
@@ -257,9 +293,7 @@ class StateStore:
 
     def save_path_repair_report(self, report: dict[str, Any]) -> None:
         self.path_repair_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-        state = self.load_state()
-        state["last_path_repair_at"] = report.get("generated_at")
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "last_path_repair_at": report.get("generated_at")})
 
     def load_path_repair_report(self) -> dict[str, Any] | None:
         if not self.path_repair_file.exists():
@@ -320,55 +354,64 @@ class StateStore:
             "available_actions": self._derive_job_actions(status="running", details=details or {}),
             "logs": [self._job_log_entry(level="info", message=message, details=details)],
         }
-        state = self.load_state()
-        state["current_job"] = job
-        self._write_state(state)
+        self._update_state(lambda state: {**state, "current_job": job})
         return job
 
     def request_job_cancel(self) -> dict[str, Any] | None:
-        state = self.load_state()
-        job = self._normalize_job(state.get("current_job"))
-        if job is None or job.get("status") != "running":
-            return None
-        if job.get("cancel_requested"):
-            return job
-        job["cancel_requested"] = True
-        job["message"] = "Cancellation requested. Waiting for the current step to stop safely."
-        job["updated_at"] = self._now_iso()
-        logs = job.get("logs", [])
-        logs.append(self._job_log_entry(level="warning", message="Cancellation requested by user."))
-        job["logs"] = logs[-JOB_LOG_LIMIT:]
-        state["current_job"] = job
-        self._write_state(state)
-        return job
+        updated_job: dict[str, Any] | None = None
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal updated_job
+            job = self._normalize_job(state.get("current_job"))
+            if job is None or job.get("status") != "running":
+                return state
+            if job.get("cancel_requested"):
+                updated_job = job
+                return state
+            job["cancel_requested"] = True
+            job["message"] = "Cancellation requested. Waiting for the current step to stop safely."
+            job["updated_at"] = self._now_iso()
+            logs = job.get("logs", [])
+            logs.append(self._job_log_entry(level="warning", message="Cancellation requested by user."))
+            job["logs"] = logs[-JOB_LOG_LIMIT:]
+            updated_job = job
+            return {**state, "current_job": job}
+
+        self._update_state(mutate)
+        return updated_job
 
     def request_job_wait(self, *, wait_seconds: int = DEFAULT_WAIT_SECONDS) -> dict[str, Any] | None:
-        state = self.load_state()
-        job = self._normalize_job(state.get("current_job"))
-        if job is None or str(job.get("status") or "").lower() == "running":
-            return None
-        details = job.get("details", {})
-        if not bool(details.get("retryable")):
-            return None
-        wait_seconds = max(int(wait_seconds or DEFAULT_WAIT_SECONDS), 1)
-        wait_until = datetime.fromtimestamp(datetime.now(UTC).timestamp() + wait_seconds, UTC).isoformat()
-        details = {
-            **details,
-            "wait_seconds": wait_seconds,
-            "wait_until": wait_until,
-            "last_control_action": "wait",
-        }
-        job["status"] = "waiting"
-        job["message"] = f"Retry deferred for {wait_seconds}s. Resume when ready."
-        job["details"] = details
-        job["updated_at"] = self._now_iso()
-        logs = job.get("logs", [])
-        logs.append(self._job_log_entry(level="warning", message=f"Retry deferred for {wait_seconds}s.", details={"wait_until": wait_until}))
-        job["logs"] = logs[-JOB_LOG_LIMIT:]
-        job["available_actions"] = self._derive_job_actions(status="waiting", details=details)
-        state["current_job"] = job
-        self._write_state(state)
-        return job
+        updated_job: dict[str, Any] | None = None
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal updated_job
+            job = self._normalize_job(state.get("current_job"))
+            if job is None or str(job.get("status") or "").lower() == "running":
+                return state
+            details = job.get("details", {})
+            if not bool(details.get("retryable")):
+                return state
+            effective_wait_seconds = max(int(wait_seconds or DEFAULT_WAIT_SECONDS), 1)
+            wait_until = datetime.fromtimestamp(datetime.now(UTC).timestamp() + effective_wait_seconds, UTC).isoformat()
+            details = {
+                **details,
+                "wait_seconds": effective_wait_seconds,
+                "wait_until": wait_until,
+                "last_control_action": "wait",
+            }
+            job["status"] = "waiting"
+            job["message"] = f"Retry deferred for {effective_wait_seconds}s. Resume when ready."
+            job["details"] = details
+            job["updated_at"] = self._now_iso()
+            logs = job.get("logs", [])
+            logs.append(self._job_log_entry(level="warning", message=f"Retry deferred for {effective_wait_seconds}s.", details={"wait_until": wait_until}))
+            job["logs"] = logs[-JOB_LOG_LIMIT:]
+            job["available_actions"] = self._derive_job_actions(status="waiting", details=details)
+            updated_job = job
+            return {**state, "current_job": job}
+
+        self._update_state(mutate)
+        return updated_job
 
     def is_current_job_cancel_requested(self) -> bool:
         job = self.load_current_job()
@@ -410,43 +453,58 @@ class StateStore:
         message: str,
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        state = self.load_state()
-        job = self._normalize_job(state.get("current_job"))
-        if job is None:
-            return None
-        logs = job.get("logs", [])
-        logs.append(self._job_log_entry(level=level, message=message, details=details))
-        job["logs"] = logs[-JOB_LOG_LIMIT:]
-        job["updated_at"] = self._now_iso()
-        job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
-        state["current_job"] = job
-        self._write_state(state)
-        return job
+        updated_job: dict[str, Any] | None = None
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal updated_job
+            job = self._normalize_job(state.get("current_job"))
+            if job is None:
+                return state
+            logs = job.get("logs", [])
+            logs.append(self._job_log_entry(level=level, message=message, details=details))
+            job["logs"] = logs[-JOB_LOG_LIMIT:]
+            job["updated_at"] = self._now_iso()
+            job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
+            updated_job = job
+            return {**state, "current_job": job}
+
+        self._update_state(mutate)
+        return updated_job
 
     def update_job_progress(self, summary: dict[str, Any]) -> dict[str, Any] | None:
-        state = self.load_state()
-        job = self._normalize_job(state.get("current_job"))
-        if job is None:
-            return None
-        job["summary"] = self._normalize_job_summary({**job.get("summary", {}), **summary})
-        job["updated_at"] = self._now_iso()
-        job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
-        state["current_job"] = job
-        self._write_state(state)
-        return job
+        updated_job: dict[str, Any] | None = None
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal updated_job
+            job = self._normalize_job(state.get("current_job"))
+            if job is None:
+                return state
+            job["summary"] = self._normalize_job_summary({**job.get("summary", {}), **summary})
+            job["updated_at"] = self._now_iso()
+            job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
+            updated_job = job
+            return {**state, "current_job": job}
+
+        self._update_state(mutate)
+        return updated_job
 
     def update_job_details(self, details: dict[str, Any], *, replace: bool = False) -> dict[str, Any] | None:
-        state = self.load_state()
-        job = self._normalize_job(state.get("current_job"))
-        if job is None:
-            return None
-        current_details = job.get("details", {})
-        job["details"] = details if replace else {**current_details, **details}
-        job["updated_at"] = self._now_iso()
-        job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
-        state["current_job"] = job
-        self._write_state(state)
-        return job
+        updated_job: dict[str, Any] | None = None
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal updated_job
+            job = self._normalize_job(state.get("current_job"))
+            if job is None:
+                return state
+            current_details = job.get("details", {})
+            job["details"] = details if replace else {**current_details, **details}
+            job["updated_at"] = self._now_iso()
+            job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
+            updated_job = job
+            return {**state, "current_job": job}
+
+        self._update_state(mutate)
+        return updated_job
 
     def finish_job(
         self,
@@ -456,26 +514,31 @@ class StateStore:
         details: dict[str, Any] | None = None,
         summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        state = self.load_state()
-        job = self._normalize_job(state.get("current_job"))
-        if job is None:
-            return None
-        if summary:
-            job["summary"] = self._normalize_job_summary({**job.get("summary", {}), **summary})
-        if details is not None:
-            job["details"] = details
-        now = self._now_iso()
-        job["status"] = status
-        job["message"] = message
-        job["updated_at"] = now
-        job["finished_at"] = now
-        job["available_actions"] = self._derive_job_actions(status=status, details=job.get("details", {}))
-        logs = job.get("logs", [])
-        logs.append(self._job_log_entry(level="error" if status == "error" else "info", message=message, details=details))
-        job["logs"] = logs[-JOB_LOG_LIMIT:]
-        state["current_job"] = job
-        self._write_state(state)
-        return job
+        updated_job: dict[str, Any] | None = None
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal updated_job
+            job = self._normalize_job(state.get("current_job"))
+            if job is None:
+                return state
+            if summary:
+                job["summary"] = self._normalize_job_summary({**job.get("summary", {}), **summary})
+            if details is not None:
+                job["details"] = details
+            now = self._now_iso()
+            job["status"] = status
+            job["message"] = message
+            job["updated_at"] = now
+            job["finished_at"] = now
+            job["available_actions"] = self._derive_job_actions(status=status, details=job.get("details", {}))
+            logs = job.get("logs", [])
+            logs.append(self._job_log_entry(level="error" if status == "error" else "info", message=message, details=details))
+            job["logs"] = logs[-JOB_LOG_LIMIT:]
+            updated_job = job
+            return {**state, "current_job": job}
+
+        self._update_state(mutate)
+        return updated_job
 
     def append_activity(
         self,
@@ -485,7 +548,6 @@ class StateStore:
         message: str,
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        state = self.load_state()
         entry = {
             "id": f"{kind}-{time.time_ns()}",
             "kind": kind,
@@ -494,10 +556,13 @@ class StateStore:
             "created_at": self._now_iso(),
             "details": details or {},
         }
-        history = state.get("activity_log", [])
-        history.insert(0, entry)
-        state["activity_log"] = history[:ACTIVITY_LOG_LIMIT]
-        self._write_state(state)
+
+        def mutate(state: dict[str, Any]) -> dict[str, Any]:
+            history = state.get("activity_log", [])
+            history.insert(0, entry)
+            return {**state, "activity_log": history[:ACTIVITY_LOG_LIMIT]}
+
+        self._update_state(mutate)
         return entry
 
     def _write_state(self, state: dict[str, Any]) -> None:
