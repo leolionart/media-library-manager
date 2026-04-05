@@ -33,6 +33,8 @@ Hiện có:
 - folder inventory phẳng từ `GET /api/operations/folders`
 - folder tree từ `GET /api/operations/folders/tree`
 - lazy child loading từ `GET /api/operations/folders/children`
+- duplicate folder cleanup scan từ selection hiện tại trong `Library Finder` cho local, SMB, và rclone roots
+- xóa duplicate folder candidates ngay trong `Library Finder` với shared process logs và retry/resume
 - duplicate workflow `scan -> plan -> preview/apply`
 - move folder
 - delete file / delete folder
@@ -46,11 +48,8 @@ Hiện có:
 Hiện có:
 
 - một mode `Provider Duplicate Files` để scan folder từ các path mà Radarr/Sonarr đang quản lý
-- empty duplicate-folder cleanup scan cho nhiều library roots, kể cả `rclone://...`
 - nếu provider path không tồn tại trong runtime local, backend thử resolve qua connected SMB roots
 - build group có nhiều candidate video file trong cùng folder
-- so khớp duplicate folder theo relative path media đã chuẩn hoá giữa các roots như `Movies` với `Movie` hoặc `Series` với `TV Series`
-- với `Series`, nếu một duplicate folder ít episode hơn bản còn lại và overlap cùng show/season thì folder yếu hơn sẽ bị mark `inferior-video-set`
 - chọn file cần xóa
 - refresh report sau khi delete
 - saved cleanup reports vẫn còn sau khi refresh trình duyệt

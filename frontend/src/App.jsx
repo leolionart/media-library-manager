@@ -21,12 +21,12 @@ const VIEW_META = {
   operations: {
     title: "Library Finder",
     description:
-      "Browse library folders, review duplicate folder suggestions, and move a selected folder into the correct Radarr or Sonarr title."
+      "Browse local, SMB, and rclone roots, scan duplicate library folders from the current selection, and move a selected folder into the correct Radarr or Sonarr title."
   },
   cleanup: {
     title: "Library Cleanup",
     description:
-      "Review duplicate files inside Radarr and Sonarr managed paths, then remove the safe cleanup candidates without leaving the dashboard."
+      "Review duplicate files inside Radarr and Sonarr managed paths, then remove the safe provider-side cleanup candidates without leaving the dashboard."
   },
   repair: {
     title: "Library Path Repair",

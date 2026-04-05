@@ -863,6 +863,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._run_empty_folder_cleanup_scan(resume=False)
             return
 
+        if parsed.path == "/api/operations/folder-cleanup/scan":
+            self._run_selected_folder_cleanup_scan(self._read_json(), resume=False)
+            return
+
+        if parsed.path == "/api/operations/folder-cleanup/delete":
+            self._run_selected_folder_cleanup_delete(self._read_json(), resume=False)
+            return
+
         if parsed.path == "/api/path-repair/scan":
             self._run_provider_path_repair_scan(resume=False)
             return
@@ -2190,6 +2198,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if job_action == "empty-folder-cleanup-scan":
             self._run_empty_folder_cleanup_scan(resume=resume)
             return
+        if job_action == "selected-folder-cleanup-scan":
+            self._run_selected_folder_cleanup_scan(payload, resume=resume)
+            return
+        if job_action == "selected-folder-cleanup-delete":
+            self._run_selected_folder_cleanup_delete(payload, resume=resume)
+            return
         if job_action == "duplicate-scan":
             self._run_duplicate_scan(payload, resume=resume)
             return
@@ -2319,6 +2333,227 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.finish_job(status="success", message="Duplicate empty-folder cleanup scan completed.", details=success_details, summary={"total": len(roots), "completed": len(roots), "groups": cleanup_report.get("summary", {}).get("duplicate_groups", 0), "deletion_candidates": cleanup_report.get("summary", {}).get("deletion_candidates", 0)})
         self.store.append_activity(kind="scan", status="success", message="Duplicate empty-folder cleanup scan completed.", details=success_details)
         self._send_json(cleanup_report)
+
+    def _run_selected_folder_cleanup_scan(self, payload: dict[str, Any], *, resume: bool) -> None:
+        roots = self.store.list_roots()
+        if not roots:
+            self._send_json({"error": "no roots configured"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        selected_roots = build_selected_scan_roots(payload.get("folders", []), roots=roots)
+        if not selected_roots:
+            self._send_json({"error": "select at least two folders to compare"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        previous_job = self.store.load_current_job() or {}
+        previous_details = previous_job.get("details", {}) if isinstance(previous_job, dict) else {}
+        start_root_index = int((previous_details.get("resume_state", {}) or {}).get("next_root_index", 1)) if resume else 1
+        job_details = self._with_job_control(
+            {"root_count": len(selected_roots), "roots": summarize_roots(selected_roots)},
+            action="selected-folder-cleanup-scan",
+            payload={"folders": payload.get("folders", [])},
+            resume_state={"next_root_index": start_root_index, "total_roots": len(selected_roots)},
+        )
+        self.store.start_job(
+            kind="cleanup-scan",
+            message="Started duplicate library folder scan for selected roots.",
+            summary={"total": len(selected_roots), "completed": max(start_root_index - 1, 0)},
+            details=job_details,
+        )
+        self.store.append_activity(
+            kind="scan",
+            status="running",
+            message="Started duplicate library folder scan for selected roots.",
+            details=job_details,
+        )
+        try:
+            cleanup_report = self._run_job_with_retries(
+                run_attempt=lambda: scan_duplicate_empty_folders(
+                    selected_roots,
+                    lan_connections=self.store.load_lan_connections(),
+                    progress_callback=self._scan_progress_callback,
+                    should_cancel=self.store.is_current_job_cancel_requested,
+                    start_root_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_root_index", 1)),
+                )
+            )
+        except JobCancelledError:
+            cancel_details = {**(self.store.load_current_job() or {}).get("details", {}), "cancel_requested": True}
+            self.store.finish_job(status="cancelled", message="Duplicate library folder scan cancelled.", details=cancel_details)
+            self.store.append_activity(kind="scan", status="cancelled", message="Duplicate library folder scan cancelled.", details=cancel_details)
+            self._send_json({"error": "folder cleanup scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+            return
+        except Exception as exc:
+            error_details = {**(self.store.load_current_job() or {}).get("details", {}), "error": str(exc)}
+            self.store.finish_job(status="error", message="Duplicate library folder scan failed.", details=error_details)
+            self.store.append_activity(kind="scan", status="error", message="Duplicate library folder scan failed.", details=error_details)
+            self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        cleanup_report["generated_at"] = now_iso()
+        self.store.save_empty_folder_cleanup_report(cleanup_report)
+        success_details = {"summary": cleanup_report.get("summary", {}), **(self.store.load_current_job() or {}).get("details", {})}
+        self.store.finish_job(
+            status="success",
+            message="Duplicate library folder scan completed.",
+            details=success_details,
+            summary={
+                "total": len(selected_roots),
+                "completed": len(selected_roots),
+                "groups": cleanup_report.get("summary", {}).get("duplicate_groups", 0),
+                "deletion_candidates": cleanup_report.get("summary", {}).get("deletion_candidates", 0),
+            },
+        )
+        self.store.append_activity(kind="scan", status="success", message="Duplicate library folder scan completed.", details=success_details)
+        self._send_json(cleanup_report)
+
+    def _run_selected_folder_cleanup_delete(self, payload: dict[str, Any], *, resume: bool) -> None:
+        raw_items = payload.get("folders", [])
+        items = [item for item in raw_items if isinstance(item, dict) and str(item.get("delete_path") or item.get("path") or "").strip()]
+        if not items:
+            self._send_json({"error": "select at least one folder to delete"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        previous_job = self.store.load_current_job() or {}
+        previous_details = previous_job.get("details", {}) if isinstance(previous_job, dict) else {}
+        start_item_index = int((previous_details.get("resume_state", {}) or {}).get("next_item_index", 1)) if resume else 1
+        start_item_index = max(1, min(start_item_index, len(items)))
+        job_details = self._with_job_control(
+            {"item_count": len(items), "folders": items},
+            action="selected-folder-cleanup-delete",
+            payload={"folders": items},
+            resume_state={"next_item_index": start_item_index, "total_items": len(items)},
+        )
+        self.store.start_job(
+            kind="cleanup-scan",
+            message="Started duplicate library folder cleanup.",
+            summary={"total": len(items), "completed": max(start_item_index - 1, 0), "applied": 0, "error": 0, "skipped": 0},
+            details=job_details,
+        )
+        self.store.append_activity(
+            kind="folder",
+            status="running",
+            message="Started duplicate library folder cleanup.",
+            details=job_details,
+        )
+        try:
+            result = self._run_job_with_retries(
+                run_attempt=lambda: self._execute_selected_folder_cleanup_delete(
+                    items=items,
+                    start_item_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_item_index", 1)),
+                )
+            )
+        except JobCancelledError:
+            cancel_details = {**(self.store.load_current_job() or {}).get("details", {}), "cancel_requested": True}
+            self.store.finish_job(status="cancelled", message="Duplicate library folder cleanup cancelled.", details=cancel_details)
+            self.store.append_activity(kind="folder", status="cancelled", message="Duplicate library folder cleanup cancelled.", details=cancel_details)
+            self._send_json({"error": "folder cleanup delete cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+            return
+        except Exception as exc:
+            error_details = {**(self.store.load_current_job() or {}).get("details", {}), "error": str(exc)}
+            self.store.finish_job(status="error", message="Duplicate library folder cleanup failed.", details=error_details)
+            self.store.append_activity(kind="folder", status="error", message="Duplicate library folder cleanup failed.", details=error_details)
+            self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._prune_deleted_empty_folder_report(result.get("deleted_paths", []))
+        success_details = {"summary": result.get("summary", {}), "deleted_paths": result.get("deleted_paths", []), **(self.store.load_current_job() or {}).get("details", {})}
+        self.store.finish_job(
+            status="success",
+            message="Duplicate library folder cleanup completed.",
+            details=success_details,
+            summary={**(result.get("summary", {}) or {}), "total": len(items), "completed": len(items)},
+        )
+        self.store.append_activity(kind="folder", status="success", message="Duplicate library folder cleanup completed.", details=success_details)
+        self._send_json(result)
+
+    def _execute_selected_folder_cleanup_delete(self, *, items: list[dict[str, Any]], start_item_index: int) -> dict[str, Any]:
+        summary = {
+            "total": len(items),
+            "completed": max(start_item_index - 1, 0),
+            "applied": 0,
+            "error": 0,
+            "skipped": 0,
+        }
+        deleted_paths: list[str] = []
+        if start_item_index > 1:
+            summary["applied"] = start_item_index - 1
+
+        for index, item in enumerate(items[start_item_index - 1 :], start=start_item_index):
+            self._raise_if_cancel_requested()
+            delete_path = str(item.get("delete_path") or item.get("path") or "").strip()
+            display_path = str(item.get("path") or delete_path)
+            self.store.update_job_details(
+                {
+                    "resume_state": {
+                        **((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}),
+                        "next_item_index": index,
+                        "last_completed_item_index": max(index - 1, 0),
+                        "total_items": len(items),
+                    }
+                }
+            )
+            self.store.append_job_log(
+                level="info",
+                message=f"Deleting duplicate folder {index}/{len(items)}: {display_path}",
+                details={"path": display_path, "delete_path": delete_path},
+            )
+            result = delete_folder(delete_path, execute=True, storage_router=self._operation_storage_router())
+            if result.get("status") == "error":
+                raise RuntimeError(str(result.get("message") or "folder delete failed"))
+            deleted_paths.append(delete_path)
+            summary["completed"] = index
+            summary["applied"] += 1
+            self.store.append_activity(kind="folder", status="success", message="Folder deleted.", details={**item, **result})
+            self.store.append_job_log(level="info", message=f"Deleted duplicate folder {index}/{len(items)}.", details={"path": display_path})
+            self.store.update_job_progress(summary)
+            self.store.update_job_details(
+                {
+                    "resume_state": {
+                        **((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}),
+                        "next_item_index": min(index + 1, len(items)),
+                        "last_completed_item_index": index,
+                        "total_items": len(items),
+                    }
+                }
+            )
+        return {"summary": summary, "deleted_paths": deleted_paths}
+
+    def _prune_deleted_empty_folder_report(self, deleted_paths: list[str]) -> None:
+        report = self.store.load_empty_folder_cleanup_report()
+        if report is None:
+            return
+        deleted = {str(path).strip() for path in deleted_paths if str(path).strip()}
+        if not deleted:
+            return
+        groups: list[dict[str, Any]] = []
+        for group in report.get("groups", []) or []:
+            items = [
+                item
+                for item in (group.get("items", []) or [])
+                if str(item.get("delete_path") or item.get("path") or "").strip() not in deleted
+            ]
+            if len(items) < 2:
+                continue
+            deletion_candidates = [item for item in items if item.get("is_deletion_candidate")]
+            groups.append(
+                {
+                    **group,
+                    "items": items,
+                    "deletion_candidates": deletion_candidates,
+                    "deletion_candidate_count": len(deletion_candidates),
+                    "roots_count": len({str(item.get("root_storage_uri") or item.get("root_path") or "") for item in items}),
+                }
+            )
+        refreshed = {
+            **report,
+            "groups": groups,
+            "summary": {
+                **(report.get("summary", {}) or {}),
+                "duplicate_groups": len(groups),
+                "duplicate_folders": sum(len(group.get("items", []) or []) for group in groups),
+                "groups_with_deletion_candidates": sum(1 for group in groups if int(group.get("deletion_candidate_count", 0)) > 0),
+                "deletion_candidates": sum(int(group.get("deletion_candidate_count", 0)) for group in groups),
+            },
+            "generated_at": now_iso(),
+        }
+        self.store.save_empty_folder_cleanup_report(refreshed)
 
     def _run_provider_path_repair_scan(self, *, resume: bool) -> None:
         roots = self.store.list_roots()

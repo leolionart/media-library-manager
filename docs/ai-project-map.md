@@ -28,10 +28,10 @@ Dashboard hiện có 5 màn:
    Màn tổng quan. Gom KPI, tình trạng roots, provider, process đang chạy, các case cần chú ý, và `Recent Activity`.
 
 2. `Library Finder`
-   Màn vận hành chính cho inventory folder, duplicate workflow trên folder được chọn, move folder, move vào Radarr/Sonarr, và xem process logs.
+   Màn vận hành chính cho inventory folder, duplicate workflow trên folder được chọn, duplicate folder cleanup trên roots thật, move folder, move vào Radarr/Sonarr, và xem process logs.
 
 3. `Library Cleanup`
-   Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply.
+   Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots.
 
 4. `Library Path Repair`
    Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder phù hợp, cập nhật path, hoặc remove item khỏi provider mà không xóa media file.

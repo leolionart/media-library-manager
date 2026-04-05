@@ -229,6 +229,20 @@ export function runEmptyFolderCleanupScan() {
   });
 }
 
+export function runOperationsFolderCleanupScan(folders) {
+  return request("/api/operations/folder-cleanup/scan", {
+    method: "POST",
+    body: JSON.stringify({ folders: folders || [] })
+  });
+}
+
+export function runOperationsFolderCleanupDelete(folders) {
+  return request("/api/operations/folder-cleanup/delete", {
+    method: "POST",
+    body: JSON.stringify({ folders: folders || [] })
+  });
+}
+
 export function runPathRepairScan() {
   return request("/api/path-repair/scan", {
     method: "POST",
