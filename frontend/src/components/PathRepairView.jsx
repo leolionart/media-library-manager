@@ -38,6 +38,10 @@ const emptySearchState = {
 
 const PATH_REPAIR_REPORT_STORAGE_KEY = "media-library-manager.path-repair-report";
 
+function stripPriorityLabel(value) {
+  return String(value || "").replace(/\s+P\d+$/, "").trim();
+}
+
 function formatSearchLogTime(value) {
   if (!value) return "--:--:--";
   const date = new Date(value);
@@ -644,7 +648,6 @@ export function PathRepairView() {
                       <Space wrap>
                         <Text strong>{item.label}</Text>
                         <Tag>{item.root_label}</Tag>
-                        <Tag>Score {item.score}</Tag>
                       </Space>
                       <Text type="secondary" className="cleanup-path-text">
                         {item.path}

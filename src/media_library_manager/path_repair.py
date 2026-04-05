@@ -353,9 +353,6 @@ def search_library_paths(
 
     manager = default_storage_manager(lan_connections=lan_connections)
     provider_roots = _iter_provider_roots(provider, roots)
-    rclone_roots = [root for root in provider_roots if _root_to_storage_path(root).backend == "rclone"]
-    if rclone_roots:
-        provider_roots = rclone_roots
     if progress_callback is not None:
         progress_callback(
             {

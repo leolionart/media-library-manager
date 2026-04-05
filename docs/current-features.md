@@ -66,6 +66,7 @@ Hiện có:
 - scan item Radarr/Sonarr có path lỗi
 - scan chỉ dùng để phát hiện item có provider path đang thiếu, không còn là directory hợp lệ, hoặc không map được vào bất kỳ connected root nào đã connect
 - với Radarr, scan chỉ đưa vào report các movie đã available/released và đang bị `missing` trong provider
+- với Sonarr, search và path-mapping hiện kiểm tra cả rclone lẫn SMB series roots, kể cả alias Synology-style như `usbshare/Series`
 - search folder phù hợp trong connected roots khi user chủ động bấm tìm
 - update path trong provider
 - remove item khỏi provider mà không xóa media files

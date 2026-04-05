@@ -34,7 +34,7 @@ Dashboard hiện có 5 màn:
    Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots.
 
 4. `Library Path Repair`
-   Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder thủ công, cập nhật path, hoặc remove item khỏi provider mà không xóa media file. Với Radarr, scan chỉ giữ lại movie đã available/released và đang missing trong provider để tránh report phình do item chưa phát hành.
+   Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder thủ công, cập nhật path, hoặc remove item khỏi provider mà không xóa media file. Với Radarr, scan chỉ giữ lại movie đã available/released và đang missing trong provider để tránh report phình do item chưa phát hành. Với Sonarr, search và path mapping phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
 
 5. `Settings`
    Màn cấu hình roots, SMB profiles, LAN discovery, Radarr/Sonarr, sync options, và manual sync.

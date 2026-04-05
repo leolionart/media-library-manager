@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+import re
 from typing import Any
 
 from .models import RootConfig
@@ -15,6 +16,9 @@ class ResolvedProviderDirectory:
     connection_id: str
     connection_label: str
     share_name: str
+
+
+TRAILING_DIGITS_RE = re.compile(r"^(.*?)(\d+)$")
 
 
 def resolve_provider_directory(
@@ -166,6 +170,10 @@ def _root_match_candidates(*, root: RootConfig, storage_path: StoragePath) -> li
     storage_segments = _root_match_segments(storage_path)
     if storage_segments:
         candidates.append(storage_segments)
+    if storage_path.backend == "smb":
+        share_alias_segments = _smb_share_alias_segments(storage_path)
+        if share_alias_segments and share_alias_segments not in candidates:
+            candidates.append(share_alias_segments)
     path_segments = _path_segments(str(root.path))
     if path_segments and path_segments not in candidates:
         candidates.append(path_segments)
@@ -196,6 +204,38 @@ def _find_subsequence(haystack: list[str], needle: list[str]) -> int:
     if not needle or len(needle) > len(haystack):
         return -1
     for index in range(0, len(haystack) - len(needle) + 1):
-        if haystack[index : index + len(needle)] == needle:
+        if all(_segments_equivalent(left, right) for left, right in zip(haystack[index : index + len(needle)], needle)):
             return index
     return -1
+
+
+def _smb_share_alias_segments(path: StoragePath) -> list[str]:
+    share = str(path.share_name or "").strip().strip("/")
+    if not share:
+        return []
+    tail = _path_segments(path.normalized_path())
+    alias = _segment_alias(share)
+    if alias == share:
+        return []
+    return [alias, *tail]
+
+
+def _segments_equivalent(left: str, right: str) -> bool:
+    left_normalized = _normalize_segment(left)
+    right_normalized = _normalize_segment(right)
+    if left_normalized == right_normalized:
+        return True
+    return _segment_alias(left_normalized) == _segment_alias(right_normalized)
+
+
+def _normalize_segment(value: str) -> str:
+    return str(value or "").strip().strip("/").lower()
+
+
+def _segment_alias(value: str) -> str:
+    normalized = _normalize_segment(value)
+    match = TRAILING_DIGITS_RE.match(normalized)
+    if not match:
+        return normalized
+    base = match.group(1).rstrip(" -_")
+    return base or normalized

@@ -25,8 +25,12 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
+function stripPriorityLabel(value) {
+  return String(value || "").replace(/\s+P\d+$/, "").trim();
+}
+
 function summarizeLabels(items, limit = 3) {
-  const labels = items.map((item) => String(item?.canonical_name || item?.title || item?.path || "")).filter(Boolean);
+  const labels = items.map((item) => stripPriorityLabel(item?.canonical_name || item?.title || item?.path || "")).filter(Boolean);
   if (!labels.length) return "None";
   if (labels.length <= limit) return labels.join(", ");
   return `${labels.slice(0, limit).join(", ")} +${labels.length - limit} more`;
@@ -61,7 +65,7 @@ function CleanupErrorAlert({ errors }) {
           {errors.map((item, index) => (
             <div key={`${item.root_label || item.provider || item.root_path || "error"}-${index}`} className="cleanup-error-item">
               <Text strong className="cleanup-error-source">
-                {item.root_label || item.provider || item.path || item.root_path || "Unknown source"}
+                {stripPriorityLabel(item.root_label || item.provider || item.path || item.root_path || "Unknown source")}
               </Text>
               <Text className="cleanup-error-message">{normalizeCleanupErrorMessage(item.message)}</Text>
             </div>
@@ -221,10 +225,10 @@ export function FileCleanupView() {
       render: (_value, group) => (
         <Flex vertical gap={4}>
           <Space wrap>
-            <Text strong>{group.canonical_name}</Text>
+            <Text strong>{stripPriorityLabel(group.canonical_name)}</Text>
             <Tag>{group.items.length} files</Tag>
           </Space>
-          <Text type="secondary">{group.folder_path}</Text>
+          <Text type="secondary">{stripPriorityLabel(group.folder_path)}</Text>
         </Flex>
       ),
     },
@@ -237,7 +241,9 @@ export function FileCleanupView() {
     {
       title: "Root",
       dataIndex: "root_label",
+      key: "root_label",
       width: 180,
+      render: (value) => stripPriorityLabel(value),
     },
     {
       title: "Action",
@@ -258,8 +264,8 @@ export function FileCleanupView() {
       width: 220,
       render: (_value, item) => (
         <Flex vertical gap={4}>
-          <Text strong>{item.groupTitle}</Text>
-          <Text type="secondary">{item.groupFolderPath}</Text>
+          <Text strong>{stripPriorityLabel(item.groupTitle)}</Text>
+          <Text type="secondary">{stripPriorityLabel(item.groupFolderPath)}</Text>
         </Flex>
       ),
     },
@@ -273,7 +279,7 @@ export function FileCleanupView() {
         return (
           <Flex vertical gap={4}>
             <Space wrap>
-              <Text strong>{String(item.path || "").split("/").pop()}</Text>
+              <Text strong>{stripPriorityLabel(String(item.path || "").split("/").pop())}</Text>
               {isKeepCandidate ? <Tag color="gold">Suggested keep</Tag> : null}
             </Space>
             <Text type="secondary" className="cleanup-path-text">

@@ -81,6 +81,10 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
+function stripPriorityLabel(value) {
+  return String(value || "").replace(/\s+P\d+$/, "").trim();
+}
+
 function buildSmbPath(value) {
   const text = String(value || "").trim();
   if (!text || text === "/") return "/";
@@ -490,11 +494,8 @@ export function SettingsView() {
       key: "label",
       render: (value, record) => (
         <Space direction="vertical" size={4}>
-          <Text strong>{value}</Text>
+          <Text strong>{stripPriorityLabel(value)}</Text>
           <Space size={[4, 4]} wrap>
-            <Tag color="gold" bordered={false}>
-              P{record.priority}
-            </Tag>
             <Tag>{record.kind}</Tag>
             {rootTypeLabel(record) === "SMB" ? (
               <Tag color="processing">SMB</Tag>

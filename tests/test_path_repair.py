@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from media_library_manager.models import RootConfig
 from media_library_manager.path_repair import delete_provider_item, scan_provider_path_issues, search_library_paths, update_provider_item_path
+from media_library_manager.provider_path_resolution import provider_path_maps_to_connected_root, resolve_provider_directory
 
 
 class PathRepairTests(unittest.TestCase):
@@ -121,14 +122,18 @@ class PathRepairTests(unittest.TestCase):
 
     @patch("media_library_manager.path_repair.list_entries_recursive")
     @patch("media_library_manager.path_repair.default_storage_manager")
-    def test_search_library_paths_prefers_rclone_specific_search_when_rclone_root_exists(
+    def test_search_library_paths_still_checks_series_root_when_rclone_root_exists(
         self,
         default_storage_manager_mock,
         list_entries_recursive_mock,
     ) -> None:
+        from media_library_manager.storage.backends import StorageEntry
+
         class FakeStorageManager:
             def list_dir(self, path):
-                raise AssertionError("normal root traversal should be skipped when rclone roots are available")
+                if path.backend == "local" and path.normalized_path() == "/library/series":
+                    return [StorageEntry(path=path.join("BEEF"), name="BEEF", entry_type="directory")]
+                return []
 
         default_storage_manager_mock.return_value = FakeStorageManager()
         list_entries_recursive_mock.return_value = [
@@ -145,8 +150,8 @@ class PathRepairTests(unittest.TestCase):
             lan_connections={"smb": []},
         )
 
-        self.assertEqual(result[0]["path"], "/volume2/DATA/rclone/gdrive/TV Series/BEEF")
-        list_entries_recursive_mock.assert_called_once()
+        self.assertEqual(result[0]["path"], "/library/series/BEEF")
+        list_entries_recursive_mock.assert_not_called()
 
     @patch("media_library_manager.path_repair.list_entries_recursive")
     @patch("media_library_manager.path_repair.default_storage_manager")
@@ -229,6 +234,54 @@ class PathRepairTests(unittest.TestCase):
             paths = [item["path"] for item in result]
             self.assertIn(str(exact.resolve()), paths)
             self.assertNotIn(str(partial.resolve()), paths)
+
+    def test_provider_path_maps_to_connected_root_accepts_usbshare_alias(self) -> None:
+        roots = [
+            RootConfig(
+                path=Path("/smb/smb-1/usbshare1"),
+                label="usbshare1",
+                kind="mixed",
+                storage_uri="smb://usbshare1/?connection_id=smb-1",
+                connection_id="smb-1",
+                share_name="usbshare1",
+            )
+        ]
+
+        self.assertTrue(
+            provider_path_maps_to_connected_root(
+                raw_path="/volumeUSB1/usbshare/Series/BEEF",
+                roots=roots,
+            )
+        )
+
+    def test_resolve_provider_directory_maps_usbshare_alias_to_connected_root(self) -> None:
+        class FakeStorageManager:
+            def exists(self, path) -> bool:
+                return path.backend == "smb" and path.share_name == "usbshare1" and path.normalized_path() == "/Series/BEEF"
+
+            def is_dir(self, path) -> bool:
+                return self.exists(path)
+
+        roots = [
+            RootConfig(
+                path=Path("/smb/smb-1/usbshare1"),
+                label="usbshare1",
+                kind="mixed",
+                storage_uri="smb://usbshare1/?connection_id=smb-1",
+                connection_id="smb-1",
+                share_name="usbshare1",
+            )
+        ]
+
+        resolved, status = resolve_provider_directory(
+            raw_path="/volumeUSB1/usbshare/Series/BEEF",
+            roots=roots,
+            manager=FakeStorageManager(),
+        )
+
+        self.assertEqual(status, "ok")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.storage_uri, "smb://usbshare1/Series/BEEF?connection_id=smb-1")
 
     @patch("media_library_manager.path_repair.default_storage_manager")
     @patch("media_library_manager.path_repair.RadarrClient.list_movies")

@@ -201,6 +201,7 @@ Với Radarr, scan hiện chỉ đưa vào report các movie đã available/rele
 ### `POST /api/path-repair/search`
 
 Search folder phù hợp trong connected roots để user chọn thư mục đúng rồi cập nhật lại provider path.
+Với Sonarr, search hiện đi qua cả rclone và SMB series roots thay vì bỏ SMB khi có rclone root.
 
 Payload:
 

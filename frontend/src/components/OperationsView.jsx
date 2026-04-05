@@ -108,13 +108,17 @@ function normalizeSearchText(value) {
     .trim();
 }
 
+function stripPriorityLabel(value) {
+  return String(value || "").replace(/\s+P\d+$/, "").trim();
+}
+
 function compactDisplayPath(record) {
   if (record.is_root) {
-    return record.path;
+    return stripPriorityLabel(record.path);
   }
 
-  const display = String(record.display_path || record.path || "");
-  const rootLabel = String(record.root_label || "");
+  const display = stripPriorityLabel(record.display_path || record.path || "");
+  const rootLabel = stripPriorityLabel(record.root_label || "");
 
   if (!display) {
     return "-";
@@ -128,7 +132,7 @@ function compactDisplayPath(record) {
 }
 
 function summarizeLabels(items, limit = 3) {
-  const labels = items.map((item) => String(item?.folder_name || item?.canonical_name || item?.label || item?.path || "")).filter(Boolean);
+  const labels = items.map((item) => stripPriorityLabel(item?.folder_name || item?.canonical_name || item?.label || item?.path || "")).filter(Boolean);
   if (!labels.length) return "None";
   if (labels.length <= limit) return labels.join(", ");
   return `${labels.slice(0, limit).join(", ")} +${labels.length - limit} more`;
@@ -457,7 +461,7 @@ function ProviderMoveModal({
           placeholder="Choose the destination item"
           options={rankedItems.map(({ item, score }) => ({
             value: String(item.id),
-            label: `${item.title}${item.year ? ` (${item.year})` : ""}${score ? ` • match ${score}` : ""}`,
+            label: `${item.title}${item.year ? ` (${item.year})` : ""}`,
           }))}
         />
 
@@ -1293,12 +1297,7 @@ export function OperationsView() {
           <Space size={[4, 4]} wrap>
             {record.is_loading ? <LoadingOutlined spin /> : null}
             {record.is_file ? <FileOutlined /> : null}
-            <Text strong>{record.label}</Text>
-            {record.priority ? (
-              <Tag color="gold" variant="filled">
-                P{record.priority}
-              </Tag>
-            ) : null}
+            <Text strong>{stripPriorityLabel(record.label)}</Text>
             {record.kind ? <Tag>{record.kind}</Tag> : null}
             {record.is_root ? <Tag color="blue">Root</Tag> : null}
             {record.is_file ? <Tag>File</Tag> : null}
@@ -1340,11 +1339,11 @@ export function OperationsView() {
       render: (_value, group) => (
         <Flex vertical gap={4}>
           <Space wrap>
-            <Text strong>{group.folder_name || group.relative_path}</Text>
+            <Text strong>{stripPriorityLabel(group.folder_name || group.relative_path)}</Text>
             <Tag>{(group.items || []).length} copies</Tag>
             {Number(group.deletion_candidate_count || 0) ? <Tag color="warning">{group.deletion_candidate_count} candidate</Tag> : null}
           </Space>
-          {group.relative_path ? <Text type="secondary">{group.relative_path}</Text> : null}
+          {group.relative_path ? <Text type="secondary">{stripPriorityLabel(group.relative_path)}</Text> : null}
           <Text type="secondary">{summarizeLabels(group.items || [])}</Text>
         </Flex>
       ),
@@ -1355,7 +1354,7 @@ export function OperationsView() {
       width: 240,
       render: (_value, group) => (
         <Space wrap>
-          {[...new Set((group.items || []).map((item) => item.root_label).filter(Boolean))].map((label) => (
+          {[...new Set((group.items || []).map((item) => stripPriorityLabel(item.root_label)).filter(Boolean))].map((label) => (
             <Tag key={label}>{label}</Tag>
           ))}
         </Space>
@@ -1380,12 +1379,12 @@ export function OperationsView() {
       render: (_value, item) => (
         <Flex vertical gap={4}>
           <Space wrap>
-            <Text strong>{String(item.path || "").split("/").pop() || item.groupFolderName}</Text>
+            <Text strong>{stripPriorityLabel(String(item.path || "").split("/").pop() || item.groupFolderName)}</Text>
             <Tag color={cleanupFolderStatusMeta(item).color}>{cleanupFolderStatusMeta(item).label}</Tag>
             {item.is_deletion_candidate ? <Tag color="warning">Delete Candidate</Tag> : <Tag color="success">Keep</Tag>}
           </Space>
           <Text type="secondary" className="mono">
-            {item.path}
+            {stripPriorityLabel(item.path)}
           </Text>
         </Flex>
       ),
