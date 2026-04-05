@@ -2,11 +2,21 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const devApiTarget = process.env.MLM_DEV_API_TARGET || "http://127.0.0.1:8766";
+
 export default defineConfig({
   plugins: [react()],
   publicDir: false,
   define: {
     "process.env.NODE_ENV": JSON.stringify("production")
+  },
+  server: {
+    proxy: {
+      "/api": {
+        target: devApiTarget,
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     outDir: resolve(__dirname, "../src/media_library_manager/static"),

@@ -7,7 +7,7 @@ Frontend hiện tại là React + Ant Design.
 Dashboard có 5 view:
 
 - `Overview`
-- `Media Management`
+- `Library Finder`
 - `Duplication Clean`
 - `Library Path Repair`
 - `Settings`
@@ -24,9 +24,9 @@ Hiện hiển thị:
 - recent activity
 - các số liệu dẫn xuất như số case đã xử lý
 
-## 3. Media Management
+## 3. Library Finder
 
-Đây là màn vận hành chính cho library.
+Đây là màn vận hành chính để duyệt library và thao tác với file hoặc folder.
 
 Hiện có:
 
@@ -41,14 +41,23 @@ Hiện có:
 
 ## 4. Duplication Clean
 
-Đây là workflow dọn duplicate trực tiếp trong library của provider.
+Đây là workflow cleanup riêng với 2 mode.
 
 Hiện có:
 
-- scan folder từ các path mà Radarr/Sonarr đang quản lý
+- mặc định mở vào mode `Empty Duplicate Folders` để ưu tiên dọn folder rác
+- mode `Duplicate Files` để scan folder từ các path mà Radarr/Sonarr đang quản lý
+- có option mặc định bật để khi scan provider duplicates thì refresh luôn report `Empty Duplicate Folders`
+- nếu provider path không tồn tại trong runtime local, backend thử resolve qua connected SMB roots
 - build group có nhiều candidate video file trong cùng folder
 - chọn file cần xóa
-- refresh report sau khi delete
+- mode `Empty Duplicate Folders` để so khớp folder top-level trùng tên giữa nhiều connected roots
+- inspect đệ quy chỉ trên các duplicate groups để xác định copy nào không có video
+- đánh dấu các folder `empty` hoặc `sidecar-only` là candidate để xóa
+- auto-select các folder `Delete Candidate` khi user mở một group để dọn nhanh hơn
+- xóa folder candidate rồi refresh lại report riêng của empty-folder cleanup
+- refresh report sau khi delete trong từng mode
+- saved cleanup reports vẫn còn sau khi refresh trình duyệt
 - shared cleanup logs
 
 Cleanup không dùng `plan` và `apply`.
@@ -60,6 +69,7 @@ Cleanup không dùng `plan` và `apply`.
 Hiện có:
 
 - scan item Radarr/Sonarr có path lỗi
+- scan path-aware qua connected SMB roots để tránh false positive khi provider dùng path kiểu NAS/container khác runtime app
 - search folder phù hợp trong connected roots
 - update path trong provider
 - remove item khỏi provider mà không xóa media files

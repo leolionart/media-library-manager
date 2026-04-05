@@ -66,7 +66,7 @@ Manual sync.
 
 Luồng:
 
-1. user chọn folder trong `Media Management`
+1. user chọn folder trong `Library Finder`
 2. frontend load item list từ provider
 3. user chọn movie hoặc series đích
 4. backend gọi `move_folder_contents()`

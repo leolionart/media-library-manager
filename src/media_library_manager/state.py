@@ -13,7 +13,7 @@ from .sync_integrations import default_integrations
 
 
 ACTIVITY_LOG_LIMIT = 200
-JOB_LOG_LIMIT = 120
+JOB_LOG_LIMIT = 400
 MANAGED_FOLDER_KEYS = ["id", "connection_id", "connection_label", "share_name", "path", "label"]
 
 
@@ -26,13 +26,14 @@ class StateStore:
         self.apply_file = self.state_file.parent / "last-apply.json"
         self.sync_file = self.state_file.parent / "last-sync.json"
         self.cleanup_file = self.state_file.parent / "last-cleanup-scan.json"
+        self.empty_folder_cleanup_file = self.state_file.parent / "last-empty-folder-cleanup.json"
         self.path_repair_file = self.state_file.parent / "last-path-repair-scan.json"
         if not self.state_file.exists():
             self._write_state(self.default_state())
 
     def default_state(self) -> dict[str, Any]:
         return {
-            "version": 5,
+            "version": 6,
             "roots": [],
             "targets": {
                 "movie_root": None,
@@ -47,6 +48,7 @@ class StateStore:
             "last_apply_at": None,
             "last_sync_at": None,
             "last_cleanup_at": None,
+            "last_empty_folder_cleanup_at": None,
             "last_path_repair_at": None,
             "activity_log": [],
             "current_job": None,
@@ -241,6 +243,17 @@ class StateStore:
             return None
         return json.loads(self.cleanup_file.read_text(encoding="utf-8"))
 
+    def save_empty_folder_cleanup_report(self, report: dict[str, Any]) -> None:
+        self.empty_folder_cleanup_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        state = self.load_state()
+        state["last_empty_folder_cleanup_at"] = report.get("generated_at")
+        self._write_state(state)
+
+    def load_empty_folder_cleanup_report(self) -> dict[str, Any] | None:
+        if not self.empty_folder_cleanup_file.exists():
+            return None
+        return json.loads(self.empty_folder_cleanup_file.read_text(encoding="utf-8"))
+
     def save_path_repair_report(self, report: dict[str, Any]) -> None:
         self.path_repair_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
         state = self.load_state()
@@ -266,6 +279,7 @@ class StateStore:
             "last_apply_at": state.get("last_apply_at"),
             "last_sync_at": state.get("last_sync_at"),
             "last_cleanup_at": state.get("last_cleanup_at"),
+            "last_empty_folder_cleanup_at": state.get("last_empty_folder_cleanup_at"),
             "last_path_repair_at": state.get("last_path_repair_at"),
             "activity_log": state.get("activity_log", []),
             "current_job": state.get("current_job"),
@@ -274,6 +288,7 @@ class StateStore:
             "apply_result": self.load_apply_result(),
             "sync_result": self.load_sync_result(),
             "cleanup_report": self.load_cleanup_report(),
+            "empty_folder_cleanup_report": self.load_empty_folder_cleanup_report(),
             "path_repair_report": self.load_path_repair_report(),
         }
         return payload

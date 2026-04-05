@@ -27,11 +27,11 @@ Dashboard hiện có 5 màn:
 1. `Overview`
    Màn tổng quan. Gom KPI, tình trạng roots, provider, process đang chạy, các case cần chú ý, và `Recent Activity`.
 
-2. `Media Management`
+2. `Library Finder`
    Màn vận hành chính cho inventory folder, duplicate workflow, move folder, move vào Radarr/Sonarr, và xem process logs.
 
 3. `Duplication Clean`
-   Màn dọn duplicate ngay trong các folder đang được Radarr/Sonarr quản lý. Đây không dùng plan/apply; nó scan trực tiếp library của provider rồi cho chọn file để xóa.
+   Màn dọn duplicate với 2 mode riêng: duplicate files trong provider-managed folders và empty duplicate folders giữa nhiều connected roots. Đây không dùng plan/apply.
 
 4. `Library Path Repair`
    Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder phù hợp, cập nhật path, hoặc remove item khỏi provider mà không xóa media file.
@@ -55,6 +55,7 @@ Dashboard hiện có 5 màn:
 - `last_apply_at`
 - `last_sync_at`
 - `last_cleanup_at`
+- `last_empty_folder_cleanup_at`
 - `last_path_repair_at`
 - `activity_log`
 - `current_job`
@@ -63,6 +64,7 @@ Dashboard hiện có 5 màn:
 - `apply_result`
 - `sync_result`
 - `cleanup_report`
+- `empty_folder_cleanup_report`
 - `path_repair_report`
 
 ### `current_job`
@@ -127,6 +129,7 @@ State và artifact hiện lưu trong `data/`:
 - `last-apply.json`
 - `last-sync.json`
 - `last-cleanup-scan.json`
+- `last-empty-folder-cleanup.json`
 - `last-path-repair-scan.json`
 
 ## 4. Workflow chính
@@ -153,9 +156,9 @@ API liên quan:
 - `POST /api/lan/connections/test`
 - `GET /api/smb/browse`
 
-### 4.2 Media Management
+### 4.2 Library Finder
 
-Media Management có 3 nhóm việc chính.
+Library Finder có 3 nhóm việc chính.
 
 #### A. Folder inventory
 
@@ -199,19 +202,27 @@ Các action ngoài plan/apply:
 
 Đây là workflow riêng, không dùng `report -> plan -> apply`.
 
+UI hiện có 2 mode cleanup riêng.
+
+Mặc định UI mở vào `Empty Duplicate Folders` để ưu tiên dọn folder rác.
+
+#### A. Duplicate Files
+
 Luồng:
 
 1. user chọn provider cần scan
 2. backend lấy item list từ Radarr/Sonarr
 3. backend validate path từng item
 4. backend scan trực tiếp các folder provider path hợp lệ
+   nếu provider path không tồn tại trong runtime local, backend thử resolve qua connected SMB roots trước khi skip
 5. backend build `cleanup_report` với các group có nhiều candidate video file
 6. UI cho user chọn file cần xóa, rồi gọi delete file riêng lẻ
 7. sau khi xóa, UI refresh report để thấy trạng thái mới
 
 Điểm quan trọng:
 
-- cleanup hiện scan trên provider paths local đang tồn tại
+- UI có option mặc định bật để khi chạy provider cleanup sẽ refresh luôn empty-folder cleanup report
+- cleanup ưu tiên provider paths local đang tồn tại, nhưng có SMB fallback nếu path của provider map được về connected roots
 - nó không build action plan
 - group đầu tiên thường được xem là candidate nên giữ lại, còn các file dư là phần user cân nhắc xóa
 
@@ -219,6 +230,42 @@ API chính:
 
 - `POST /api/cleanup/scan`
 - `DELETE /api/files`
+
+Artifact liên quan:
+
+- `cleanup_report`
+- `last_cleanup_at`
+- `last-cleanup-scan.json`
+
+#### B. Empty Duplicate Folders
+
+Luồng:
+
+1. user chạy `POST /api/cleanup/empty-folders/scan`
+2. backend index các folder top-level trong từng connected root
+3. backend chỉ giữ các nhóm trùng exact theo tên giữa ít nhất 2 roots
+4. backend inspect đệ quy từng copy để xác định `has_video`, `is_deletion_candidate`, và `empty_reason`
+5. UI cho user chọn các folder candidate rồi gọi `DELETE /api/folders`
+6. sau khi xóa, UI chạy lại scan để refresh report
+
+Điểm quan trọng:
+
+- backend không xóa tự động; chỉ đánh dấu các copy không có video để user quyết định
+- `empty_reason` hiện là `empty` hoặc `sidecar-only`
+- UI auto-select các `Delete Candidate` khi user mở group để giảm thao tác tay
+- delete dùng chung folder delete API hiện có, không tạo bulk delete route riêng ở v1
+- report được lưu trong state/artifact nên refresh trang không làm mất kết quả scan gần nhất
+
+API chính:
+
+- `POST /api/cleanup/empty-folders/scan`
+- `DELETE /api/folders`
+
+Artifact liên quan:
+
+- `empty_folder_cleanup_report`
+- `last_empty_folder_cleanup_at`
+- `last-empty-folder-cleanup.json`
 
 ### 4.4 Library Path Repair
 
@@ -240,7 +287,7 @@ Luồng:
 
 Điểm quan trọng:
 
-- scan path repair hiện chỉ phát hiện item lỗi
+- scan path repair validate local path trước, rồi thử resolve qua connected SMB roots để tránh báo lỗi giả khi provider chạy ở NAS/container khác runtime app
 - tìm gợi ý là một bước search riêng theo từng item
 - sau update/delete, backend prune issue tương ứng ra khỏi saved repair report
 - search có log realtime riêng vì đây là thao tác index/scoring có thể kéo dài
@@ -276,7 +323,7 @@ API chính:
 UI đang dùng chung `MediaLibraryLogPanel` cho:
 
 - `Recent Activity` trong `Overview`
-- `Process Logs` trong `Media Management`
+- `Process Logs` trong `Library Finder`
 - `Cleanup Action Logs`
 - `Path Repair Action Logs`
 

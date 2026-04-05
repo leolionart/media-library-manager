@@ -79,10 +79,14 @@ Mỗi file sau scan tạo thành `MediaFile` với các field như:
 Scan dashboard mode ghi log theo các event:
 
 - `root_started`
+- `directory_scanned`
+- `file_indexed`
 - `root_completed`
 - `scan_completed`
 
 Những log này được lưu trong `current_job.logs`.
+
+Với SMB hoặc rclone-backed roots, log trung gian này giúp thấy scan đang đi tới thư mục nào và đã index được bao nhiêu video files gần như liên tục, thay vì chỉ thấy lúc bắt đầu và kết thúc root.
 
 ## 7. Cancel behavior
 

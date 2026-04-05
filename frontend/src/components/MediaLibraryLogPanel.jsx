@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Empty, Flex, Input, Segmented, Space, Spin, Tag, Typography } from "antd";
+import { Button, Card, Empty, Flex, Input, Segmented, Space, Spin, Tag, Typography } from "antd";
 import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
@@ -133,7 +133,7 @@ function getProcessLogWindowTitle(scope, currentJob) {
   if (currentJob?.kind === "apply") return "file changes";
   if (currentJob?.kind) return String(currentJob.kind).toLowerCase();
   if (scope === "activity") return "recent activity";
-  if (scope === "operations") return "media management";
+  if (scope === "operations") return "library finder";
   return scope === "cleanup" ? "duplication-clean" : "path-repair";
 }
 
@@ -280,7 +280,14 @@ function activityMatchesScope(scope, entry) {
   if (scope === "activity") return true;
   if (scope === "operations") return ["scan", "plan", "apply", "folder"].includes(kind);
   if (scope === "cleanup") {
-    return message.includes("cleanup scan") || message.includes("file deleted") || message.includes("file delete failed");
+    return (
+      message.includes("cleanup scan") ||
+      message.includes("empty duplicate folder") ||
+      message.includes("file deleted") ||
+      message.includes("file delete failed") ||
+      message.includes("folder deleted") ||
+      message.includes("folder delete failed")
+    );
   }
   if (scope === "repair") {
     return message.includes("path repair") || message.includes("provider path updated") || message.includes("provider item removed");
@@ -472,14 +479,7 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
                 </div>
               </div>
             </div>
-          ) : (
-            <Alert
-              type="info"
-              showIcon
-              message={scope === "activity" ? "Recent activity feed" : "Realtime activity feed"}
-              description="These entries refresh automatically while batch actions are running."
-            />
-          )}
+          ) : null}
 
           <div className="process-log-toolbar">
             <Segmented

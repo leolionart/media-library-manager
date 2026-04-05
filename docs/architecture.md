@@ -21,14 +21,14 @@ Backend vừa:
 UI hiện tại có 5 view:
 
 - `Overview`
-- `Media Management`
+- `Library Finder`
 - `Duplication Clean`
 - `Library Path Repair`
 - `Settings`
 
 Trọng tâm nghiệp vụ nằm ở ba màn:
 
-- `Media Management`
+- `Library Finder`
 - `Duplication Clean`
 - `Library Path Repair`
 
@@ -49,6 +49,7 @@ Chịu trách nhiệm:
 - provider APIs
 - operations inventory và tree
 - cleanup scan
+- empty-folder cleanup scan
 - path repair scan / search / update / delete
 - current job logs và cancel
 
@@ -65,7 +66,7 @@ Lưu:
 - current_job
 - timestamps
 - report / plan / apply / sync artifacts
-- cleanup / path repair artifacts
+- cleanup / empty-folder cleanup / path repair artifacts
 
 ### `lan_connections.py`
 
@@ -132,15 +133,24 @@ Hiện hỗ trợ cả local path và SMB path.
 Giữ logic cleanup theo provider library:
 
 - load item từ Radarr / Sonarr
-- validate provider path
+- validate provider path qua local filesystem hoặc connected SMB roots
 - scan trực tiếp folder provider đang quản lý
 - build `cleanup_report`
+
+### `empty_folder_cleanup.py`
+
+Giữ logic scan các folder trùng tên giữa nhiều roots:
+
+- index folder top-level theo exact name
+- inspect đệ quy chỉ với duplicate groups
+- gắn cờ `has_video`, `is_deletion_candidate`, `empty_reason`
+- build `empty_folder_cleanup_report`
 
 ### `path_repair.py`
 
 Giữ logic path repair:
 
-- scan item provider có path lỗi
+- scan item provider có path lỗi sau bước resolve qua connected roots
 - index connected roots
 - rank candidate folders theo title/year similarity
 - update provider path
@@ -203,11 +213,13 @@ Sau apply execute, backend clear `last-plan.json`.
 
 ### Provider move
 
-`Media Management -> provider items -> move_folder_contents() -> provider refresh`
+`Library Finder -> provider items -> move_folder_contents() -> provider refresh`
 
 ### Cleanup
 
 `enabled providers -> cleanup_scan.scan_provider_cleanup() -> last-cleanup-scan.json`
+
+`connected roots -> empty_folder_cleanup.scan_duplicate_empty_folders() -> last-empty-folder-cleanup.json`
 
 ### Path repair
 

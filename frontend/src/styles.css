@@ -739,9 +739,11 @@ pre {
   width: 100%;
   color: var(--plex-text-secondary);
   background: rgba(255, 255, 255, 0.03);
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 3px 8px;
+  font-weight: 500;
   border-radius: 999px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -753,12 +755,14 @@ pre {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  line-height: 1.4;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  min-height: 24px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 4px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
 }
 

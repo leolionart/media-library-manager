@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable
 
 from .models import MediaFile, RootConfig
+from .provider_path_resolution import resolve_provider_directory
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
 from .providers.sonarr import SonarrClient
 from .scanner import VIDEO_EXTENSIONS, build_folder_media_duplicate_groups, inspect_media_file
-from .scanner_storage import LocalPathScannerStorage
+from .scanner_storage import LocalPathScannerStorage, StorageManagerScannerStorage
+from .storage import default_storage_manager
 from .sync_integrations import build_provider_config
 
 
 CleanupProgressCallback = Callable[[dict[str, object]], None]
+FILE_PROGRESS_INTERVAL = 10
 
 
 def scan_provider_cleanup(
     integrations: dict[str, Any],
     *,
     providers: list[str] | None = None,
+    roots: list[RootConfig] | None = None,
+    lan_connections: dict[str, Any] | None = None,
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -31,6 +35,9 @@ def scan_provider_cleanup(
     skipped_items: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     active_providers: list[str] = []
+    connected_roots = roots or []
+    resolved_lan_connections = lan_connections or {"smb": []}
+    manager = default_storage_manager(lan_connections=resolved_lan_connections)
 
     for provider in requested:
         config = build_provider_config(integrations.get(provider, {}))
@@ -51,32 +58,33 @@ def scan_provider_cleanup(
             if not raw_path:
                 skipped_items.append({"provider": provider, "id": item.get("id"), "title": item.get("title"), "reason": "missing_path"})
                 continue
-            path = Path(raw_path).expanduser().resolve()
-            if not path.exists():
+            resolved, status = resolve_provider_directory(raw_path=raw_path, roots=connected_roots, manager=manager)
+            if resolved is None:
                 skipped_items.append(
-                    {"provider": provider, "id": item.get("id"), "title": item.get("title"), "path": str(path), "reason": "path_not_found"}
-                )
-                continue
-            if not path.is_dir():
-                skipped_items.append(
-                    {"provider": provider, "id": item.get("id"), "title": item.get("title"), "path": str(path), "reason": "path_not_directory"}
+                    {"provider": provider, "id": item.get("id"), "title": item.get("title"), "path": raw_path, "reason": status}
                 )
                 continue
             provider_items.append(
                 {
                     "provider": provider,
                     "id": item.get("id"),
-                    "title": item.get("title") or path.name,
+                    "title": item.get("title") or resolved.path.name,
                     "year": item.get("year"),
-                    "path": str(path),
+                    "path": str(resolved.path),
+                    "provider_path": raw_path,
+                    "storage_uri": resolved.storage_uri,
                 }
             )
             all_roots.append(
                 RootConfig(
-                    path=path,
-                    label=str(item.get("title") or path.name),
+                    path=resolved.path,
+                    label=str(item.get("title") or resolved.path.name),
                     priority=100,
                     kind="movie" if provider == "radarr" else "series",
+                    connection_id=resolved.connection_id,
+                    connection_label=resolved.connection_label,
+                    storage_uri=resolved.storage_uri,
+                    share_name=resolved.share_name,
                 )
             )
 
@@ -100,7 +108,12 @@ def scan_provider_cleanup(
             errors=errors,
         )
 
-    files = _scan_provider_roots(all_roots, progress_callback=progress_callback, should_cancel=should_cancel)
+    files = _scan_provider_roots(
+        all_roots,
+        lan_connections=resolved_lan_connections,
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
+    )
     return _build_cleanup_report(
         providers=active_providers,
         provider_items=provider_items,
@@ -123,10 +136,14 @@ def rebuild_cleanup_report(existing_report: dict[str, Any], files: list[MediaFil
 def _scan_provider_roots(
     roots: list[RootConfig],
     *,
+    lan_connections: dict[str, Any] | None = None,
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[MediaFile]:
     storage = LocalPathScannerStorage()
+    if any(bool(root.storage_uri) for root in roots):
+        manager = default_storage_manager(lan_connections=lan_connections or {"smb": []})
+        storage = StorageManagerScannerStorage(manager)
     files: list[MediaFile] = []
     total_roots = len(roots)
     total_files = 0
@@ -146,12 +163,48 @@ def _scan_provider_roots(
                     "total_indexed_files": total_files,
                 }
             )
-        for entry in storage.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS):
+        iter_with_progress = getattr(storage, "iter_video_files_with_progress", None)
+        if callable(iter_with_progress):
+            iterator = iter_with_progress(
+                root,
+                allowed_suffixes=VIDEO_EXTENSIONS,
+                progress_callback=(
+                    lambda event, *, root_index=index, current_root=root: progress_callback(
+                        {
+                            "index": root_index,
+                            "total_roots": total_roots,
+                            "root_label": current_root.label,
+                            "root_path": str(current_root.path),
+                            **event,
+                        }
+                    )
+                )
+                if progress_callback
+                else None,
+                should_cancel=should_cancel,
+            )
+        else:
+            iterator = storage.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS)
+        for entry in iterator:
             if should_cancel and should_cancel():
                 raise RuntimeError("job cancelled")
             files.append(inspect_media_file(entry, root))
             root_file_count += 1
             total_files += 1
+            if progress_callback and (root_file_count == 1 or root_file_count % FILE_PROGRESS_INTERVAL == 0):
+                progress_callback(
+                    {
+                        "event": "file_indexed",
+                        "index": index,
+                        "total_roots": total_roots,
+                        "root_label": root.label,
+                        "root_path": str(root.path),
+                        "file_path": str(files[-1].path),
+                        "relative_path": files[-1].relative_path,
+                        "root_indexed_files": root_file_count,
+                        "total_indexed_files": total_files,
+                    }
+                )
         if progress_callback:
             progress_callback(
                 {

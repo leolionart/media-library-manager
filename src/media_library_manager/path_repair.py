@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import RootConfig
+from .provider_path_resolution import resolve_provider_directory
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
 from .providers.sonarr import SonarrClient
@@ -109,13 +110,13 @@ def scan_provider_path_issues(
             if not raw_path:
                 issues.append(_build_issue(provider, item, reason="missing_path", suggestions=[]))
             else:
-                resolved = Path(raw_path).expanduser().resolve()
-                if not (resolved.exists() and resolved.is_dir()):
+                resolved, status = resolve_provider_directory(raw_path=raw_path, roots=roots, manager=manager)
+                if resolved is None:
                     issues.append(
                         _build_issue(
                             provider,
                             item,
-                            reason="path_not_found" if not resolved.exists() else "path_not_directory",
+                            reason=status,
                             suggestions=[],
                         )
                     )

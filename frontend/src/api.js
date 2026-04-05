@@ -201,6 +201,13 @@ export function runProviderCleanupScan(providers) {
 
 export const runCleanupScan = runProviderCleanupScan;
 
+export function runEmptyFolderCleanupScan() {
+  return request("/api/cleanup/empty-folders/scan", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
 export function runPathRepairScan() {
   return request("/api/path-repair/scan", {
     method: "POST",

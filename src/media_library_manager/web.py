@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .browser import browse_path, list_mounts
 from .cleanup_scan import rebuild_cleanup_report, scan_provider_cleanup
+from .empty_folder_cleanup import scan_duplicate_empty_folders
 from .lan_connections import (
     build_cd_command,
     browse_smb_path,
@@ -599,6 +600,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 cleanup_report = scan_provider_cleanup(
                     integrations,
                     providers=providers,
+                    roots=self.store.list_roots(),
+                    lan_connections=self.store.load_lan_connections(),
                     progress_callback=self._scan_progress_callback,
                     should_cancel=self.store.is_current_job_cancel_requested,
                 )
@@ -642,6 +645,85 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 kind="scan",
                 status="success",
                 message="Provider cleanup scan completed.",
+                details=success_details,
+            )
+            self._send_json(cleanup_report)
+            return
+
+        if parsed.path == "/api/cleanup/empty-folders/scan":
+            roots = self.store.list_roots()
+            if not roots:
+                self.store.append_activity(
+                    kind="scan",
+                    status="error",
+                    message="Empty-folder cleanup scan failed because no roots are configured.",
+                    details={"error": "no roots configured"},
+                )
+                self._send_json({"error": "no roots configured"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            job_details = {"root_count": len(roots)}
+            self.store.start_job(
+                kind="cleanup-scan",
+                message="Started duplicate empty-folder cleanup scan.",
+                summary={"total": len(roots), "completed": 0},
+                details=job_details,
+            )
+            self.store.append_activity(
+                kind="scan",
+                status="running",
+                message="Started duplicate empty-folder cleanup scan.",
+                details=job_details,
+            )
+
+            try:
+                cleanup_report = scan_duplicate_empty_folders(
+                    roots,
+                    lan_connections=self.store.load_lan_connections(),
+                    progress_callback=self._scan_progress_callback,
+                    should_cancel=self.store.is_current_job_cancel_requested,
+                )
+            except JobCancelledError:
+                cancel_details = {**job_details, "cancel_requested": True}
+                self.store.finish_job(status="cancelled", message="Duplicate empty-folder cleanup scan cancelled.", details=cancel_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="cancelled",
+                    message="Duplicate empty-folder cleanup scan cancelled.",
+                    details=cancel_details,
+                )
+                self._send_json({"error": "cleanup scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+                return
+            except Exception as exc:
+                error_details = {"error": str(exc), **job_details}
+                self.store.finish_job(status="error", message="Duplicate empty-folder cleanup scan failed.", details=error_details)
+                self.store.append_activity(
+                    kind="scan",
+                    status="error",
+                    message="Duplicate empty-folder cleanup scan failed.",
+                    details=error_details,
+                )
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+            cleanup_report["generated_at"] = now_iso()
+            self.store.save_empty_folder_cleanup_report(cleanup_report)
+            success_details = {"summary": cleanup_report.get("summary", {}), **job_details}
+            self.store.finish_job(
+                status="success",
+                message="Duplicate empty-folder cleanup scan completed.",
+                details=success_details,
+                summary={
+                    "total": len(roots),
+                    "completed": len(roots),
+                    "groups": cleanup_report.get("summary", {}).get("duplicate_groups", 0),
+                    "deletion_candidates": cleanup_report.get("summary", {}).get("deletion_candidates", 0),
+                },
+            )
+            self.store.append_activity(
+                kind="scan",
+                status="success",
+                message="Duplicate empty-folder cleanup scan completed.",
                 details=success_details,
             )
             self._send_json(cleanup_report)
@@ -1459,6 +1541,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 details={"path": event.get("root_path")},
             )
             self.store.update_job_progress({"total": int(event["total_roots"]), "completed": max(int(event["index"]) - 1, 0)})
+            return
+        if event_name == "directory_scanned":
+            directory_path = str(event.get("directory_path") or event.get("root_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Walking {event['root_label']}: {directory_path}",
+                details={
+                    "path": directory_path,
+                    "directories_scanned": int(event.get("directories_scanned", 0)),
+                },
+            )
+            return
+        if event_name == "file_indexed":
+            relative_path = str(event.get("relative_path") or event.get("file_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Indexed {int(event.get('root_indexed_files', 0))} video file(s) in {event['root_label']}: {relative_path}",
+                details={
+                    "path": event.get("file_path"),
+                    "relative_path": relative_path,
+                    "total_indexed_files": int(event.get("total_indexed_files", 0)),
+                },
+            )
+            self.store.update_job_progress(
+                {
+                    "total": int(event["total_roots"]),
+                    "completed": max(int(event["index"]) - 1, 0),
+                    "indexed_files": int(event.get("total_indexed_files", 0)),
+                }
+            )
             return
         if event_name == "root_completed":
             self.store.append_job_log(

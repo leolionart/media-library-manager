@@ -5,6 +5,7 @@ Thư mục `docs/` mô tả trạng thái hiện tại của dự án sau khi:
 - frontend được viết lại bằng React + Ant Design
 - backend chuyển mạnh sang SMB-native
 - folder inventory có cả list và tree
+- cleanup/path repair có thể resolve provider path qua connected roots trước khi báo thiếu media
 - current job có log chi tiết, cancel request, và persist qua refresh
 - dashboard có 5 màn chính và dùng chung log component cho các flow dài
 

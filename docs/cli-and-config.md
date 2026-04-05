@@ -146,6 +146,15 @@ npm install
 npm run dev
 ```
 
+Vite dev server proxy sẵn `/api/*` sang `http://127.0.0.1:8766`.
+
+Nếu backend không chạy ở địa chỉ mặc định, override bằng env:
+
+```bash
+cd frontend
+MLM_DEV_API_TARGET=http://127.0.0.1:9988 npm run dev
+```
+
 Build frontend:
 
 ```bash

@@ -33,23 +33,58 @@ class ScannerStorageBackend(Protocol):
 
 
 class LocalPathScannerStorage:
+    DIRECTORY_PROGRESS_INTERVAL = 1
+
     def iter_video_files(self, root: RootConfig, *, allowed_suffixes: set[str]) -> Iterable[ScannedFileEntry]:
+        yield from self.iter_video_files_with_progress(root, allowed_suffixes=allowed_suffixes)
+
+    def iter_video_files_with_progress(
+        self,
+        root: RootConfig,
+        *,
+        allowed_suffixes: set[str],
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> Iterable[ScannedFileEntry]:
         root_path = Path(root.path)
-        for path in root_path.rglob("*"):
-            if not path.is_file():
+        pending = [root_path]
+        directories_scanned = 0
+
+        while pending:
+            if should_cancel and should_cancel():
+                raise RuntimeError("job cancelled")
+            current = pending.pop()
+            directories_scanned += 1
+            if progress_callback and (directories_scanned == 1 or directories_scanned % self.DIRECTORY_PROGRESS_INTERVAL == 0):
+                progress_callback(
+                    {
+                        "event": "directory_scanned",
+                        "directory_path": str(current),
+                        "directories_scanned": directories_scanned,
+                    }
+                )
+            try:
+                entries = sorted(current.iterdir(), key=lambda entry: entry.name.lower(), reverse=True)
+            except (FileNotFoundError, NotADirectoryError, PermissionError):
                 continue
-            suffix = path.suffix.lower()
-            if suffix not in allowed_suffixes:
-                continue
-            stat = path.stat()
-            yield ScannedFileEntry(
-                path=str(path.resolve()),
-                relative_path=str(path.relative_to(root_path)),
-                size=stat.st_size,
-                stem=path.stem,
-                suffix=suffix,
-                parent_name=path.parent.name,
-            )
+            for entry in entries:
+                if should_cancel and should_cancel():
+                    raise RuntimeError("job cancelled")
+                if entry.is_dir():
+                    pending.append(entry)
+                    continue
+                suffix = entry.suffix.lower()
+                if suffix not in allowed_suffixes:
+                    continue
+                stat = entry.stat()
+                yield ScannedFileEntry(
+                    path=str(entry.resolve()),
+                    relative_path=str(entry.relative_to(root_path)),
+                    size=stat.st_size,
+                    stem=entry.stem,
+                    suffix=suffix,
+                    parent_name=entry.parent.name,
+                )
 
     def compute_sha256(self, entry: ScannedFileEntry) -> str:
         digest = hashlib.sha256()
@@ -60,6 +95,8 @@ class LocalPathScannerStorage:
 
 
 class StorageManagerScannerStorage:
+    DIRECTORY_PROGRESS_INTERVAL = 1
+
     def __init__(
         self,
         manager: "StorageManager",
@@ -72,12 +109,36 @@ class StorageManagerScannerStorage:
         self.smb_sha256 = smb_sha256
 
     def iter_video_files(self, root: RootConfig, *, allowed_suffixes: set[str]) -> Iterable[ScannedFileEntry]:
+        yield from self.iter_video_files_with_progress(root, allowed_suffixes=allowed_suffixes)
+
+    def iter_video_files_with_progress(
+        self,
+        root: RootConfig,
+        *,
+        allowed_suffixes: set[str],
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> Iterable[ScannedFileEntry]:
         root_path = self._root_to_storage_path(root)
         pending = [root_path]
+        directories_scanned = 0
         while pending:
+            if should_cancel and should_cancel():
+                raise RuntimeError("job cancelled")
             current = pending.pop()
+            directories_scanned += 1
+            if progress_callback and (directories_scanned == 1 or directories_scanned % self.DIRECTORY_PROGRESS_INTERVAL == 0):
+                progress_callback(
+                    {
+                        "event": "directory_scanned",
+                        "directory_path": current.normalized_path() if current.backend == "local" else current.to_uri(),
+                        "directories_scanned": directories_scanned,
+                    }
+                )
             entries = self.manager.list_dir(current)
             for entry in entries:
+                if should_cancel and should_cancel():
+                    raise RuntimeError("job cancelled")
                 if entry.is_dir:
                     pending.append(entry.path)
                     continue

@@ -19,14 +19,14 @@ const VIEW_META = {
       "Monitor library health, provider status, current processing, and recent activity from a single dashboard."
   },
   operations: {
-    title: "Media Management",
+    title: "Library Finder",
     description:
-      "Scan connected folders, review duplicate suggestions, and move a selected folder into the correct Radarr or Sonarr title."
+      "Browse library folders, review duplicate suggestions, and move a selected folder into the correct Radarr or Sonarr title."
   },
   cleanup: {
     title: "Duplication Clean",
     description:
-      "Review movie folders that contain multiple candidate video files and delete the extras without leaving the dashboard."
+      "Review duplicate media files and duplicate empty folders, then delete the safe cleanup candidates without leaving the dashboard."
   },
   repair: {
     title: "Library Path Repair",
@@ -71,7 +71,7 @@ export function DashboardApp() {
           selectedKeys={[view]}
           items={[
             { key: "overview", icon: <DashboardOutlined />, label: "Overview" },
-            { key: "operations", icon: <AppstoreOutlined />, label: "Media Management" },
+            { key: "operations", icon: <AppstoreOutlined />, label: "Library Finder" },
             { key: "cleanup", icon: <ClearOutlined />, label: "Duplication Clean" },
             { key: "repair", icon: <LinkOutlined />, label: "Library Path Repair" },
             { key: "settings", icon: <SettingOutlined />, label: "Settings" }

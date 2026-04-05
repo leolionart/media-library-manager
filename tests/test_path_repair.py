@@ -123,6 +123,49 @@ class PathRepairTests(unittest.TestCase):
             self.assertIn(str(exact.resolve()), paths)
             self.assertNotIn(str(partial.resolve()), paths)
 
+    @patch("media_library_manager.path_repair.default_storage_manager")
+    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
+    def test_scan_provider_path_issues_accepts_path_resolved_through_connected_smb_root(
+        self,
+        list_movies_mock,
+        default_storage_manager_mock,
+    ) -> None:
+        class FakeStorageManager:
+            def exists(self, path) -> bool:
+                return path.backend == "smb" and path.share_name == "DATA" and path.normalized_path() == "/rclone/drive/Movies/Edge of Tomorrow (2014)"
+
+            def is_dir(self, path) -> bool:
+                return self.exists(path)
+
+        default_storage_manager_mock.return_value = FakeStorageManager()
+        list_movies_mock.return_value = [
+            {
+                "id": 15,
+                "title": "Edge of Tomorrow",
+                "year": 2014,
+                "path": "/volume2/DATA/rclone/drive/Movies/Edge of Tomorrow (2014)",
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
+            [
+                RootConfig(
+                    path=Path("/smb/conn-1/DATA/rclone/drive/Movies"),
+                    label="DATA Movies",
+                    kind="movie",
+                    connection_id="conn-1",
+                    connection_label="Synology.local",
+                    storage_uri="smb://DATA/rclone/drive/Movies?connection_id=conn-1",
+                    share_name="DATA",
+                )
+            ],
+            {"smb": [{"id": "conn-1"}]},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        self.assertEqual(result["issues"], [])
+
     @patch("media_library_manager.path_repair.RadarrClient.delete_movie")
     def test_delete_provider_item_removes_radarr_item_without_deleting_files(self, delete_movie_mock) -> None:
         delete_movie_mock.return_value = {"status": "deleted"}

@@ -23,6 +23,21 @@ class FakeScannerStorageBackend:
         return self.hashes[entry.path]
 
 
+class ProgressAwareFakeScannerStorageBackend(FakeScannerStorageBackend):
+    def iter_video_files_with_progress(
+        self,
+        root: RootConfig,
+        *,
+        allowed_suffixes: set[str],
+        progress_callback=None,
+        should_cancel=None,
+    ):
+        if progress_callback:
+            progress_callback({"event": "directory_scanned", "directory_path": str(root.path / "Movies"), "directories_scanned": 1})
+        for entry in self.iter_video_files(root, allowed_suffixes=allowed_suffixes):
+            yield entry
+
+
 class ScannerTests(unittest.TestCase):
     def test_parse_movie_details(self) -> None:
         details = parse_media_details(Path("Dune.Part.Two.2024.2160p.REMUX.mkv"))
@@ -204,3 +219,26 @@ class ScannerTests(unittest.TestCase):
         report = scan_roots([root], storage_backend=backend)
 
         self.assertEqual(report.folder_media_duplicates, [])
+
+    def test_scan_emits_directory_and_file_progress_events(self) -> None:
+        root = RootConfig(path=Path("/library"), label="Library", priority=100)
+        entry = ScannedFileEntry(
+            path="/library/Dune Part Two (2024)/Dune.Part.Two.2024.2160p.REMUX.mkv",
+            relative_path="Dune Part Two (2024)/Dune.Part.Two.2024.2160p.REMUX.mkv",
+            size=20,
+            stem="Dune.Part.Two.2024.2160p.REMUX",
+            suffix=".mkv",
+            parent_name="Dune Part Two (2024)",
+        )
+        backend = ProgressAwareFakeScannerStorageBackend(entries=[entry], hashes={entry.path: "hash-a"})
+        events: list[dict[str, object]] = []
+
+        report = scan_roots([root], storage_backend=backend, progress_callback=events.append)
+
+        self.assertEqual(len(report.files), 1)
+        event_names = [str(event.get("event")) for event in events]
+        self.assertIn("root_started", event_names)
+        self.assertIn("directory_scanned", event_names)
+        self.assertIn("file_indexed", event_names)
+        self.assertIn("root_completed", event_names)
+        self.assertIn("scan_completed", event_names)

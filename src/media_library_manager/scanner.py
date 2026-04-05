@@ -129,6 +129,7 @@ MULTISPACE_RE = re.compile(r"\s+")
 
 ScanProgressCallback = Callable[[dict[str, object]], None]
 ScanCancellationCallback = Callable[[], bool]
+FILE_PROGRESS_INTERVAL = 10
 
 
 def scan_roots(
@@ -160,7 +161,29 @@ def scan_roots(
                     "total_indexed_files": total_files,
                 }
             )
-        for entry in backend.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS):
+        iter_with_progress = getattr(backend, "iter_video_files_with_progress", None)
+        if callable(iter_with_progress):
+            iterator = iter_with_progress(
+                root,
+                allowed_suffixes=VIDEO_EXTENSIONS,
+                progress_callback=(
+                    lambda event, *, root_index=index, current_root=root: progress_callback(
+                        {
+                            "index": root_index,
+                            "total_roots": total_roots,
+                            "root_label": current_root.label,
+                            "root_path": str(current_root.path),
+                            **event,
+                        }
+                    )
+                )
+                if progress_callback
+                else None,
+                should_cancel=should_cancel,
+            )
+        else:
+            iterator = backend.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS)
+        for entry in iterator:
             if should_cancel and should_cancel():
                 raise RuntimeError("job cancelled")
             media = inspect_media_file(entry, root)
@@ -169,6 +192,20 @@ def scan_roots(
             hash_entries[id(media)] = entry
             root_file_count += 1
             total_files += 1
+            if progress_callback and (root_file_count == 1 or root_file_count % FILE_PROGRESS_INTERVAL == 0):
+                progress_callback(
+                    {
+                        "event": "file_indexed",
+                        "index": index,
+                        "total_roots": total_roots,
+                        "root_label": root.label,
+                        "root_path": str(root.path),
+                        "file_path": str(media.path),
+                        "relative_path": media.relative_path,
+                        "root_indexed_files": root_file_count,
+                        "total_indexed_files": total_files,
+                    }
+                )
         if progress_callback:
             progress_callback(
                 {

@@ -118,3 +118,23 @@ class StateStoreTests(unittest.TestCase):
             self.assertEqual(roots[0].path, updated_root)
             self.assertEqual(roots[0].label, "Processed")
             self.assertEqual(roots[0].priority, 90)
+
+    def test_state_store_persists_empty_folder_cleanup_report_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+
+            store.save_cleanup_report({"generated_at": "2026-04-05T00:00:00+00:00", "summary": {"groups": 1}})
+            store.save_empty_folder_cleanup_report(
+                {
+                    "generated_at": "2026-04-05T00:10:00+00:00",
+                    "summary": {"duplicate_groups": 2, "deletion_candidates": 3},
+                    "groups": [],
+                }
+            )
+
+            payload = store.api_payload()
+            self.assertEqual(payload["cleanup_report"]["summary"]["groups"], 1)
+            self.assertEqual(payload["empty_folder_cleanup_report"]["summary"]["duplicate_groups"], 2)
+            self.assertEqual(payload["last_cleanup_at"], "2026-04-05T00:00:00+00:00")
+            self.assertEqual(payload["last_empty_folder_cleanup_at"], "2026-04-05T00:10:00+00:00")

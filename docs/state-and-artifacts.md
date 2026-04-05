@@ -17,6 +17,7 @@ State cơ bản hiện gồm:
 - `last_apply_at`
 - `last_sync_at`
 - `last_cleanup_at`
+- `last_empty_folder_cleanup_at`
 - `last_path_repair_at`
 - `activity_log`
 - `current_job`
@@ -41,6 +42,7 @@ thì artifacts là:
 - `data/last-apply.json`
 - `data/last-sync.json`
 - `data/last-cleanup-scan.json`
+- `data/last-empty-folder-cleanup.json`
 - `data/last-path-repair-scan.json`
 
 ## 3. Current job
@@ -68,7 +70,7 @@ Job logs hiện lưu các bước chi tiết của:
 - scan
 - plan
 - apply
-- cleanup scan
+- cleanup scan cho duplicate files và empty duplicate folders
 - path repair scan
 - path repair search
 
@@ -108,11 +110,13 @@ ACTIVITY_LOG_LIMIT = 200
 `api_payload()` trả:
 
 - state cơ bản
+- `last_empty_folder_cleanup_at`
 - `report`
 - `plan`
 - `apply_result`
 - `sync_result`
 - `cleanup_report`
+- `empty_folder_cleanup_report`
 - `path_repair_report`
 
 Frontend hiện tải phần lớn UI từ payload này cộng với một số endpoint riêng như:
