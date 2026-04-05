@@ -1,9 +1,10 @@
-from .backends import LocalStorageBackend, SmbStorageBackend, StorageBackend, StorageEntry, StorageError, StorageNotFoundError
+from .backends import LocalStorageBackend, RcloneStorageBackend, SmbStorageBackend, StorageBackend, StorageEntry, StorageError, StorageNotFoundError
 from .manager import StorageManager, default_storage_manager
 from .paths import StoragePath
 
 __all__ = [
     "LocalStorageBackend",
+    "RcloneStorageBackend",
     "SmbStorageBackend",
     "StorageBackend",
     "StorageEntry",

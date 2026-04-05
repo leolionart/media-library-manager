@@ -138,6 +138,7 @@ def scan_roots(
     progress_callback: ScanProgressCallback | None = None,
     storage_backend: ScannerStorageBackend | None = None,
     should_cancel: ScanCancellationCallback | None = None,
+    start_root_index: int = 1,
 ) -> ScanReport:
     files: list[MediaFile] = []
     size_groups: dict[int, list[MediaFile]] = defaultdict(list)
@@ -146,7 +147,8 @@ def scan_roots(
     total_files = 0
     backend = storage_backend or LocalPathScannerStorage()
 
-    for index, root in enumerate(roots, start=1):
+    normalized_start_index = max(1, int(start_root_index or 1))
+    for index, root in enumerate(roots[normalized_start_index - 1 :], start=normalized_start_index):
         if should_cancel and should_cancel():
             raise RuntimeError("job cancelled")
         root_file_count = 0
@@ -257,7 +259,7 @@ def rebuild_scan_report(roots: list[RootConfig], files: list[MediaFile]) -> Scan
 
 def inspect_media_file(entry: ScannedFileEntry, root: RootConfig) -> MediaFile:
     details = parse_media_details_from_names(entry.stem, entry.parent_name)
-    storage_uri = entry.path if entry.path.startswith(("local://", "smb://")) else ""
+    storage_uri = entry.path if entry.path.startswith(("local://", "smb://", "rclone://")) else ""
     media = MediaFile(
         path=Path(entry.path),
         root_path=root.path,

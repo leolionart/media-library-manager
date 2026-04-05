@@ -135,6 +135,26 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(len(report.exact_duplicates), 1)
             self.assertEqual(len(report.media_collisions), 1)
 
+    def test_scan_roots_can_resume_from_root_checkpoint(self) -> None:
+        root_a = RootConfig(path=Path("/library/A"), label="A", priority=100)
+        root_b = RootConfig(path=Path("/library/B"), label="B", priority=90)
+        entries = [
+            ScannedFileEntry(
+                path="/library/B/Movie (2024).mkv",
+                relative_path="Movie (2024).mkv",
+                size=10,
+                stem="Movie (2024)",
+                suffix=".mkv",
+                parent_name="B",
+            ),
+        ]
+        backend = FakeScannerStorageBackend(entries=entries, hashes={entries[0].path: "hash-b"})
+
+        report = scan_roots([root_a, root_b], storage_backend=backend, start_root_index=2)
+
+        self.assertEqual(len(report.files), 1)
+        self.assertEqual(report.files[0].root_label, "B")
+
     def test_scan_detects_same_movie_files_in_same_folder(self) -> None:
         import tempfile
 

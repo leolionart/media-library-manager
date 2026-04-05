@@ -98,6 +98,76 @@ class StateStoreTests(unittest.TestCase):
             self.assertIn("Cancellation requested", job["message"])
             self.assertEqual(store.load_current_job()["logs"][-1]["message"], "Cancellation requested by user.")
 
+    def test_state_store_derives_retry_resume_wait_actions_from_job_details(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+            store.start_job(
+                kind="scan",
+                message="Started library scan.",
+                details={"retryable": True, "resumable": True, "resume_state": {"next_root_index": 2}},
+            )
+
+            store.finish_job(
+                status="error",
+                message="Scan failed.",
+                details={"retryable": True, "resumable": True, "resume_state": {"next_root_index": 2}},
+            )
+            job = store.load_current_job()
+
+            self.assertTrue(job["available_actions"]["retry"])
+            self.assertTrue(job["available_actions"]["resume"])
+            self.assertTrue(job["available_actions"]["wait"])
+
+    def test_state_store_can_defer_retryable_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+            store.start_job(
+                kind="cleanup-scan",
+                message="Started duplicate empty-folder cleanup scan.",
+                details={
+                    "retryable": True,
+                    "resumable": True,
+                    "resume_state": {"action": "empty-folder-cleanup-scan", "payload": {}, "attempt": 1},
+                    "job_control": {
+                        "action": "empty-folder-cleanup-scan",
+                        "payload": {},
+                        "attempt": 1,
+                        "can_retry": True,
+                        "can_resume": True,
+                        "can_wait": True,
+                    },
+                },
+            )
+            store.finish_job(
+                status="error",
+                message="Duplicate empty-folder cleanup scan failed.",
+                details={
+                    "retryable": True,
+                    "resumable": True,
+                    "resume_state": {"action": "empty-folder-cleanup-scan", "payload": {}, "attempt": 1},
+                    "job_control": {
+                        "action": "empty-folder-cleanup-scan",
+                        "payload": {},
+                        "attempt": 1,
+                        "can_retry": True,
+                        "can_resume": True,
+                        "can_wait": True,
+                    },
+                },
+            )
+
+            job = store.request_job_wait(wait_seconds=90)
+
+            self.assertIsNotNone(job)
+            assert job is not None
+            self.assertEqual(job["status"], "waiting")
+            self.assertTrue(job["available_actions"]["retry"])
+            self.assertTrue(job["available_actions"]["resume"])
+            self.assertIn("Retry deferred", job["message"])
+            self.assertEqual(store.load_current_job()["logs"][-1]["message"], "Retry deferred for 90s.")
+
     def test_state_store_updates_existing_root_by_original_path(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)

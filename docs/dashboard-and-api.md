@@ -6,7 +6,7 @@ UI hiện có 5 view:
 
 - `Overview`
 - `Library Finder`
-- `Duplication Clean`
+- `Library Cleanup`
 - `Library Path Repair`
 - `Settings`
 
@@ -170,10 +170,9 @@ Lưu ý:
 
 ## 7. Cleanup APIs
 
-Cleanup UI hiện có 2 mode:
+Cleanup UI hiện tập trung vào:
 
-- `Duplicate Files`
-- `Empty Duplicate Folders`
+- `Provider Duplicate Files`
 
 ### `POST /api/cleanup/scan`
 

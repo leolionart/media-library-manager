@@ -8,6 +8,7 @@ Root có thể là:
 
 - local filesystem
 - SMB storage URI
+- rclone remote via `storage_uri` (e.g. `rclone://remote/path`)
 
 ## 2. Storage backend
 
@@ -107,3 +108,29 @@ Nếu cancel được request:
 Cancel scan SMB là cooperative, không phải hard kill.
 
 Nếu backend đang ở một lệnh `smbclient` dài, cancel flag sẽ được thấy ở bước an toàn kế tiếp chứ không ngắt syscall tức thì.
+
+## 8. Retry and resume behavior
+
+Các scan nặng hiện có 2 lớp phục hồi:
+
+- auto-retry với backoff khi lỗi có dấu hiệu transient như timeout hoặc rate limit
+- manual `wait`, `retry`, `resume` qua `current_job.available_actions`
+
+Với duplicate scan, provider cleanup scan, empty-folder cleanup scan, và provider path repair scan, backend giữ checkpoint mức root hoặc provider đã hoàn tất gần nhất. `resume` sẽ tiếp tục từ root/provider kế tiếp thay vì bắt đầu lại toàn bộ lượt scan.
+
+## 9. Empty duplicate folder cleanup matching
+
+Luồng empty-folder cleanup không còn chỉ so top-level folder names.
+
+Backend hiện index thư mục đệ quy trong mỗi root và match duplicate groups theo `relative path` media đã chuẩn hoá giữa các roots, ví dụ:
+
+- `Movies/Dune (2021)` và `Movie/Dune (2021)`
+- `Series/Dark` và `TV Series/Dark`
+
+Cleanup scan cũng tính luôn cờ `has_video` và `has_any_file` trong cùng lượt walk, thay vì index xong rồi recurse lại từng group.
+
+Với `Series`, cleanup scan còn build inventory episode theo từng folder duplicate. Nếu một folder có episode-set là tập con chặt của bản duplicate khác, hoặc đơn giản là ít episode hơn nhưng vẫn overlap rõ với bản còn lại, folder yếu hơn sẽ được đánh dấu candidate với reason `inferior-video-set` thay vì bị bỏ qua chỉ vì cả hai phía đều có video.
+
+Khi scan remote lớn, engine bỏ qua các thư mục metadata/noise phổ biến như `trickplay`, `@eaDir`, `Subs`, `Trailers` để giảm số lệnh backend và tránh kẹt ở các nhánh rác.
+
+Điều này giúp dọn duplicate dưới `Movies` hoặc `Series` mà không tạo false positive lớn từ các tên chung như `Extras` hoặc `Season 01` ở nhánh khác.

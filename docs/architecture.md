@@ -22,14 +22,14 @@ UI hiện tại có 5 view:
 
 - `Overview`
 - `Library Finder`
-- `Duplication Clean`
+- `Library Cleanup`
 - `Library Path Repair`
 - `Settings`
 
 Trọng tâm nghiệp vụ nằm ở ba màn:
 
 - `Library Finder`
-- `Duplication Clean`
+- `Library Cleanup`
 - `Library Path Repair`
 
 `Overview` là màn tổng hợp số liệu và process state.

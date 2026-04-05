@@ -352,6 +352,51 @@ pre {
   justify-self: end;
 }
 
+.cleanup-mode-note {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px dashed var(--plex-border-subtle);
+  border-radius: var(--plex-radius-md);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
+}
+
+.cleanup-mode-note-title.ant-typography {
+  margin: 0;
+  color: var(--plex-text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cleanup-mode-note-description.ant-typography {
+  margin: 0;
+  color: var(--plex-text-secondary);
+  line-height: 1.6;
+}
+
+.cleanup-error-list {
+  display: grid;
+  gap: 10px;
+}
+
+.cleanup-error-item {
+  display: grid;
+  gap: 4px;
+}
+
+.cleanup-error-source.ant-typography {
+  margin: 0;
+  color: var(--plex-text-primary);
+}
+
+.cleanup-error-message.ant-typography {
+  margin: 0;
+  color: var(--plex-text-secondary);
+  line-height: 1.55;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .cleanup-list-card,
 .cleanup-detail-card {
   min-height: 100%;
@@ -684,8 +729,9 @@ pre {
 
 .process-log-line {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: fit-content(320px) minmax(0, 1fr);
   gap: 14px;
+  align-items: start;
   padding: 9px 18px;
   border-top: 1px solid transparent;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
@@ -720,7 +766,7 @@ pre {
 
 .process-log-line-meta {
   display: grid;
-  grid-template-columns: 72px max-content minmax(0, 1fr);
+  grid-template-columns: 72px max-content minmax(120px, 1fr);
   gap: 12px;
   align-items: center;
   min-width: 0;
@@ -736,7 +782,7 @@ pre {
 .process-log-line-context.ant-tag {
   display: block;
   min-width: 0;
-  width: 100%;
+  max-width: 100%;
   color: var(--plex-text-secondary);
   background: rgba(255, 255, 255, 0.03);
   font-family: inherit;
@@ -749,6 +795,7 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-transform: lowercase;
+  justify-self: start;
 }
 
 .process-log-line-level.ant-tag {

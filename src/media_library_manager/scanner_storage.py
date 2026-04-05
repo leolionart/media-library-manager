@@ -163,12 +163,12 @@ class StorageManagerScannerStorage:
         return self.manager.compute_sha256(storage_path)
 
     def _entry_to_storage_path(self, value: str):
-        if value.startswith(("local://", "smb://")):
+        if value.startswith(("local://", "smb://", "rclone://")):
             return StoragePath.from_uri(value)
         return StoragePath.local(value)
 
     def _root_to_storage_path(self, root: RootConfig):
         raw = root.storage_uri or str(root.path)
-        if raw.startswith(("local://", "smb://")):
+        if raw.startswith(("local://", "smb://", "rclone://")):
             return StoragePath.from_uri(raw)
         return StoragePath.local(raw)

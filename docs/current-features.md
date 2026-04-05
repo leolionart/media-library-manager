@@ -8,7 +8,7 @@ Dashboard có 5 view:
 
 - `Overview`
 - `Library Finder`
-- `Duplication Clean`
+- `Library Cleanup`
 - `Library Path Repair`
 - `Settings`
 
@@ -39,24 +39,20 @@ Hiện có:
 - move folder contents vào provider-managed path
 - shared process logs
 
-## 4. Duplication Clean
+## 4. Library Cleanup
 
-Đây là workflow cleanup riêng với 2 mode.
+Đây là workflow cleanup riêng cho duplicate files trong thư viện Radarr/Sonarr. Nó tách khỏi duplicate workflow trong `Library Finder`.
 
 Hiện có:
 
-- mặc định mở vào mode `Empty Duplicate Folders` để ưu tiên dọn folder rác
-- mode `Duplicate Files` để scan folder từ các path mà Radarr/Sonarr đang quản lý
-- có option mặc định bật để khi scan provider duplicates thì refresh luôn report `Empty Duplicate Folders`
+- một mode `Provider Duplicate Files` để scan folder từ các path mà Radarr/Sonarr đang quản lý
+- empty duplicate-folder cleanup scan cho nhiều library roots, kể cả `rclone://...`
 - nếu provider path không tồn tại trong runtime local, backend thử resolve qua connected SMB roots
 - build group có nhiều candidate video file trong cùng folder
+- so khớp duplicate folder theo relative path media đã chuẩn hoá giữa các roots như `Movies` với `Movie` hoặc `Series` với `TV Series`
+- với `Series`, nếu một duplicate folder ít episode hơn bản còn lại và overlap cùng show/season thì folder yếu hơn sẽ bị mark `inferior-video-set`
 - chọn file cần xóa
-- mode `Empty Duplicate Folders` để so khớp folder top-level trùng tên giữa nhiều connected roots
-- inspect đệ quy chỉ trên các duplicate groups để xác định copy nào không có video
-- đánh dấu các folder `empty` hoặc `sidecar-only` là candidate để xóa
-- auto-select các folder `Delete Candidate` khi user mở một group để dọn nhanh hơn
-- xóa folder candidate rồi refresh lại report riêng của empty-folder cleanup
-- refresh report sau khi delete trong từng mode
+- refresh report sau khi delete
 - saved cleanup reports vẫn còn sau khi refresh trình duyệt
 - shared cleanup logs
 
@@ -98,6 +94,7 @@ Mỗi root hiện có thể là:
 
 - local path
 - SMB storage root
+- rclone remote (identified by a `storage_uri` like `rclone://remote/path`)
 
 Mỗi root có thể mang:
 
@@ -150,6 +147,7 @@ Các workflow dài như scan, plan, apply, cleanup scan, path repair scan/search
 - `details`
 - `cancel_requested`
 - `activity_log`
+- `available_actions` cho `cancel`, `wait`, `retry`, `resume` khi job hỗ trợ
 
 Refresh trang vẫn thấy trạng thái job hoặc activity mới nhất.
 
@@ -165,7 +163,23 @@ Cancel là cooperative:
 - log ghi cancel request
 - job dừng ở safe point tiếp theo
 
-## 12. Những gì không còn là workflow UI chính
+## 12. Retry, Wait, Resume
+
+Các job nặng hiện có thể lưu lại `job_control` context để chạy lại cùng payload cũ.
+
+Hiện hỗ trợ:
+
+- `POST /api/process/wait`
+- `POST /api/process/retry`
+- `POST /api/process/resume`
+
+`wait` chuyển job lỗi hoặc cancelled sang trạng thái `waiting` để user tiếp tục sau.
+
+`retry` rerun cùng workflow với payload cũ.
+
+`resume` hiện đã dùng checkpoint mức root/provider cho các scan nặng, nên có thể tiếp tục từ root hoặc provider kế tiếp thay vì luôn quét lại toàn bộ. Nó chưa resume sâu đến mức từng file.
+
+## 13. Những gì không còn là workflow UI chính
 
 UI hiện tại không còn xem các khối sau là đường đi chính:
 

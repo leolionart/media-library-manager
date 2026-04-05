@@ -39,7 +39,7 @@ App hiện có 5 màn chính:
 
 - `Overview`
 - `Library Finder`
-- `Duplication Clean`
+- `Library Cleanup`
 - `Library Path Repair`
 - `Settings`
 
@@ -72,12 +72,11 @@ Màn vận hành chính:
 - xem current job logs
 - cancel job đang chạy
 
-### Duplication Clean
+### Library Cleanup
 
-Màn dọn duplicate với 2 mode cleanup riêng:
+Màn cleanup riêng cho duplicate files trong thư viện Radarr/Sonarr:
 
-- `Duplicate Files`: scan folder từ Radarr hoặc Sonarr, nhóm các folder có nhiều candidate video file, rồi chọn file cần xóa
-- `Empty Duplicate Folders`: so khớp các folder top-level trùng tên giữa nhiều connected roots, inspect đệ quy từng group trùng, rồi đánh dấu các copy không có video là candidate để xóa
+- `Provider Duplicate Files`: scan folder từ Radarr hoặc Sonarr, nhóm các folder có nhiều candidate video file, rồi chọn file cần xóa
 - refresh report sau khi delete
 - xem cleanup logs
 

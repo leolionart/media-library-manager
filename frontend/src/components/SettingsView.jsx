@@ -125,23 +125,85 @@ function createSmbRootPayload(values, connection) {
   };
 }
 
+function buildRclonePath(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "/") return "/";
+  return `/${text.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+}
+
+function encodeRcloneUriPath(value) {
+  const normalized = buildRclonePath(value);
+  if (normalized === "/") return "/";
+  return `/${normalized
+    .slice(1)
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/")}`;
+}
+
+function createRcloneRootPayload(values) {
+  const remoteName = String(values.rclone_remote || "").trim().replace(/^\/+|\/+$/g, "");
+  if (!remoteName) return null;
+
+  const rootPath = buildRclonePath(values.rclone_path);
+  const storageUri = `rclone://${encodeURIComponent(remoteName)}${encodeRcloneUriPath(rootPath)}`;
+  const pseudoBase = `/rclone/${toSmbPseudoSegment(remoteName, "remote")}`;
+  const path = rootPath === "/" ? pseudoBase : `${pseudoBase}${rootPath}`;
+
+  return {
+    path,
+    storage_uri: storageUri,
+    share_name: "",
+    label: String(values.label || "").trim() || remoteName,
+    priority: Number(values.priority || 50),
+    kind: values.kind || "mixed",
+    connection_id: "",
+    connection_label: `rclone:${remoteName}`
+  };
+}
+
 function buildRootFormValues(root) {
   if (!root) {
-    return { mode: "local", priority: 50, kind: "mixed", share_path: "/" };
+    return { mode: "local", priority: 50, kind: "mixed", share_path: "/", rclone_path: "/" };
   }
 
   if (root.storage_uri) {
-    const parsed = new URL(root.storage_uri);
-    return {
-      mode: "smb",
-      original_path: root.path,
-      connection_id: root.connection_id || "",
-      share_name: root.share_name || decodeURIComponent(parsed.hostname || ""),
-      share_path: decodeURIComponent(parsed.pathname || "/"),
-      label: root.label || "",
-      priority: Number(root.priority || 50),
-      kind: root.kind || "mixed",
-    };
+    try {
+      const parsed = new URL(root.storage_uri);
+      if (parsed.protocol === "rclone:") {
+        return {
+          mode: "rclone",
+          original_path: root.path,
+          rclone_remote: decodeURIComponent(parsed.hostname || ""),
+          rclone_path: decodeURIComponent(parsed.pathname || "/"),
+          label: root.label || "",
+          priority: Number(root.priority || 50),
+          kind: root.kind || "mixed",
+        };
+      }
+      return {
+        mode: "smb",
+        original_path: root.path,
+        connection_id: root.connection_id || "",
+        share_name: root.share_name || decodeURIComponent(parsed.hostname || ""),
+        share_path: decodeURIComponent(parsed.pathname || "/"),
+        label: root.label || "",
+        priority: Number(root.priority || 50),
+        kind: root.kind || "mixed",
+      };
+    } catch {
+      return {
+        mode: "local",
+        original_path: root.path,
+        path: root.path,
+        label: root.label || "",
+        priority: Number(root.priority || 50),
+        kind: root.kind || "mixed",
+        share_path: "/",
+        rclone_path: "/",
+      };
+    }
   }
 
   return {
@@ -152,7 +214,15 @@ function buildRootFormValues(root) {
     priority: Number(root.priority || 50),
     kind: root.kind || "mixed",
     share_path: "/",
+    rclone_path: "/",
   };
+}
+
+function rootTypeLabel(record) {
+  const uri = String(record?.storage_uri || "");
+  if (uri.startsWith("rclone://")) return "Rclone";
+  if (uri.startsWith("smb://")) return "SMB";
+  return "Local";
 }
 
 function ProviderSettingsCard({ provider, testResult, onSave, onTest, saving, testing }) {
@@ -422,7 +492,13 @@ export function SettingsView() {
               P{record.priority}
             </Tag>
             <Tag>{record.kind}</Tag>
-            {record.storage_uri ? <Tag color="processing">SMB</Tag> : <Tag>Local</Tag>}
+            {rootTypeLabel(record) === "SMB" ? (
+              <Tag color="processing">SMB</Tag>
+            ) : rootTypeLabel(record) === "Rclone" ? (
+              <Tag color="geekblue">Rclone</Tag>
+            ) : (
+              <Tag>Local</Tag>
+            )}
           </Space>
         </Space>
       )
@@ -446,7 +522,11 @@ export function SettingsView() {
       key: "source",
       width: 220,
       render: (_, record) => (
-        <Text type="secondary">{record.connection_label || record.share_name || "Direct filesystem path"}</Text>
+        <Text type="secondary">
+          {rootTypeLabel(record) === "Rclone"
+            ? record.connection_label || "Rclone remote"
+            : record.connection_label || record.share_name || "Direct filesystem path"}
+        </Text>
       )
     },
     {
@@ -950,22 +1030,26 @@ export function SettingsView() {
         <Form
           form={rootForm}
           layout="vertical"
-          initialValues={{ mode: "local", priority: 50, kind: "mixed", share_path: "/" }}
+          initialValues={{ mode: "local", priority: 50, kind: "mixed", share_path: "/", rclone_path: "/" }}
           onFinish={async (values) => {
             try {
               const originalPath = String(values.original_path || editingRoot?.path || "").trim();
-              const payload =
-                values.mode === "smb"
-                  ? createSmbRootPayload(values, selectedRootConnection)
-                  : {
-                      path: String(values.path || "").trim(),
-                      label: String(values.label || "").trim(),
-                      priority: Number(values.priority || 50),
-                      kind: values.kind || "mixed"
-                    };
+              let payload = null;
+              if (values.mode === "smb") {
+                payload = createSmbRootPayload(values, selectedRootConnection);
+              } else if (values.mode === "rclone") {
+                payload = createRcloneRootPayload(values);
+              } else {
+                payload = {
+                  path: String(values.path || "").trim(),
+                  label: String(values.label || "").trim(),
+                  priority: Number(values.priority || 50),
+                  kind: values.kind || "mixed"
+                };
+              }
 
               if (!payload) {
-                throw new Error("SMB root requires a connection and share name.");
+                throw new Error(values.mode === "rclone" ? "Rclone root requires a remote name." : "SMB root requires a connection and share name.");
               }
 
               if (originalPath) {
@@ -990,7 +1074,8 @@ export function SettingsView() {
             <Select
               options={[
                 { label: "Local filesystem", value: "local" },
-                { label: "SMB connection", value: "smb" }
+                { label: "SMB connection", value: "smb" },
+                { label: "Rclone remote", value: "rclone" }
               ]}
             />
           </Form.Item>
@@ -1009,6 +1094,15 @@ export function SettingsView() {
                     <Input placeholder={selectedRootConnection?.share_name || "DATA"} />
                   </Form.Item>
                   <Form.Item name="share_path" label="Folder Path Inside Share">
+                    <Input placeholder="/Movies" />
+                  </Form.Item>
+                </>
+              ) : getFieldValue("mode") === "rclone" ? (
+                <>
+                  <Form.Item name="rclone_remote" label="Rclone Remote Name" rules={[{ required: true }]}>
+                    <Input placeholder="gdrive" />
+                  </Form.Item>
+                  <Form.Item name="rclone_path" label="Folder Path Inside Remote">
                     <Input placeholder="/Movies" />
                   </Form.Item>
                 </>

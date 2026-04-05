@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from media_library_manager.scanner_storage import ScannedFileEntry, StorageManagerScannerStorage
-from media_library_manager.storage import LocalStorageBackend, SmbStorageBackend, StoragePath
+from media_library_manager.storage import LocalStorageBackend, RcloneStorageBackend, SmbStorageBackend, StoragePath
 from media_library_manager.storage.backends import StorageError
 
 
@@ -20,6 +20,13 @@ class FakeStorageManager:
 
 
 class StorageBackendTests(unittest.TestCase):
+    def test_storage_path_roundtrips_rclone_uri(self) -> None:
+        path = StoragePath.from_uri("rclone://media-remote/Movies/Dune%20%282024%29")
+        self.assertEqual(path.backend, "rclone")
+        self.assertEqual(path.rclone_remote, "media-remote")
+        self.assertEqual(path.normalized_path(), "/Movies/Dune (2024)")
+        self.assertEqual(path.to_uri(), "rclone://media-remote/Movies/Dune%20%282024%29")
+
     def test_local_backend_compute_sha256(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             file_path = Path(raw_tmp) / "movie.mkv"
@@ -65,6 +72,22 @@ class StorageBackendTests(unittest.TestCase):
         path = StoragePath.smb(connection_id="smb-1", share_name="Media", path="/")
         with self.assertRaises(StorageError):
             backend.compute_sha256(path)
+
+    @patch("media_library_manager.storage.backends.run_rclone_json")
+    def test_rclone_backend_lists_entries_from_lsjson(self, run_rclone_json_mock) -> None:
+        run_rclone_json_mock.return_value = [
+            {"Name": "Movies", "IsDir": True, "Size": 0, "ModTime": "2026-04-05T12:00:00Z"},
+            {"Name": "readme.txt", "IsDir": False, "Size": 12, "ModTime": "2026-04-05T12:01:00Z"},
+        ]
+        backend = RcloneStorageBackend()
+
+        entries = backend.list_dir(StoragePath.rclone(remote="media-remote", path="/"))
+
+        self.assertEqual([entry.name for entry in entries], ["Movies", "readme.txt"])
+        self.assertTrue(entries[0].is_dir)
+        self.assertEqual(entries[0].path.to_uri(), "rclone://media-remote/Movies")
+        self.assertTrue(entries[1].is_file)
+        self.assertEqual(entries[1].size, 12)
 
     def test_scanner_storage_uses_manager_compute_sha256_for_smb_by_default(self) -> None:
         manager = FakeStorageManager()

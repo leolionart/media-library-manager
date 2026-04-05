@@ -21,12 +21,12 @@ const VIEW_META = {
   operations: {
     title: "Library Finder",
     description:
-      "Browse library folders, review duplicate suggestions, and move a selected folder into the correct Radarr or Sonarr title."
+      "Browse library folders, review duplicate folder suggestions, and move a selected folder into the correct Radarr or Sonarr title."
   },
   cleanup: {
-    title: "Duplication Clean",
+    title: "Library Cleanup",
     description:
-      "Review duplicate media files and duplicate empty folders, then delete the safe cleanup candidates without leaving the dashboard."
+      "Review duplicate files inside Radarr and Sonarr managed paths, then remove the safe cleanup candidates without leaving the dashboard."
   },
   repair: {
     title: "Library Path Repair",
@@ -72,7 +72,7 @@ export function DashboardApp() {
           items={[
             { key: "overview", icon: <DashboardOutlined />, label: "Overview" },
             { key: "operations", icon: <AppstoreOutlined />, label: "Library Finder" },
-            { key: "cleanup", icon: <ClearOutlined />, label: "Duplication Clean" },
+            { key: "cleanup", icon: <ClearOutlined />, label: "Library Cleanup" },
             { key: "repair", icon: <LinkOutlined />, label: "Library Path Repair" },
             { key: "settings", icon: <SettingOutlined />, label: "Settings" }
           ]}

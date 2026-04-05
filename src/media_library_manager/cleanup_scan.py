@@ -25,6 +25,7 @@ def scan_provider_cleanup(
     lan_connections: dict[str, Any] | None = None,
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    start_root_index: int = 1,
 ) -> dict[str, Any]:
     requested = [provider for provider in (providers or ["radarr", "sonarr"]) if provider in {"radarr", "sonarr"}]
     if not requested:
@@ -113,6 +114,7 @@ def scan_provider_cleanup(
         lan_connections=resolved_lan_connections,
         progress_callback=progress_callback,
         should_cancel=should_cancel,
+        start_root_index=start_root_index,
     )
     return _build_cleanup_report(
         providers=active_providers,
@@ -139,6 +141,7 @@ def _scan_provider_roots(
     lan_connections: dict[str, Any] | None = None,
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    start_root_index: int = 1,
 ) -> list[MediaFile]:
     storage = LocalPathScannerStorage()
     if any(bool(root.storage_uri) for root in roots):
@@ -148,7 +151,8 @@ def _scan_provider_roots(
     total_roots = len(roots)
     total_files = 0
 
-    for index, root in enumerate(roots, start=1):
+    normalized_start_index = max(1, int(start_root_index or 1))
+    for index, root in enumerate(roots[normalized_start_index - 1 :], start=normalized_start_index):
         if should_cancel and should_cancel():
             raise RuntimeError("job cancelled")
         root_file_count = 0

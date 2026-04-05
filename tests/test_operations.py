@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from media_library_manager.operation_storage import OperationStorageRouter
 from media_library_manager.operations import apply_plan, delete_file, delete_folder, delete_media_file, move_folder, move_folder_contents
+from media_library_manager.rclone_cli import RcloneCommandResult
 
 
 class OperationTests(unittest.TestCase):
@@ -141,6 +142,25 @@ class OperationTests(unittest.TestCase):
             result = delete_folder(tmp_path / "DeleteMe", execute=True)
             self.assertEqual(result["status"], "applied")
             self.assertFalse((tmp_path / "DeleteMe").exists())
+
+    @patch("media_library_manager.operation_storage.run_rclone_command")
+    def test_delete_folder_uses_rclone_purge_for_rclone_paths(self, run_rclone_command_mock) -> None:
+        def side_effect(args: list[str], *, timeout: int, expect_json: bool = False):  # noqa: ARG001
+            if args == ["lsjson", "media-remote:Movies", "--max-depth", "1"]:
+                return [{"Name": "Dune", "IsDir": True}] if expect_json else RcloneCommandResult(status="success", stdout="", stderr="", returncode=0, message="")
+            if args == ["lsjson", "media-remote:", "--max-depth", "1"]:
+                return [{"Name": "Movies", "IsDir": True}] if expect_json else RcloneCommandResult(status="success", stdout="", stderr="", returncode=0, message="")
+            if args == ["purge", "media-remote:Movies/Dune"]:
+                return RcloneCommandResult(status="success", stdout="", stderr="", returncode=0, message="")
+            return RcloneCommandResult(status="error", stdout="", stderr="", returncode=1, message=f"unexpected args: {args}")
+
+        run_rclone_command_mock.side_effect = side_effect
+
+        preview = delete_folder("rclone://media-remote/Movies/Dune", execute=False, storage_router=OperationStorageRouter())
+        self.assertEqual(preview["status"], "dry-run")
+
+        result = delete_folder("rclone://media-remote/Movies/Dune", execute=True, storage_router=OperationStorageRouter())
+        self.assertEqual(result["status"], "applied")
 
     def test_delete_file_removes_single_file_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:

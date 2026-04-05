@@ -28,10 +28,10 @@ Dashboard hiện có 5 màn:
    Màn tổng quan. Gom KPI, tình trạng roots, provider, process đang chạy, các case cần chú ý, và `Recent Activity`.
 
 2. `Library Finder`
-   Màn vận hành chính cho inventory folder, duplicate workflow, move folder, move vào Radarr/Sonarr, và xem process logs.
+   Màn vận hành chính cho inventory folder, duplicate workflow trên folder được chọn, move folder, move vào Radarr/Sonarr, và xem process logs.
 
-3. `Duplication Clean`
-   Màn dọn duplicate với 2 mode riêng: duplicate files trong provider-managed folders và empty duplicate folders giữa nhiều connected roots. Đây không dùng plan/apply.
+3. `Library Cleanup`
+   Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply.
 
 4. `Library Path Repair`
    Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder phù hợp, cập nhật path, hoặc remove item khỏi provider mà không xóa media file.
@@ -77,6 +77,7 @@ Backend chỉ giữ một job đang active hoặc job mới hoàn tất gần nh
 - `message`
 - `summary`
 - `details`
+- `available_actions`
 - `logs`
 - `cancel_requested`
 - `started_at`
@@ -119,6 +120,14 @@ Một số `current_job.kind` đặc thù hơn:
 - `cleanup-scan`
 - `path-repair`
 
+Job lỗi hoặc cancelled có thể giữ `job_control` trong `details` để frontend/backend gọi lại cùng workflow qua:
+
+- `POST /api/process/wait`
+- `POST /api/process/retry`
+- `POST /api/process/resume`
+
+Với các scan nặng theo root hoặc provider, backend hiện lưu checkpoint mức `next_root_index` hoặc `next_provider_index`, nên `resume` có thể tiếp tục từ bước kế tiếp thay vì luôn quay lại từ đầu. Đây vẫn chưa phải checkpoint sâu đến từng file.
+
 ### Artifact files
 
 State và artifact hiện lưu trong `data/`:
@@ -142,6 +151,7 @@ Mỗi root có thể là:
 
 - local path
 - SMB storage root
+- rclone remote
 
 SMB là workflow chính thức, không còn là đường vòng dựa vào mounted path.
 
@@ -198,15 +208,11 @@ Các action ngoài plan/apply:
 
 `move-to-provider` dùng khi source là folder download còn đích là path movie/series mà provider đang quản lý.
 
-### 4.3 Duplication Clean
+### 4.3 Library Cleanup
 
-Đây là workflow riêng, không dùng `report -> plan -> apply`.
+Đây là workflow riêng cho duplicate files trong thư viện Radarr/Sonarr, không dùng `report -> plan -> apply`. Nó không phải là duplicate workflow trong `Library Finder`.
 
-UI hiện có 2 mode cleanup riêng.
-
-Mặc định UI mở vào `Empty Duplicate Folders` để ưu tiên dọn folder rác.
-
-#### A. Duplicate Files
+#### A. Provider Duplicate Files
 
 Luồng:
 
@@ -221,7 +227,6 @@ Luồng:
 
 Điểm quan trọng:
 
-- UI có option mặc định bật để khi chạy provider cleanup sẽ refresh luôn empty-folder cleanup report
 - cleanup ưu tiên provider paths local đang tồn tại, nhưng có SMB fallback nếu path của provider map được về connected roots
 - nó không build action plan
 - group đầu tiên thường được xem là candidate nên giữ lại, còn các file dư là phần user cân nhắc xóa
@@ -236,36 +241,6 @@ Artifact liên quan:
 - `cleanup_report`
 - `last_cleanup_at`
 - `last-cleanup-scan.json`
-
-#### B. Empty Duplicate Folders
-
-Luồng:
-
-1. user chạy `POST /api/cleanup/empty-folders/scan`
-2. backend index các folder top-level trong từng connected root
-3. backend chỉ giữ các nhóm trùng exact theo tên giữa ít nhất 2 roots
-4. backend inspect đệ quy từng copy để xác định `has_video`, `is_deletion_candidate`, và `empty_reason`
-5. UI cho user chọn các folder candidate rồi gọi `DELETE /api/folders`
-6. sau khi xóa, UI chạy lại scan để refresh report
-
-Điểm quan trọng:
-
-- backend không xóa tự động; chỉ đánh dấu các copy không có video để user quyết định
-- `empty_reason` hiện là `empty` hoặc `sidecar-only`
-- UI auto-select các `Delete Candidate` khi user mở group để giảm thao tác tay
-- delete dùng chung folder delete API hiện có, không tạo bulk delete route riêng ở v1
-- report được lưu trong state/artifact nên refresh trang không làm mất kết quả scan gần nhất
-
-API chính:
-
-- `POST /api/cleanup/empty-folders/scan`
-- `DELETE /api/folders`
-
-Artifact liên quan:
-
-- `empty_folder_cleanup_report`
-- `last_empty_folder_cleanup_at`
-- `last-empty-folder-cleanup.json`
 
 ### 4.4 Library Path Repair
 

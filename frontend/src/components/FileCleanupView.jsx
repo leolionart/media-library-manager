@@ -1,33 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Alert,
-  App as AntApp,
-  Button,
-  Card,
-  Descriptions,
-  Empty,
-  Flex,
-  Input,
-  Segmented,
-  Space,
-  Spin,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from "antd";
-import { DeleteOutlined, FileSearchOutlined, FolderOpenOutlined } from "@ant-design/icons";
-import { deleteFolder, deleteMovieFile, request, runCleanupScan, runEmptyFolderCleanupScan } from "../api";
+import { Alert, App as AntApp, Button, Card, Descriptions, Empty, Flex, Input, Space, Spin, Table, Tag, Typography } from "antd";
+import { DeleteOutlined, FileSearchOutlined } from "@ant-design/icons";
+import { deleteMovieFile, request, runCleanupScan } from "../api";
 import { MediaLibraryLogPanel } from "./MediaLibraryLogPanel";
 
 const { Text } = Typography;
-
-const CLEANUP_MODE_OPTIONS = [
-  { label: "Duplicate Files", value: "files" },
-  { label: "Empty Duplicate Folders", value: "folders" },
-];
-const CLEANUP_MODE_STORAGE_KEY = "media-library-manager.cleanup-mode";
-const CLEANUP_INCLUDE_EMPTY_FOLDERS_STORAGE_KEY = "media-library-manager.cleanup.include-empty-folders";
+const EMPTY_REPORT = {};
 
 function formatBytes(value) {
   const size = Number(value || 0);
@@ -48,25 +26,50 @@ function formatDate(value) {
 }
 
 function summarizeLabels(items, limit = 3) {
-  const labels = items.map((item) => String(item?.canonical_name || item?.folder_name || item?.title || item?.path || "")).filter(Boolean);
+  const labels = items.map((item) => String(item?.canonical_name || item?.title || item?.path || "")).filter(Boolean);
   if (!labels.length) return "None";
   if (labels.length <= limit) return labels.join(", ");
   return `${labels.slice(0, limit).join(", ")} +${labels.length - limit} more`;
 }
 
-function normalizeSearchText(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replaceAll(/[\._()-]+/g, " ")
-    .replaceAll(/\s+/g, " ")
-    .trim();
+function sameStringArray(left, right) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (String(left[index]) !== String(right[index])) return false;
+  }
+  return true;
 }
 
-function folderStatusMeta(item) {
-  if (item?.has_video) return { color: "success", label: "Has Video" };
-  if (item?.empty_reason === "empty") return { color: "default", label: "Empty Directory" };
-  if (item?.empty_reason === "sidecar-only") return { color: "warning", label: "Sidecar Only" };
-  return { color: "warning", label: "No Video" };
+function normalizeCleanupErrorMessage(value) {
+  const message = String(value || "").trim();
+  if (!message) return "Unknown error.";
+  if (message.startsWith("[") && message.includes('"Path"') && message.includes('"Name"')) {
+    return "The storage backend returned a raw directory listing instead of a readable error. Re-run the scan after restarting the backend.";
+  }
+  return message;
+}
+
+function CleanupErrorAlert({ errors }) {
+  return (
+    <Alert
+      type="error"
+      showIcon
+      title="Provider file cleanup errors"
+      description={
+        <div className="cleanup-error-list">
+          {errors.map((item, index) => (
+            <div key={`${item.root_label || item.provider || item.root_path || "error"}-${index}`} className="cleanup-error-item">
+              <Text strong className="cleanup-error-source">
+                {item.root_label || item.provider || item.path || item.root_path || "Unknown source"}
+              </Text>
+              <Text className="cleanup-error-message">{normalizeCleanupErrorMessage(item.message)}</Text>
+            </div>
+          ))}
+        </div>
+      }
+    />
+  );
 }
 
 export function FileCleanupView() {
@@ -75,25 +78,10 @@ export function FileCleanupView() {
   const [actionLoading, setActionLoading] = useState("");
   const [refreshToken, setRefreshToken] = useState(0);
   const [payload, setPayload] = useState({});
-  const [mode, setMode] = useState(() => {
-    if (typeof window === "undefined") return "folders";
-    const savedMode = window.localStorage.getItem(CLEANUP_MODE_STORAGE_KEY);
-    return savedMode === "files" || savedMode === "folders" ? savedMode : "folders";
-  });
-  const [includeEmptyFolderCleanup, setIncludeEmptyFolderCleanup] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const savedValue = window.localStorage.getItem(CLEANUP_INCLUDE_EMPTY_FOLDERS_STORAGE_KEY);
-    return savedValue === null ? true : savedValue === "true";
-  });
   const [fileQuery, setFileQuery] = useState("");
-  const [folderQuery, setFolderQuery] = useState("");
   const [selectedGroupIds, setSelectedGroupIds] = useState([]);
   const [selectedFileKeys, setSelectedFileKeys] = useState([]);
-  const [selectedEmptyGroupIds, setSelectedEmptyGroupIds] = useState([]);
-  const [selectedEmptyFolderKeys, setSelectedEmptyFolderKeys] = useState([]);
   const [deletingKey, setDeletingKey] = useState("");
-  const [deletingFolderKey, setDeletingFolderKey] = useState("");
-  const [autoSelectedFolderScope, setAutoSelectedFolderScope] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -119,19 +107,7 @@ export function FileCleanupView() {
     };
   }, [message, refreshToken]);
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(CLEANUP_MODE_STORAGE_KEY, mode);
-    }
-  }, [mode]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(CLEANUP_INCLUDE_EMPTY_FOLDERS_STORAGE_KEY, String(includeEmptyFolderCleanup));
-    }
-  }, [includeEmptyFolderCleanup]);
-
-  const cleanupReport = payload.cleanup_report || {};
+  const cleanupReport = payload.cleanup_report || EMPTY_REPORT;
   const cleanupGroups = useMemo(() => cleanupReport.folder_media_duplicates || cleanupReport.groups || [], [cleanupReport]);
   const cleanupErrors = cleanupReport.errors || [];
 
@@ -147,7 +123,10 @@ export function FileCleanupView() {
 
   useEffect(() => {
     const validGroupIds = new Set(filteredCleanupGroups.map((group) => String(group.id)));
-    setSelectedGroupIds((current) => current.filter((id) => validGroupIds.has(String(id))));
+    setSelectedGroupIds((current) => {
+      const next = current.filter((id) => validGroupIds.has(String(id)));
+      return sameStringArray(current, next) ? current : next;
+    });
   }, [filteredCleanupGroups]);
 
   const selectedGroups = useMemo(
@@ -178,99 +157,14 @@ export function FileCleanupView() {
 
   useEffect(() => {
     const validKeys = new Set(fileRows.map((item) => item.rowKey));
-    setSelectedFileKeys((current) => current.filter((key) => validKeys.has(String(key))));
-  }, [fileRows]);
-
-  const emptyFolderReport = payload.empty_folder_cleanup_report || {};
-  const emptyFolderGroups = useMemo(() => emptyFolderReport.groups || [], [emptyFolderReport]);
-  const emptyFolderErrors = emptyFolderReport.errors || [];
-
-  const filteredEmptyFolderGroups = useMemo(() => {
-    const search = normalizeSearchText(folderQuery);
-    if (!search) return emptyFolderGroups;
-    return emptyFolderGroups.filter((group) =>
-      [
-        group.folder_name,
-        group.canonical_name,
-        ...(group.items || []).flatMap((item) => [item.path, item.root_label, item.root_path, item.status]),
-      ]
-        .filter(Boolean)
-        .some((value) => normalizeSearchText(value).includes(search))
-    );
-  }, [emptyFolderGroups, folderQuery]);
-
-  useEffect(() => {
-    const validGroupIds = new Set(filteredEmptyFolderGroups.map((group) => String(group.id)));
-    setSelectedEmptyGroupIds((current) => current.filter((id) => validGroupIds.has(String(id))));
-  }, [filteredEmptyFolderGroups]);
-
-  const selectedEmptyGroups = useMemo(
-    () => filteredEmptyFolderGroups.filter((group) => selectedEmptyGroupIds.includes(String(group.id))),
-    [filteredEmptyFolderGroups, selectedEmptyGroupIds]
-  );
-  const selectedEmptyGroupSummary = useMemo(() => summarizeLabels(selectedEmptyGroups), [selectedEmptyGroups]);
-
-  const emptyFolderRows = useMemo(
-    () =>
-      selectedEmptyGroups.flatMap((group) =>
-        (group.items || []).map((item) => ({
-          ...item,
-          groupId: String(group.id),
-          groupFolderName: group.folder_name || group.canonical_name,
-          groupDeleteCandidates: Number(group.deletion_candidate_count || 0),
-          rowKey: `${group.id}:${item.delete_path || item.storage_uri || item.path || item.root_path || item.root_label}`,
-        }))
-      ),
-    [selectedEmptyGroups]
-  );
-
-  useEffect(() => {
-    const validKeys = new Set(emptyFolderRows.map((item) => item.rowKey));
-    setSelectedEmptyFolderKeys((current) => current.filter((key) => validKeys.has(String(key))));
-  }, [emptyFolderRows]);
-
-  const emptyFolderAutoSelectionScope = useMemo(
-    () => `${payload.last_empty_folder_cleanup_at || ""}:${selectedEmptyGroupIds.slice().sort().join("|")}`,
-    [payload.last_empty_folder_cleanup_at, selectedEmptyGroupIds]
-  );
-
-  const emptyFolderCandidateKeys = useMemo(
-    () => emptyFolderRows.filter((item) => item.is_deletion_candidate).map((item) => item.rowKey),
-    [emptyFolderRows]
-  );
-
-  useEffect(() => {
-    if (!selectedEmptyGroupIds.length) {
-      setAutoSelectedFolderScope("");
-      return;
-    }
-    if (autoSelectedFolderScope === emptyFolderAutoSelectionScope) {
-      return;
-    }
-    setSelectedEmptyFolderKeys((current) => {
-      const validKeys = new Set(emptyFolderRows.map((item) => item.rowKey));
-      const next = new Set(current.filter((key) => validKeys.has(String(key))));
-      for (const key of emptyFolderCandidateKeys) {
-        next.add(String(key));
-      }
-      return Array.from(next);
+    setSelectedFileKeys((current) => {
+      const next = current.filter((key) => validKeys.has(String(key)));
+      return sameStringArray(current, next) ? current : next;
     });
-    setAutoSelectedFolderScope(emptyFolderAutoSelectionScope);
-  }, [
-    autoSelectedFolderScope,
-    emptyFolderAutoSelectionScope,
-    emptyFolderCandidateKeys,
-    emptyFolderRows,
-    selectedEmptyGroupIds.length,
-  ]);
+  }, [fileRows]);
 
   async function refreshCleanup(providers = cleanupReport.providers || []) {
     await runCleanupScan(providers);
-    setRefreshToken((value) => value + 1);
-  }
-
-  async function refreshEmptyFolderCleanup() {
-    await runEmptyFolderCleanupScan();
     setRefreshToken((value) => value + 1);
   }
 
@@ -288,15 +182,6 @@ export function FileCleanupView() {
     await refreshCleanup();
   }
 
-  async function handleDeleteEmptyFolders(rows) {
-    if (!rows.length) return;
-    for (const item of rows) {
-      await deleteFolder(item.delete_path || item.path);
-    }
-    setSelectedEmptyFolderKeys([]);
-    await refreshEmptyFolderCleanup();
-  }
-
   function toggleGroupSelection(groupId) {
     const key = String(groupId);
     setSelectedGroupIds((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
@@ -310,59 +195,21 @@ export function FileCleanupView() {
     setSelectedFileKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
   }
 
-  function toggleEmptyGroupSelection(groupId) {
-    const key = String(groupId);
-    setSelectedEmptyGroupIds((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
-  }
-
-  function toggleEmptyFolderSelection(rowKey) {
-    const key = String(rowKey);
-    const row = emptyFolderRows.find((item) => item.rowKey === key);
-    if (!row || !row.is_deletion_candidate) return;
-    setSelectedEmptyFolderKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
-  }
-
   async function handleDeleteSelectedFiles() {
     const rows = fileRows.filter((item) => selectedFileKeys.includes(item.rowKey));
     if (!rows.length) return;
     await handleDeleteRows(rows);
   }
 
-  async function handleDeleteSelectedEmptyFolders() {
-    const rows = emptyFolderRows.filter((item) => selectedEmptyFolderKeys.includes(item.rowKey) && item.is_deletion_candidate);
-    if (!rows.length) return;
-    await handleDeleteEmptyFolders(rows);
-  }
-
   async function handleRunProviderCleanupScan() {
     setActionLoading("scan-files");
-    let providerScanCompleted = false;
-    let emptyFolderScanCompleted = false;
     try {
       await runCleanupScan([]);
-      providerScanCompleted = true;
-      if (includeEmptyFolderCleanup) {
-        try {
-          await runEmptyFolderCleanupScan();
-          emptyFolderScanCompleted = true;
-          setMode("folders");
-        } catch (error) {
-          message.warning(
-            `Provider cleanup scan completed, but empty duplicate folder scan failed. Saved folder results were kept. ${error.message}`
-          );
-        }
-      }
-      if (!includeEmptyFolderCleanup) {
-        message.success("Provider cleanup scan completed.");
-      } else if (emptyFolderScanCompleted) {
-        message.success("Cleanup scans completed. Empty duplicate folder results were refreshed too.");
-      }
+      setRefreshToken((value) => value + 1);
+      message.success("Provider file cleanup scan completed.");
     } catch (error) {
       message.error(error.message);
     } finally {
-      if (providerScanCompleted || emptyFolderScanCompleted) {
-        setRefreshToken((value) => value + 1);
-      }
       setActionLoading("");
     }
   }
@@ -496,509 +343,6 @@ export function FileCleanupView() {
     },
   ];
 
-  const emptyFolderGroupColumns = [
-    {
-      title: "Folder",
-      key: "folder",
-      render: (_value, group) => (
-        <Flex vertical gap={4}>
-          <Space wrap>
-            <Text strong>{group.folder_name || group.canonical_name}</Text>
-            <Tag>{group.items.length} copies</Tag>
-            {Number(group.deletion_candidate_count || 0) ? <Tag color="warning">{group.deletion_candidate_count} cleanup</Tag> : null}
-          </Space>
-          <Text type="secondary">{summarizeLabels(group.items || [])}</Text>
-        </Flex>
-      ),
-    },
-    {
-      title: "Video Copies",
-      key: "video",
-      width: 140,
-      render: (_value, group) => (
-        <Space wrap>
-          <Tag color="success">{(group.items || []).filter((item) => item.has_video).length} with video</Tag>
-          <Tag>{(group.items || []).filter((item) => !item.has_video).length} without video</Tag>
-        </Space>
-      ),
-    },
-    {
-      title: "Roots",
-      key: "roots",
-      width: 240,
-      render: (_value, group) => (
-        <Space wrap>
-          {[...new Set((group.items || []).map((item) => item.root_label).filter(Boolean))].map((label) => (
-            <Tag key={label}>{label}</Tag>
-          ))}
-        </Space>
-      ),
-    },
-    {
-      title: "Action",
-      key: "action",
-      width: 140,
-      render: (_value, group) => (
-        <Button size="small" onClick={() => setSelectedEmptyGroupIds([String(group.id)])}>
-          Only This
-        </Button>
-      ),
-    },
-  ];
-
-  const emptyFolderColumns = [
-    {
-      title: "Group",
-      key: "group",
-      width: 220,
-      render: (_value, item) => (
-        <Flex vertical gap={4}>
-          <Text strong>{item.groupFolderName}</Text>
-          <Text type="secondary">{item.root_label || item.root_path || "-"}</Text>
-        </Flex>
-      ),
-    },
-    {
-      title: "Folder",
-      key: "folder",
-      render: (_value, item) => (
-        <Flex vertical gap={4}>
-            <Space wrap>
-              <Text strong>{String(item.path || "").split("/").pop() || item.groupFolderName}</Text>
-              <Tag color={folderStatusMeta(item).color}>{folderStatusMeta(item).label}</Tag>
-              {item.is_deletion_candidate ? <Tag color="warning">Delete Candidate</Tag> : <Tag color="success">Keep</Tag>}
-            </Space>
-            <Text type="secondary" className="cleanup-path-text">
-              {item.path}
-            </Text>
-          </Flex>
-      ),
-    },
-    {
-      title: "Contents",
-      key: "contents",
-      width: 220,
-      render: (_value, item) => (
-        <Space wrap>
-          {item.root_kind ? <Tag>{String(item.root_kind).toUpperCase()}</Tag> : null}
-          {item.empty_reason ? <Tag>{item.empty_reason}</Tag> : <Tag color="success">media present</Tag>}
-        </Space>
-      ),
-    },
-    {
-      title: "Action",
-      key: "action",
-      width: 140,
-      render: (_value, item) => (
-        <Button
-          danger
-          icon={<DeleteOutlined />}
-          disabled={!item.is_deletion_candidate}
-          loading={deletingFolderKey === item.rowKey}
-          onClick={() =>
-            modal.confirm({
-              title: "Delete this folder?",
-              content: item.path,
-              okText: "Delete",
-              okButtonProps: { danger: true },
-              onOk: async () => {
-                setDeletingFolderKey(item.rowKey);
-                try {
-                  await handleDeleteEmptyFolders([item]);
-                  message.success("Folder deleted.");
-                } catch (error) {
-                  message.error(error.message);
-                } finally {
-                  setDeletingFolderKey("");
-                }
-              },
-            })
-          }
-        >
-          Delete
-        </Button>
-      ),
-    },
-  ];
-
-  const fileModeContent = (
-    <Flex vertical gap={16}>
-      <div className="cleanup-toolbar">
-        <Space wrap>
-          <Button
-            type="primary"
-            loading={actionLoading === "scan-files"}
-            onClick={handleRunProviderCleanupScan}
-          >
-            Scan Providers
-          </Button>
-          <Space size={8}>
-            <Switch checked={includeEmptyFolderCleanup} onChange={setIncludeEmptyFolderCleanup} />
-            <Text>Also refresh empty duplicate folders</Text>
-          </Space>
-        </Space>
-        <Input.Search
-          className="folder-list-search"
-          value={fileQuery}
-          onChange={(event) => setFileQuery(event.target.value)}
-          allowClear
-          placeholder="Filter by title, folder, provider, or root"
-        />
-      </div>
-
-      <Descriptions
-        size="small"
-        column={{ xs: 1, md: 2, xl: 4 }}
-        items={[
-          { key: "last-scan", label: "Latest Scan", children: formatDate(payload.last_cleanup_at) },
-          {
-            key: "providers",
-            label: "Providers",
-            children: (cleanupReport.providers || []).length ? cleanupReport.providers.join(", ") : "None",
-          },
-          { key: "groups", label: "Groups", children: cleanupGroups.length },
-          { key: "indexed", label: "Indexed Files", children: Number(cleanupReport.summary?.indexed_files || 0) },
-          { key: "selected-groups", label: "Selected Groups", children: selectedGroupSummary },
-        ]}
-      />
-
-      <Alert
-        type="info"
-        showIcon
-        message="Cleanup reports are saved automatically."
-        description={
-          payload.last_cleanup_at
-            ? `Latest provider cleanup scan: ${formatDate(payload.last_cleanup_at)}. Refreshing the browser keeps this report until you run another scan.`
-            : "Run a cleanup scan once, then the saved report stays available after refresh."
-        }
-      />
-
-      {cleanupErrors.length ? (
-        <Alert
-          type="error"
-          showIcon
-          message="Provider scan errors"
-          description={cleanupErrors.map((item) => `${item.provider}: ${item.message}`).join(" • ")}
-        />
-      ) : null}
-
-      {selectedGroupIds.length ? (
-        <Flex justify="space-between" align="center" gap={12} wrap>
-          <Space wrap>
-            <Tag>{selectedGroupIds.length} selected group{selectedGroupIds.length === 1 ? "" : "s"}</Tag>
-            <Tag>{fileRows.length} file{fileRows.length === 1 ? "" : "s"} in scope</Tag>
-          </Space>
-          <Space wrap>
-            <Button onClick={() => setSelectedGroupIds([])}>Clear Selection</Button>
-            <Button
-              danger
-              disabled={!selectedFileKeys.length}
-              onClick={() =>
-                modal.confirm({
-                  title: `Delete ${selectedFileKeys.length} selected media file${selectedFileKeys.length === 1 ? "" : "s"}?`,
-                  okText: "Delete",
-                  okButtonProps: { danger: true },
-                  onOk: async () => {
-                    try {
-                      await handleDeleteSelectedFiles();
-                      message.success("Selected media files deleted.");
-                    } catch (error) {
-                      message.error(error.message);
-                    }
-                  },
-                })
-              }
-            >
-              Delete Selected Files
-            </Button>
-          </Space>
-        </Flex>
-      ) : null}
-
-      <Table
-        size="small"
-        rowKey={(group) => String(group.id)}
-        pagination={{ pageSize: 8 }}
-        dataSource={filteredCleanupGroups}
-        rowSelection={{
-          selectedRowKeys: selectedGroupIds,
-          onChange: (keys) => setSelectedGroupIds(keys.map(String)),
-        }}
-        locale={{
-          emptyText: (
-            <Empty
-              description={
-                payload.last_cleanup_at
-                  ? "No duplicate groups found in the latest cleanup scan."
-                  : "Run a cleanup scan to load provider duplicate groups."
-              }
-            />
-          ),
-        }}
-        columns={groupColumns}
-        onRow={(group) => ({
-          onClick: (event) => {
-            if (event.target.closest("button")) return;
-            toggleGroupSelection(group.id);
-          },
-        })}
-      />
-
-      {selectedGroups.length ? (
-        <Flex vertical gap={16}>
-          <Flex justify="space-between" align="center" gap={12} wrap>
-            <Text strong>Selected Files</Text>
-            <Space wrap>
-              <Tag>{selectedGroupSummary}</Tag>
-              <Tag>{fileRows.length} files</Tag>
-              <Tag>{selectedFileKeys.length} selected file{selectedFileKeys.length === 1 ? "" : "s"}</Tag>
-              <Button
-                danger
-                disabled={!selectedFileKeys.length}
-                onClick={() =>
-                  modal.confirm({
-                    title: `Delete ${selectedFileKeys.length} selected media file${selectedFileKeys.length === 1 ? "" : "s"}?`,
-                    okText: "Delete",
-                    okButtonProps: { danger: true },
-                    onOk: async () => {
-                      try {
-                        await handleDeleteSelectedFiles();
-                        message.success("Selected media files deleted.");
-                      } catch (error) {
-                        message.error(error.message);
-                      }
-                    },
-                  })
-                }
-              >
-                Delete Selected
-              </Button>
-            </Space>
-          </Flex>
-
-          <Table
-            size="small"
-            rowKey="rowKey"
-            dataSource={fileRows}
-            pagination={{ pageSize: 12 }}
-            rowSelection={{
-              selectedRowKeys: selectedFileKeys,
-              onChange: (keys) => setSelectedFileKeys(keys.map(String)),
-              getCheckboxProps: (item) => ({
-                disabled: suggestedKeepKeys.has(String(item.storage_uri || item.path || "")),
-              }),
-            }}
-            columns={fileColumns}
-            onRow={(item) => ({
-              onClick: (event) => {
-                if (event.target.closest("button")) return;
-                toggleFileSelection(item.rowKey);
-              },
-            })}
-          />
-        </Flex>
-      ) : null}
-    </Flex>
-  );
-
-  const folderModeContent = (
-    <Flex vertical gap={16}>
-      <div className="cleanup-toolbar">
-        <Space wrap>
-          <Button
-            type="primary"
-            loading={actionLoading === "scan-empty-folders"}
-            onClick={async () => {
-              setActionLoading("scan-empty-folders");
-              try {
-                await runEmptyFolderCleanupScan();
-                message.success("Empty duplicate folder cleanup scan completed.");
-                setRefreshToken((value) => value + 1);
-              } catch (error) {
-                message.error(error.message);
-              } finally {
-                setActionLoading("");
-              }
-            }}
-          >
-            Find Empty Duplicate Folders
-          </Button>
-        </Space>
-        <Input.Search
-          className="folder-list-search"
-          value={folderQuery}
-          onChange={(event) => setFolderQuery(event.target.value)}
-          allowClear
-          placeholder="Filter by folder, path, root, or status"
-        />
-      </div>
-
-      <Descriptions
-        size="small"
-        column={{ xs: 1, md: 2, xl: 4 }}
-        items={[
-          {
-            key: "last-empty-scan",
-            label: "Latest Scan",
-            children: formatDate(payload.last_empty_folder_cleanup_at),
-          },
-          { key: "roots", label: "Roots Scanned", children: Number(emptyFolderReport.summary?.roots_scanned || 0) },
-          { key: "groups", label: "Duplicate Groups", children: filteredEmptyFolderGroups.length },
-          {
-            key: "cleanup",
-            label: "Delete Candidates",
-            children: Number(emptyFolderReport.summary?.deletion_candidates || 0),
-          },
-          {
-            key: "selected-empty-groups",
-            label: "Selected Groups",
-            children: selectedEmptyGroupSummary,
-          },
-        ]}
-      />
-
-      <Alert
-        type="info"
-        showIcon
-        message="Folder junk cleanup is the default view."
-        description={
-          payload.last_empty_folder_cleanup_at
-            ? `Latest empty-folder cleanup scan: ${formatDate(payload.last_empty_folder_cleanup_at)}. Reports survive refresh, and delete candidates are auto-selected when you open a group.`
-            : "This scan compares top-level duplicate folder names across connected roots, then inspects only the duplicate groups recursively. Sidecar-only and fully empty folders are shown as cleanup candidates."
-        }
-      />
-
-      {emptyFolderErrors.length ? (
-        <Alert
-          type="error"
-          showIcon
-          message="Empty folder scan errors"
-          description={emptyFolderErrors.map((item) => `${item.root_label || item.path || item.root_path}: ${item.message}`).join(" • ")}
-        />
-      ) : null}
-
-      {selectedEmptyGroupIds.length ? (
-        <Flex justify="space-between" align="center" gap={12} wrap>
-          <Space wrap>
-            <Tag>{selectedEmptyGroupIds.length} selected group{selectedEmptyGroupIds.length === 1 ? "" : "s"}</Tag>
-            <Tag>{emptyFolderRows.length} folder copies in scope</Tag>
-            <Tag>{selectedEmptyFolderKeys.length} selected for delete</Tag>
-          </Space>
-          <Space wrap>
-            <Button onClick={() => setSelectedEmptyGroupIds([])}>Clear Selection</Button>
-            <Button
-              danger
-              disabled={!selectedEmptyFolderKeys.length}
-              onClick={() =>
-                modal.confirm({
-                  title: `Delete ${selectedEmptyFolderKeys.length} selected folder${selectedEmptyFolderKeys.length === 1 ? "" : "s"}?`,
-                  content: "Only the selected no-video duplicates will be removed.",
-                  okText: "Delete",
-                  okButtonProps: { danger: true },
-                  onOk: async () => {
-                    try {
-                      await handleDeleteSelectedEmptyFolders();
-                      message.success("Selected folders deleted.");
-                    } catch (error) {
-                      message.error(error.message);
-                    }
-                  },
-                })
-              }
-            >
-              Delete Selected Folders
-            </Button>
-          </Space>
-        </Flex>
-      ) : null}
-
-      <Table
-        size="small"
-        rowKey={(group) => String(group.id)}
-        pagination={{ pageSize: 8 }}
-        dataSource={filteredEmptyFolderGroups}
-        rowSelection={{
-          selectedRowKeys: selectedEmptyGroupIds,
-          onChange: (keys) => setSelectedEmptyGroupIds(keys.map(String)),
-        }}
-        locale={{
-          emptyText: (
-            <Empty
-              description={
-                payload.last_empty_folder_cleanup_at
-                  ? "No duplicate folders without video were found in the latest scan."
-                  : "Run an empty-folder cleanup scan to load duplicate folder candidates."
-              }
-            />
-          ),
-        }}
-        columns={emptyFolderGroupColumns}
-        onRow={(group) => ({
-          onClick: (event) => {
-            if (event.target.closest("button")) return;
-            toggleEmptyGroupSelection(group.id);
-          },
-        })}
-      />
-
-      {selectedEmptyGroups.length ? (
-        <Flex vertical gap={16}>
-          <Flex justify="space-between" align="center" gap={12} wrap>
-            <Text strong>Selected Folder Copies</Text>
-            <Space wrap>
-              <Tag>{selectedEmptyGroupSummary}</Tag>
-              <Tag>{emptyFolderRows.length} copies</Tag>
-              <Tag>{selectedEmptyFolderKeys.length} selected</Tag>
-              <Button
-                danger
-                disabled={!selectedEmptyFolderKeys.length}
-                onClick={() =>
-                  modal.confirm({
-                    title: `Delete ${selectedEmptyFolderKeys.length} selected folder${selectedEmptyFolderKeys.length === 1 ? "" : "s"}?`,
-                    content: "Only the checked no-video duplicate folders will be removed.",
-                    okText: "Delete",
-                    okButtonProps: { danger: true },
-                    onOk: async () => {
-                      try {
-                        await handleDeleteSelectedEmptyFolders();
-                        message.success("Selected folders deleted.");
-                      } catch (error) {
-                        message.error(error.message);
-                      }
-                    },
-                  })
-                }
-              >
-                Delete Selected
-              </Button>
-            </Space>
-          </Flex>
-
-          <Table
-            size="small"
-            rowKey="rowKey"
-            dataSource={emptyFolderRows}
-            pagination={{ pageSize: 12 }}
-            rowSelection={{
-              selectedRowKeys: selectedEmptyFolderKeys,
-              onChange: (keys) => setSelectedEmptyFolderKeys(keys.map(String)),
-              getCheckboxProps: (item) => ({
-                disabled: !item.is_deletion_candidate,
-              }),
-            }}
-            columns={emptyFolderColumns}
-            onRow={(item) => ({
-              onClick: (event) => {
-                if (event.target.closest("button")) return;
-                toggleEmptyFolderSelection(item.rowKey);
-              },
-            })}
-          />
-        </Flex>
-      ) : null}
-    </Flex>
-  );
-
   if (loading) {
     return (
       <div className="app-loading">
@@ -1012,24 +356,165 @@ export function FileCleanupView() {
       <Card
         title={
           <Space>
-            {mode === "files" ? <FileSearchOutlined /> : <FolderOpenOutlined />}
-            <span>{mode === "files" ? "Provider Duplicate Groups" : "Empty Duplicate Folders"}</span>
+            <FileSearchOutlined />
+            <span>Provider Duplicate Files</span>
           </Space>
         }
         className="cleanup-list-card"
-        extra={
-          <Segmented
-            className="process-log-filter-segmented"
-            options={CLEANUP_MODE_OPTIONS}
-            value={mode}
-            onChange={setMode}
-          />
-        }
       >
-        {mode === "files" ? fileModeContent : folderModeContent}
+        <Flex vertical gap={16}>
+          <div className="cleanup-toolbar">
+            <Space wrap>
+              <Button type="primary" loading={actionLoading === "scan-files"} onClick={handleRunProviderCleanupScan}>
+                Scan Providers
+              </Button>
+            </Space>
+            <Input.Search
+              className="folder-list-search"
+              value={fileQuery}
+              onChange={(event) => setFileQuery(event.target.value)}
+              allowClear
+              placeholder="Filter by title, folder, provider, or root"
+            />
+          </div>
+
+          <Descriptions
+            size="small"
+            column={{ xs: 1, md: 2, xl: 4 }}
+            items={[
+              { key: "last-scan", label: "Latest Scan", children: formatDate(payload.last_cleanup_at) },
+              {
+                key: "providers",
+                label: "Providers",
+                children: (cleanupReport.providers || []).length ? cleanupReport.providers.join(", ") : "None",
+              },
+              { key: "groups", label: "Groups", children: cleanupGroups.length },
+              { key: "indexed", label: "Indexed Files", children: Number(cleanupReport.summary?.indexed_files || 0) },
+            ]}
+          />
+
+          {cleanupErrors.length ? <CleanupErrorAlert errors={cleanupErrors} /> : null}
+
+          {selectedGroupIds.length ? (
+            <Flex justify="space-between" align="center" gap={12} wrap>
+              <Space wrap>
+                <Tag>{selectedGroupIds.length} selected group{selectedGroupIds.length === 1 ? "" : "s"}</Tag>
+                <Tag>{fileRows.length} file{fileRows.length === 1 ? "" : "s"} in scope</Tag>
+              </Space>
+              <Space wrap>
+                <Button onClick={() => setSelectedGroupIds([])}>Clear Selection</Button>
+                <Button
+                  danger
+                  disabled={!selectedFileKeys.length}
+                  onClick={() =>
+                    modal.confirm({
+                      title: `Delete ${selectedFileKeys.length} selected media file${selectedFileKeys.length === 1 ? "" : "s"}?`,
+                      okText: "Delete",
+                      okButtonProps: { danger: true },
+                      onOk: async () => {
+                        try {
+                          await handleDeleteSelectedFiles();
+                          message.success("Selected media files deleted.");
+                        } catch (error) {
+                          message.error(error.message);
+                        }
+                      },
+                    })
+                  }
+                >
+                  Delete Selected Files
+                </Button>
+              </Space>
+            </Flex>
+          ) : null}
+
+          <Table
+            size="small"
+            rowKey={(group) => String(group.id)}
+            pagination={{ pageSize: 8 }}
+            dataSource={filteredCleanupGroups}
+            rowSelection={{
+              selectedRowKeys: selectedGroupIds,
+              onChange: (keys) => setSelectedGroupIds(keys.map(String)),
+            }}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={
+                    payload.last_cleanup_at
+                      ? "No provider duplicate groups found in the latest cleanup scan."
+                      : "Run a provider file cleanup scan to load duplicate groups from Radarr or Sonarr paths."
+                  }
+                />
+              ),
+            }}
+            columns={groupColumns}
+            onRow={(group) => ({
+              onClick: (event) => {
+                if (event.target.closest("button")) return;
+                toggleGroupSelection(group.id);
+              },
+            })}
+          />
+
+          {selectedGroups.length ? (
+            <Flex vertical gap={16}>
+              <Flex justify="space-between" align="center" gap={12} wrap>
+                <Text strong>Selected Provider Files</Text>
+                <Space wrap>
+                  <Tag>{selectedGroupSummary}</Tag>
+                  <Tag>{fileRows.length} files</Tag>
+                  <Tag>{selectedFileKeys.length} selected file{selectedFileKeys.length === 1 ? "" : "s"}</Tag>
+                  <Button
+                    danger
+                    disabled={!selectedFileKeys.length}
+                    onClick={() =>
+                      modal.confirm({
+                        title: `Delete ${selectedFileKeys.length} selected media file${selectedFileKeys.length === 1 ? "" : "s"}?`,
+                        okText: "Delete",
+                        okButtonProps: { danger: true },
+                        onOk: async () => {
+                          try {
+                            await handleDeleteSelectedFiles();
+                            message.success("Selected media files deleted.");
+                          } catch (error) {
+                            message.error(error.message);
+                          }
+                        },
+                      })
+                    }
+                  >
+                    Delete Selected
+                  </Button>
+                </Space>
+              </Flex>
+
+              <Table
+                size="small"
+                rowKey="rowKey"
+                dataSource={fileRows}
+                pagination={{ pageSize: 12 }}
+                rowSelection={{
+                  selectedRowKeys: selectedFileKeys,
+                  onChange: (keys) => setSelectedFileKeys(keys.map(String)),
+                  getCheckboxProps: (item) => ({
+                    disabled: suggestedKeepKeys.has(String(item.storage_uri || item.path || "")),
+                  }),
+                }}
+                columns={fileColumns}
+                onRow={(item) => ({
+                  onClick: (event) => {
+                    if (event.target.closest("button")) return;
+                    toggleFileSelection(item.rowKey);
+                  },
+                })}
+              />
+            </Flex>
+          ) : null}
+        </Flex>
       </Card>
 
-      <MediaLibraryLogPanel scope="cleanup" title="Cleanup Action Logs" />
+      <MediaLibraryLogPanel scope="cleanup" title="Library Cleanup Logs" />
     </Flex>
   );
 }

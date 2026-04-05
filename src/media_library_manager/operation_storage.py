@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -16,6 +16,7 @@ from .lan_connections import (
     parse_smbclient_entries,
     run_smbclient_command,
 )
+from .rclone_cli import RcloneCommandResult, RcloneError, build_rclone_target, run_rclone_command
 
 
 SmbConnectionResolver = Callable[[str], dict[str, Any] | None]
@@ -29,6 +30,8 @@ class StoragePath:
     connection_id: str = ""
     share_name: str = ""
     share_path: str = "/"
+    rclone_remote: str = ""
+    rclone_path: str = "/"
 
     @property
     def name(self) -> str:
@@ -36,15 +39,27 @@ class StoragePath:
             if self.local_path is None:
                 return ""
             return self.local_path.name
+        if self.backend == "rclone":
+            normalized = OperationStorageRouter._normalize_rclone_path(self.rclone_path)
+            if normalized in {"", "/"}:
+                return self.rclone_remote
+            return PurePosixPath(normalized).name
         if self.share_path in {"", "/"}:
             return self.share_name
         return Path(self.share_path).name
 
 
 class OperationStorageRouter:
-    def __init__(self, *, smb_connection_resolver: SmbConnectionResolver | None = None, smb_timeout: int = 20) -> None:
+    def __init__(
+        self,
+        *,
+        smb_connection_resolver: SmbConnectionResolver | None = None,
+        smb_timeout: int = 20,
+        rclone_timeout: int = 30,
+    ) -> None:
         self.smb_connection_resolver = smb_connection_resolver
         self.smb_timeout = smb_timeout
+        self.rclone_timeout = rclone_timeout
 
     def parse_storage_path(self, value: str | Path | StoragePath) -> StoragePath:
         if isinstance(value, StoragePath):
@@ -54,6 +69,17 @@ class OperationStorageRouter:
             return StoragePath(backend="local", raw=str(value), local_path=resolved)
 
         text = str(value or "").strip()
+        if text.startswith("rclone://"):
+            parsed = urlparse(text)
+            remote_name = unquote(parsed.netloc).strip()
+            if not remote_name:
+                raise ValueError(f"invalid rclone path (missing remote): {text}")
+            return StoragePath(
+                backend="rclone",
+                raw=text,
+                rclone_remote=remote_name,
+                rclone_path=self._normalize_rclone_path(unquote(parsed.path or "/")),
+            )
         if text.startswith("smb://"):
             parsed = urlparse(text)
             query = parse_qs(parsed.query)
@@ -90,6 +116,13 @@ class OperationStorageRouter:
     def stringify(self, path: StoragePath) -> str:
         if path.backend == "local":
             return str(path.local_path or "")
+        if path.backend == "rclone":
+            quoted_remote = quote(path.rclone_remote, safe="")
+            normalized = self._normalize_rclone_path(path.rclone_path)
+            if normalized in {"", "/"}:
+                return f"rclone://{quoted_remote}/"
+            suffix = "/" + "/".join(quote(part, safe="") for part in normalized.strip("/").split("/"))
+            return f"rclone://{quoted_remote}{suffix}"
         quoted_connection = quote(path.connection_id, safe="")
         quoted_share = quote(path.share_name, safe="")
         suffix = ""
@@ -102,6 +135,8 @@ class OperationStorageRouter:
             return False
         if left.backend == "local":
             return True
+        if left.backend == "rclone":
+            return left.rclone_remote == right.rclone_remote
         return left.connection_id == right.connection_id and left.share_name == right.share_name
 
     def is_relative_to(self, candidate: StoragePath, ancestor: StoragePath) -> bool:
@@ -114,6 +149,12 @@ class OperationStorageRouter:
                 return True
             except ValueError:
                 return False
+        if candidate.backend == "rclone":
+            ancestor_path = self._normalize_rclone_path(ancestor.rclone_path)
+            candidate_path = self._normalize_rclone_path(candidate.rclone_path)
+            if ancestor_path == "/":
+                return True
+            return candidate_path == ancestor_path or candidate_path.startswith(f"{ancestor_path}/")
         ancestor_path = normalize_share_path(ancestor.share_path) or "/"
         candidate_path = normalize_share_path(candidate.share_path) or "/"
         if ancestor_path == "/":
@@ -127,6 +168,17 @@ class OperationStorageRouter:
         if parent.backend == "local":
             assert parent.local_path is not None
             return StoragePath(backend="local", raw=str(parent.local_path / clean_name), local_path=(parent.local_path / clean_name))
+        if parent.backend == "rclone":
+            base = PurePosixPath(self._normalize_rclone_path(parent.rclone_path))
+            joined = str(base.joinpath(clean_name))
+            if not joined.startswith("/"):
+                joined = f"/{joined}"
+            return StoragePath(
+                backend="rclone",
+                raw=f"{parent.raw.rstrip('/')}/{clean_name}",
+                rclone_remote=parent.rclone_remote,
+                rclone_path=self._normalize_rclone_path(joined),
+            )
         return StoragePath(
             backend="smb",
             raw=f"{parent.raw.rstrip('/')}/{clean_name}",
@@ -142,6 +194,19 @@ class OperationStorageRouter:
             if parent == path.local_path:
                 return None
             return StoragePath(backend="local", raw=str(parent), local_path=parent)
+        if path.backend == "rclone":
+            current = PurePosixPath(self._normalize_rclone_path(path.rclone_path))
+            if str(current) == "/":
+                return None
+            parent_text = str(current.parent)
+            if not parent_text.startswith("/"):
+                parent_text = f"/{parent_text}"
+            return StoragePath(
+                backend="rclone",
+                raw=path.raw,
+                rclone_remote=path.rclone_remote,
+                rclone_path=self._normalize_rclone_path(parent_text),
+            )
         parent_path = parent_share_path(path.share_path)
         if parent_path is None:
             return None
@@ -157,12 +222,17 @@ class OperationStorageRouter:
         if path.backend == "local":
             assert path.local_path is not None
             return path.local_path.exists()
+        if path.backend == "rclone":
+            return self._rclone_entry(path) is not None
         return self._smb_entry(path) is not None
 
     def is_dir(self, path: StoragePath) -> bool:
         if path.backend == "local":
             assert path.local_path is not None
             return path.local_path.is_dir()
+        if path.backend == "rclone":
+            entry = self._rclone_entry(path)
+            return bool(entry and bool(entry.get("IsDir")))
         if normalize_share_path(path.share_path) in {"", "/"}:
             return True
         entry = self._smb_entry(path)
@@ -172,6 +242,9 @@ class OperationStorageRouter:
         if path.backend == "local":
             assert path.local_path is not None
             return path.local_path.is_file()
+        if path.backend == "rclone":
+            entry = self._rclone_entry(path)
+            return bool(entry and not bool(entry.get("IsDir")))
         entry = self._smb_entry(path)
         return bool(entry and entry.get("type") == "file")
 
@@ -182,6 +255,9 @@ class OperationStorageRouter:
                 [StoragePath(backend="local", raw=str(item), local_path=item) for item in path.local_path.iterdir()],
                 key=lambda item: item.name.lower(),
             )
+        if path.backend == "rclone":
+            entries = self._rclone_list_entries(path)
+            return [self.join(path, entry["Name"]) for entry in entries]
         entries = self._smb_list_entries(path)
         return [self.join(path, entry["name"]) for entry in entries]
 
@@ -189,6 +265,11 @@ class OperationStorageRouter:
         if path.backend == "local":
             assert path.local_path is not None
             path.local_path.mkdir(parents=True, exist_ok=True)
+            return
+        if path.backend == "rclone":
+            result = self._run_rclone_command(["mkdir", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            if result.get("status") != "success":
+                raise ValueError(str(result.get("message") or "rclone mkdir failed"))
             return
         if path.share_path in {"", "/"}:
             return
@@ -257,6 +338,8 @@ class OperationStorageRouter:
             assert source.local_path is not None and destination.local_path is not None
             source.local_path.rename(destination.local_path)
             return
+        if source.backend == "rclone":
+            raise ValueError("rclone rename is not supported by this router yet")
 
         if source.share_path in {"", "/"}:
             raise ValueError("cannot rename SMB share root")
@@ -271,6 +354,12 @@ class OperationStorageRouter:
             assert path.local_path is not None
             path.local_path.unlink()
             return
+        if path.backend == "rclone":
+            self._ensure_not_rclone_root(path, "delete")
+            result = self._run_rclone_command(["deletefile", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            if result.get("status") != "success":
+                raise ValueError(str(result.get("message") or "rclone deletefile failed"))
+            return
         if path.share_path in {"", "/"}:
             raise ValueError("cannot delete SMB share root")
         rel_path = path.share_path.strip("/")
@@ -281,6 +370,12 @@ class OperationStorageRouter:
         if path.backend == "local":
             assert path.local_path is not None
             shutil.rmtree(path.local_path)
+            return
+        if path.backend == "rclone":
+            self._ensure_not_rclone_root(path, "delete")
+            result = self._run_rclone_command(["purge", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            if result.get("status") != "success":
+                raise ValueError(str(result.get("message") or "rclone purge failed"))
             return
         if path.share_path in {"", "/"}:
             raise ValueError("cannot delete SMB share root")
@@ -296,6 +391,11 @@ class OperationStorageRouter:
                 return True
             except OSError:
                 return False
+        if path.backend == "rclone":
+            if self._normalize_rclone_path(path.rclone_path) in {"", "/"}:
+                return False
+            result = self._try_run_rclone_command(["rmdir", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            return result.get("status") == "success"
 
         if path.share_path in {"", "/"}:
             return False
@@ -325,6 +425,45 @@ class OperationStorageRouter:
         result = self._run_smb_command(path, command)
         return parse_smbclient_entries(str(result.get("stdout") or ""))
 
+    def _rclone_entry(self, path: StoragePath) -> dict[str, Any] | None:
+        normalized = self._normalize_rclone_path(path.rclone_path)
+        if normalized in {"", "/"}:
+            try:
+                self._rclone_list_entries(path)
+            except ValueError:
+                return None
+            return {"Name": path.rclone_remote, "IsDir": True}
+        parent = self.parent(path)
+        if parent is None:
+            return None
+        target_name = path.name
+        try:
+            for entry in self._rclone_list_entries(parent):
+                if str(entry.get("Name") or "") == target_name:
+                    return entry
+        except ValueError:
+            return None
+        return None
+
+    def _rclone_list_entries(self, path: StoragePath) -> list[dict[str, Any]]:
+        if path.backend != "rclone":
+            raise ValueError("rclone path is required")
+        payload = self._run_rclone_command(
+            [
+                "lsjson",
+                build_rclone_target(path.rclone_remote, path.rclone_path),
+                "--max-depth",
+                "1",
+            ],
+            expect_json=True,
+        ).get("payload")
+        if payload is None:
+            return []
+        if not isinstance(payload, list):
+            raise ValueError("invalid rclone lsjson response: expected a list")
+        entries = [item for item in payload if isinstance(item, dict) and isinstance(item.get("Name"), str)]
+        return sorted(entries, key=lambda item: (not bool(item.get("IsDir")), str(item.get("Name")).lower()))
+
     def _download_smb_file(self, source: StoragePath, destination: Path) -> None:
         if source.share_path in {"", "/"}:
             raise ValueError("cannot download SMB share root")
@@ -347,6 +486,26 @@ class OperationStorageRouter:
         connection = self._resolve_smb_connection(path)
         return run_smbclient_command(connection, command, timeout=self.smb_timeout)
 
+    def _run_rclone_command(self, args: list[str], *, expect_json: bool = False) -> dict[str, Any]:
+        result = self._try_run_rclone_command(args, expect_json=expect_json)
+        if result.get("status") != "success":
+            raise ValueError(str(result.get("message") or "rclone command failed"))
+        return result
+
+    def _try_run_rclone_command(self, args: list[str], *, expect_json: bool = False) -> dict[str, Any]:
+        try:
+            payload = run_rclone_command(args, timeout=self.rclone_timeout, expect_json=expect_json)
+        except (RcloneError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+        if isinstance(payload, RcloneCommandResult):
+            if payload.status != "success":
+                return {"status": "error", "message": payload.message, "payload": payload}
+            return {"status": "success", "payload": payload}
+        return {
+            "status": "success",
+            "payload": payload,
+        }
+
     def _resolve_smb_connection(self, path: StoragePath) -> dict[str, Any]:
         if self.smb_connection_resolver is None:
             raise ValueError("SMB operation requires a connection resolver")
@@ -365,3 +524,15 @@ class OperationStorageRouter:
     @staticmethod
     def _escape_command_value(value: str) -> str:
         return str(value).replace('"', '\\"')
+
+    @staticmethod
+    def _normalize_rclone_path(value: str) -> str:
+        text = str(value or "").strip()
+        if not text or text == ".":
+            return "/"
+        return "/" + text.strip("/")
+
+    @classmethod
+    def _ensure_not_rclone_root(cls, path: StoragePath, action: str) -> None:
+        if cls._normalize_rclone_path(path.rclone_path) in {"", "/"}:
+            raise ValueError(f"cannot {action} rclone remote root")

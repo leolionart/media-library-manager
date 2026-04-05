@@ -57,6 +57,7 @@ def scan_provider_path_issues(
     roots: list[RootConfig],
     lan_connections: dict[str, Any],
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    start_provider_index: int = 1,
 ) -> dict[str, Any]:
     manager = default_storage_manager(lan_connections=lan_connections)
     providers = [provider for provider in ["radarr", "sonarr"] if integrations.get(provider, {}).get("enabled")]
@@ -64,7 +65,8 @@ def scan_provider_path_issues(
     errors: list[dict[str, Any]] = []
     total_providers = len(providers)
 
-    for index, provider in enumerate(providers, start=1):
+    normalized_start_index = max(1, int(start_provider_index or 1))
+    for index, provider in enumerate(providers[normalized_start_index - 1 :], start=normalized_start_index):
         if progress_callback is not None:
             progress_callback(
                 {
@@ -456,7 +458,7 @@ def _list_provider_items(provider: str, config: Any) -> list[dict[str, Any]]:
 
 def _root_to_storage_path(root: RootConfig) -> StoragePath:
     raw = root.storage_uri or str(root.path)
-    if raw.startswith(("local://", "smb://")):
+    if raw.startswith(("local://", "smb://", "rclone://")):
         return StoragePath.from_uri(raw)
     return StoragePath.local(raw)
 

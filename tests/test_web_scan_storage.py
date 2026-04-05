@@ -26,6 +26,17 @@ class WebScanStorageTests(unittest.TestCase):
         backend = build_scan_storage_backend(roots=roots, lan_connections={"smb": []})
         self.assertIsInstance(backend, StorageManagerScannerStorage)
 
+    def test_build_scan_storage_backend_returns_backend_for_rclone_roots(self) -> None:
+        roots = [
+            RootConfig(
+                path=Path("/rclone/media-remote"),
+                label="rclone-root",
+                storage_uri="rclone://media-remote/Movies",
+            )
+        ]
+        backend = build_scan_storage_backend(roots=roots, lan_connections={"smb": []})
+        self.assertIsInstance(backend, StorageManagerScannerStorage)
+
     def test_compute_smb_storage_sha256_rejects_non_smb_path(self) -> None:
         with self.assertRaises(ValueError):
             compute_smb_storage_sha256(StoragePath.local("/tmp"), lan_connections={"smb": []})

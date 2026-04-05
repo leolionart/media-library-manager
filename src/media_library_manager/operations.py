@@ -617,7 +617,7 @@ def delete_file(path: str | Path, *, execute: bool = False, storage_router: Oper
 
 
 def _uses_storage_abstraction(*values: object) -> bool:
-    return any(str(value or "").strip().startswith("smb://") for value in values)
+    return any(str(value or "").strip().startswith(("smb://", "rclone://")) for value in values)
 
 
 def _validate_router_for_storage_paths(router: OperationStorageRouter, *paths: object) -> str | None:

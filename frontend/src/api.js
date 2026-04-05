@@ -62,6 +62,27 @@ export function cancelCurrentProcess() {
   });
 }
 
+export function waitCurrentProcess(waitSeconds = 300) {
+  return request("/api/process/wait", {
+    method: "POST",
+    body: JSON.stringify({ wait_seconds: waitSeconds })
+  });
+}
+
+export function retryCurrentProcess() {
+  return request("/api/process/retry", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
+export function resumeCurrentProcess() {
+  return request("/api/process/resume", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
 export function fetchOperationsFolderChildren({ storageUri, rootStorageUri, timeoutMs = 8000 }) {
   const params = new URLSearchParams({
     storage_uri: storageUri,

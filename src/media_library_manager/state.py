@@ -15,6 +15,7 @@ from .sync_integrations import default_integrations
 ACTIVITY_LOG_LIMIT = 200
 JOB_LOG_LIMIT = 400
 MANAGED_FOLDER_KEYS = ["id", "connection_id", "connection_label", "share_name", "path", "label"]
+DEFAULT_WAIT_SECONDS = 300
 
 
 class StateStore:
@@ -316,6 +317,7 @@ class StateStore:
             "finished_at": None,
             "summary": self._normalize_job_summary(summary),
             "details": details or {},
+            "available_actions": self._derive_job_actions(status="running", details=details or {}),
             "logs": [self._job_log_entry(level="info", message=message, details=details)],
         }
         state = self.load_state()
@@ -336,6 +338,34 @@ class StateStore:
         logs = job.get("logs", [])
         logs.append(self._job_log_entry(level="warning", message="Cancellation requested by user."))
         job["logs"] = logs[-JOB_LOG_LIMIT:]
+        state["current_job"] = job
+        self._write_state(state)
+        return job
+
+    def request_job_wait(self, *, wait_seconds: int = DEFAULT_WAIT_SECONDS) -> dict[str, Any] | None:
+        state = self.load_state()
+        job = self._normalize_job(state.get("current_job"))
+        if job is None or str(job.get("status") or "").lower() == "running":
+            return None
+        details = job.get("details", {})
+        if not bool(details.get("retryable")):
+            return None
+        wait_seconds = max(int(wait_seconds or DEFAULT_WAIT_SECONDS), 1)
+        wait_until = datetime.fromtimestamp(datetime.now(UTC).timestamp() + wait_seconds, UTC).isoformat()
+        details = {
+            **details,
+            "wait_seconds": wait_seconds,
+            "wait_until": wait_until,
+            "last_control_action": "wait",
+        }
+        job["status"] = "waiting"
+        job["message"] = f"Retry deferred for {wait_seconds}s. Resume when ready."
+        job["details"] = details
+        job["updated_at"] = self._now_iso()
+        logs = job.get("logs", [])
+        logs.append(self._job_log_entry(level="warning", message=f"Retry deferred for {wait_seconds}s.", details={"wait_until": wait_until}))
+        job["logs"] = logs[-JOB_LOG_LIMIT:]
+        job["available_actions"] = self._derive_job_actions(status="waiting", details=details)
         state["current_job"] = job
         self._write_state(state)
         return job
@@ -388,6 +418,7 @@ class StateStore:
         logs.append(self._job_log_entry(level=level, message=message, details=details))
         job["logs"] = logs[-JOB_LOG_LIMIT:]
         job["updated_at"] = self._now_iso()
+        job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
         state["current_job"] = job
         self._write_state(state)
         return job
@@ -399,6 +430,20 @@ class StateStore:
             return None
         job["summary"] = self._normalize_job_summary({**job.get("summary", {}), **summary})
         job["updated_at"] = self._now_iso()
+        job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
+        state["current_job"] = job
+        self._write_state(state)
+        return job
+
+    def update_job_details(self, details: dict[str, Any], *, replace: bool = False) -> dict[str, Any] | None:
+        state = self.load_state()
+        job = self._normalize_job(state.get("current_job"))
+        if job is None:
+            return None
+        current_details = job.get("details", {})
+        job["details"] = details if replace else {**current_details, **details}
+        job["updated_at"] = self._now_iso()
+        job["available_actions"] = self._derive_job_actions(status=str(job.get("status") or ""), details=job.get("details", {}))
         state["current_job"] = job
         self._write_state(state)
         return job
@@ -424,6 +469,7 @@ class StateStore:
         job["message"] = message
         job["updated_at"] = now
         job["finished_at"] = now
+        job["available_actions"] = self._derive_job_actions(status=status, details=job.get("details", {}))
         logs = job.get("logs", [])
         logs.append(self._job_log_entry(level="error" if status == "error" else "info", message=message, details=details))
         job["logs"] = logs[-JOB_LOG_LIMIT:]
@@ -504,5 +550,19 @@ class StateStore:
             "cancel_requested": bool(job.get("cancel_requested", False)),
             "summary": self._normalize_job_summary(job.get("summary")),
             "details": details,
+            "available_actions": self._derive_job_actions(status=str(job.get("status") or ""), details=details),
             "logs": logs[-JOB_LOG_LIMIT:],
+        }
+
+    @staticmethod
+    def _derive_job_actions(*, status: str, details: dict[str, Any]) -> dict[str, bool]:
+        normalized_status = str(status or "").lower()
+        normalized_details = details if isinstance(details, dict) else {}
+        supports_retry = bool(normalized_details.get("retryable"))
+        supports_resume = bool(normalized_details.get("resumable")) and bool(normalized_details.get("resume_state"))
+        return {
+            "cancel": normalized_status == "running",
+            "retry": normalized_status in {"error", "cancelled", "waiting"} and supports_retry,
+            "resume": normalized_status in {"error", "cancelled", "waiting"} and supports_resume,
+            "wait": normalized_status in {"error", "cancelled"} and supports_retry,
         }

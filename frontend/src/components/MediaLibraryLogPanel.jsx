@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Card, Empty, Flex, Input, Segmented, Space, Spin, Tag, Typography } from "antd";
+import { Button, Card, Empty, Flex, Input, Segmented, Space, Spin, Tag, Typography, message } from "antd";
 import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
   PauseCircleOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
-import { request } from "../api";
+import { request, resumeCurrentProcess, retryCurrentProcess, waitCurrentProcess } from "../api";
 
 const { Paragraph, Text } = Typography;
 
@@ -54,6 +54,7 @@ function getReadableStatusLabel(value) {
   if (normalized === "success") return "Done";
   if (normalized === "error") return "Error";
   if (normalized === "cancelled") return "Stopped";
+  if (normalized === "waiting") return "Waiting";
   if (normalized === "dry-run") return "Preview";
   if (normalized === "review") return "Check";
   if (normalized === "applied") return "Applied";
@@ -134,7 +135,7 @@ function getProcessLogWindowTitle(scope, currentJob) {
   if (currentJob?.kind) return String(currentJob.kind).toLowerCase();
   if (scope === "activity") return "recent activity";
   if (scope === "operations") return "library finder";
-  return scope === "cleanup" ? "duplication-clean" : "path-repair";
+  return scope === "cleanup" ? "library-cleanup" : "path-repair";
 }
 
 function getReadableJobKindLabel(kind) {
@@ -142,7 +143,7 @@ function getReadableJobKindLabel(kind) {
   if (normalized === "scan") return "Scan";
   if (normalized === "plan") return "Change plan";
   if (normalized === "apply") return "File changes";
-  if (normalized === "cleanup-scan") return "Cleanup Scan";
+  if (normalized === "cleanup-scan") return "Library Cleanup";
   if (normalized === "path-repair") return "Path Repair";
   if (normalized === "folder") return "Folder action";
   if (normalized === "integration") return "Provider action";
@@ -223,6 +224,11 @@ function getProcessHeadline(scope, currentJob, applyResult) {
 
 function getProcessSummaryNote(scope, currentJob, applyResult, logStreamPaused) {
   if (!currentJob) return "";
+  if (currentJob.status === "waiting") {
+    return currentJob?.details?.wait_until
+      ? `Retry is deferred until ${formatDate(currentJob.details.wait_until)}.`
+      : "Retry is deferred. Resume when you are ready.";
+  }
   if (scope === "operations" && String(currentJob.kind || "").toLowerCase() === "apply") {
     const mode = getReadableModeLabel(currentJob?.details?.mode || applyResult?.mode);
     const summary = getEffectiveJobSummary(currentJob, applyResult);
@@ -305,6 +311,8 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
   const [logStreamPaused, setLogStreamPaused] = useState(false);
   const [logPauseMarker, setLogPauseMarker] = useState(null);
   const [logClearMarker, setLogClearMarker] = useState(null);
+  const [actionLoading, setActionLoading] = useState("");
+  const [processOverride, setProcessOverride] = useState(null);
   const logViewportRef = useRef(null);
 
   useEffect(() => {
@@ -336,16 +344,18 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
 
   useEffect(() => {
     if (!usesExternalData) return;
-    setState(stateData || { activity_log: [], current_job: null, apply_result: null });
-    setCurrentJob(currentJobData || null);
     setLoading(false);
-  }, [currentJobData, stateData, usesExternalData]);
+    setProcessOverride(null);
+  }, [usesExternalData]);
 
-  const scopedCurrentJob = jobMatchesScope(scope, currentJob) ? currentJob : null;
-  const applyResult = state?.apply_result || null;
+  const effectiveState = usesExternalData ? stateData || { activity_log: [], current_job: null, apply_result: null } : state;
+  const effectiveCurrentJob = processOverride || (usesExternalData ? currentJobData || null : currentJob);
+
+  const scopedCurrentJob = jobMatchesScope(scope, effectiveCurrentJob) ? effectiveCurrentJob : null;
+  const applyResult = effectiveState?.apply_result || null;
   const scopedActivity = useMemo(
-    () => (state.activity_log || []).filter((entry) => activityMatchesScope(scope, entry)).slice(0, 40),
-    [scope, state.activity_log]
+    () => (effectiveState.activity_log || []).filter((entry) => activityMatchesScope(scope, entry)).slice(0, 40),
+    [scope, effectiveState.activity_log]
   );
 
   const rawEntries = useMemo(() => {
@@ -403,6 +413,41 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
     [applyResult, logStreamPaused, scope, scopedCurrentJob]
   );
   const effectiveLoading = loadingOverride || loading;
+  const availableActions = scopedCurrentJob?.available_actions || {};
+
+  const refreshProcessSnapshot = async () => {
+    const [payload, process] = await Promise.all([request("/api/state"), request("/api/process")]);
+    if (!usesExternalData) {
+      setState(payload || { activity_log: [], current_job: null, apply_result: null });
+      setCurrentJob(process.current_job || payload?.current_job || null);
+      return;
+    }
+    setProcessOverride(process.current_job || payload?.current_job || null);
+  };
+
+  const runJobAction = async (mode) => {
+    setActionLoading(mode);
+    try {
+      if (mode === "retry") {
+        await retryCurrentProcess();
+      } else if (mode === "resume") {
+        await resumeCurrentProcess();
+      } else if (mode === "wait") {
+        await waitCurrentProcess(300);
+      }
+      await refreshProcessSnapshot();
+      message.success(mode === "wait" ? "Job deferred." : `Job ${mode} request finished.`);
+    } catch (error) {
+      message.error(error.message);
+      try {
+        await refreshProcessSnapshot();
+      } catch (refreshError) {
+        console.error(refreshError);
+      }
+    } finally {
+      setActionLoading("");
+    }
+  };
 
   useEffect(() => {
     if (scope === "activity") return;
@@ -441,7 +486,7 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
                 <div className="process-log-meta">
                   <div className="process-log-meta-main">
                     <Space wrap className="process-log-summary-badges">
-                      <Tag color={scopedCurrentJob.status === "error" ? "error" : scopedCurrentJob.status === "cancelled" ? "warning" : "success"}>
+                      <Tag color={scopedCurrentJob.status === "error" ? "error" : ["cancelled", "waiting"].includes(scopedCurrentJob.status) ? "warning" : "success"}>
                         {getReadableStatusLabel(scopedCurrentJob.status || "running")}
                       </Tag>
                       <Tag>{getReadableJobKindLabel(scopedCurrentJob.kind)}</Tag>
@@ -562,6 +607,21 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
                 <Tag variant="filled" className="process-log-toolbar-tag tone-error">
                   {logCount.error} error
                 </Tag>
+              ) : null}
+              {availableActions.wait ? (
+                <Button size="small" className="process-log-control-button" loading={actionLoading === "wait"} onClick={() => void runJobAction("wait")}>
+                  Wait
+                </Button>
+              ) : null}
+              {availableActions.retry ? (
+                <Button size="small" className="process-log-control-button" loading={actionLoading === "retry"} onClick={() => void runJobAction("retry")}>
+                  Retry
+                </Button>
+              ) : null}
+              {availableActions.resume ? (
+                <Button size="small" type="primary" className="process-log-control-button" loading={actionLoading === "resume"} onClick={() => void runJobAction("resume")}>
+                  Resume
+                </Button>
               ) : null}
             </Space>
           </div>
