@@ -64,8 +64,8 @@ Cleanup không dùng `plan` và `apply`.
 Hiện có:
 
 - scan item Radarr/Sonarr có path lỗi
-- scan path-aware qua connected SMB roots để tránh false positive khi provider dùng path kiểu NAS/container khác runtime app
-- search folder phù hợp trong connected roots
+- scan chỉ dùng để phát hiện item có provider path đang thiếu, không còn là directory hợp lệ, hoặc không map được vào bất kỳ connected root nào đã connect
+- search folder phù hợp trong connected roots khi user chủ động bấm tìm
 - update path trong provider
 - remove item khỏi provider mà không xóa media files
 - shared repair logs

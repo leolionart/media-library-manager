@@ -150,9 +150,9 @@ Giữ logic scan các folder trùng tên giữa nhiều roots:
 
 Giữ logic path repair:
 
-- scan item provider có path lỗi sau bước resolve qua connected roots
+- scan item provider có path lỗi khi path hiện tại không tồn tại local và cũng không map được vào connected roots
 - index connected roots
-- rank candidate folders theo title/year similarity
+- rank candidate folders theo title similarity
 - update provider path
 - remove provider item
 

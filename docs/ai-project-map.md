@@ -34,7 +34,7 @@ Dashboard hiện có 5 màn:
    Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots.
 
 4. `Library Path Repair`
-   Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder phù hợp, cập nhật path, hoặc remove item khỏi provider mà không xóa media file.
+   Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder thủ công, cập nhật path, hoặc remove item khỏi provider mà không xóa media file.
 
 5. `Settings`
    Màn cấu hình roots, SMB profiles, LAN discovery, Radarr/Sonarr, sync options, và manual sync.
@@ -252,7 +252,7 @@ Luồng:
    Tìm item của Radarr/Sonarr có path bị thiếu hoặc không còn là directory hợp lệ.
 
 2. `POST /api/path-repair/search`
-   Tìm folder phù hợp trong connected roots bằng normalized title, year, và score match.
+   Tìm folder phù hợp trong connected roots bằng normalized title và score match.
 
 3. `POST /api/path-repair/update`
    Ghi lại path mới vào provider rồi refresh item.
@@ -262,8 +262,10 @@ Luồng:
 
 Điểm quan trọng:
 
-- scan path repair validate local path trước, rồi thử resolve qua connected SMB roots để tránh báo lỗi giả khi provider chạy ở NAS/container khác runtime app
-- tìm gợi ý là một bước search riêng theo từng item
+- scan path repair chỉ xác nhận path mà provider đang lưu có còn là một local directory hợp lệ hay không
+- scan coi item là hợp lệ nếu path local còn dùng được hoặc map được vào một connected root
+- scan không tự kiểm tra từng mapped path trên SMB/rclone và không tự gợi ý replacement path
+- tìm gợi ý thủ công vẫn là một bước search riêng theo từng item
 - sau update/delete, backend prune issue tương ứng ra khỏi saved repair report
 - search có log realtime riêng vì đây là thao tác index/scoring có thể kéo dài
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Duplicate Cleanup"
+  short_description: "Scan and clean duplicate folders safely."
+  default_prompt: "Use this skill to inspect duplicate folder reports, rerun narrow cleanup scans, and apply safe duplicate deletions in batches."

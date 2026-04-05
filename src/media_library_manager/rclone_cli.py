@@ -106,6 +106,7 @@ def list_entries_recursive(
     dirs_only: bool = False,
     files_only: bool = False,
     fast_list: bool = True,
+    include_patterns: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     args = ["lsjson", build_rclone_target(remote, path), "--recursive", "--no-mimetype"]
     if dirs_only:
@@ -114,6 +115,10 @@ def list_entries_recursive(
         args.append("--files-only")
     if fast_list:
         args.append("--fast-list")
+    for pattern in include_patterns or []:
+        clean_pattern = str(pattern or "").strip()
+        if clean_pattern:
+            args.extend(["--include", clean_pattern])
     payload = run_rclone_json(args, timeout=timeout)
     if payload is None:
         return []

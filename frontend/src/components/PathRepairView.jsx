@@ -103,11 +103,19 @@ function pruneIssueFromReport(report, provider, itemId) {
     summary: {
       ...(report?.summary || {}),
       issues: issues.length,
-      with_suggestions: issues.filter((issue) => issue?.suggestions?.length).length,
       errors: Number(report?.summary?.errors || report?.errors?.length || 0),
     },
     generated_at: new Date().toISOString(),
   };
+}
+
+function formatIssueReason(reason) {
+  const value = String(reason || "").trim().toLowerCase();
+  if (value === "path_replacement_available") return "replacement found";
+  if (value === "path_not_found") return "path not found";
+  if (value === "path_not_directory") return "not a directory";
+  if (value === "missing_path") return "missing path";
+  return value || "unknown";
 }
 
 export function PathRepairView() {
@@ -188,18 +196,6 @@ export function PathRepairView() {
     () => filteredIssues.filter((issue) => selectedIssueIds.includes(String(issue.id))),
     [filteredIssues, selectedIssueIds]
   );
-  const selectedBestMatchRows = useMemo(
-    () =>
-      selectedIssues
-        .filter((issue) => issue.suggestions?.length)
-        .map((issue) => ({
-          provider: issue.provider,
-          itemId: issue.item_id,
-          path: issue.suggestions[0].path,
-        })),
-    [selectedIssues]
-  );
-
   async function handleRemoveIssues(issuesToRemove) {
     if (!issuesToRemove.length) return;
     setUpdatingKey("__bulk-remove__");
@@ -238,26 +234,6 @@ export function PathRepairView() {
           ? "Provider item removed and blocked."
           : `${issuesToRemove.length} provider items removed and blocked.`
       );
-    } catch (error) {
-      message.error(error.message);
-    } finally {
-      setUpdatingKey("");
-    }
-  }
-
-  async function handleApplyBestPathsForSelected() {
-    if (!selectedBestMatchRows.length) return;
-    setUpdatingKey("__bulk__");
-    try {
-      for (const row of selectedBestMatchRows) {
-        await updateProviderPath({
-          provider: row.provider,
-          itemId: row.itemId,
-          path: row.path,
-        });
-      }
-      await refreshState();
-      message.success("Selected provider paths updated.");
     } catch (error) {
       message.error(error.message);
     } finally {
@@ -348,7 +324,7 @@ export function PathRepairView() {
           <Space wrap>
             <Text strong>{issue.title}</Text>
             <Tag>{issue.provider}</Tag>
-            <Tag color="warning">{issue.reason}</Tag>
+            <Tag color="warning">{formatIssueReason(issue.reason)}</Tag>
           </Space>
           <Text type="secondary" className="cleanup-path-text">
             {issue.path || "No path from provider"}
@@ -357,49 +333,15 @@ export function PathRepairView() {
       ),
     },
     {
-      title: "Suggested Action",
-      key: "suggestion",
-      render: (_value, issue) => {
-        const suggestion = issue.suggestions?.[0] || null;
-        if (!suggestion) {
-          return <Text type="secondary">No automatic match</Text>;
-        }
-        return (
-          <Flex vertical gap={4}>
-            <Space wrap>
-              <Tag color="success">Best Match</Tag>
-              <Tag>{suggestion.root_label}</Tag>
-              <Tag>Score {suggestion.score}</Tag>
-            </Space>
-            <Text strong>{suggestion.label}</Text>
-            <Text type="secondary" className="cleanup-path-text">
-              {suggestion.path}
-            </Text>
-          </Flex>
-        );
-      },
-    },
-    {
       title: "Action",
       key: "action",
-      width: 260,
+      width: 220,
       render: (_value, issue) => {
-        const bestSuggestion = issue.suggestions?.[0] || null;
         return (
           <Space wrap>
-            {bestSuggestion ? (
-              <Tooltip title="Use best path">
-                <Button
-                  type="primary"
-                  icon={<LinkOutlined />}
-                  aria-label={`Use best path for ${issue.title}`}
-                  loading={updatingKey === `${issue.id}:${bestSuggestion.path}`}
-                  onClick={() => handleApplyPath(issue, bestSuggestion.path)}
-                />
-              </Tooltip>
-            ) : null}
             <Tooltip title="Search folder">
               <Button
+                type="primary"
                 icon={<SearchOutlined />}
                 aria-label={`Search folder for ${issue.title}`}
                 onClick={() => openManualSearch(issue)}
@@ -495,16 +437,7 @@ export function PathRepairView() {
           <div className="cleanup-toolbar">
             <Space wrap>
               <Button type="primary" loading={loading} onClick={handleScan}>
-                Scan Missing Paths
-              </Button>
-              <Button
-                type="primary"
-                ghost
-                disabled={!selectedBestMatchRows.length}
-                loading={updatingKey === "__bulk__"}
-                onClick={handleApplyBestPathsForSelected}
-              >
-                Use Best Path For Selected
+                Scan Broken Provider Paths
               </Button>
               <Button
                 danger

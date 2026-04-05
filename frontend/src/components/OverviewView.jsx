@@ -308,7 +308,7 @@ export function OverviewView() {
     {
       key: "repair-issues",
       label: "Path repair issues",
-      description: `${toSafeNumber(pathRepairSummary.with_suggestions)} already have suggested folder matches.`,
+      description: "Provider items whose saved folder path needs manual search and relink.",
       value: toSafeNumber(pathRepairSummary.issues),
       status: toSafeNumber(pathRepairSummary.issues) ? "warning" : "default",
     },

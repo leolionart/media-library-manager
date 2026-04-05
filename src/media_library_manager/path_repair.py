@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from .models import RootConfig
-from .provider_path_resolution import resolve_provider_directory
+from .provider_path_resolution import provider_path_maps_to_connected_root
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
+from .rclone_cli import list_entries_recursive
 from .providers.sonarr import SonarrClient
 from .storage import StoragePath, default_storage_manager
 from .sync_integrations import build_provider_config, normalize_title
@@ -50,6 +51,23 @@ RELEASE_NOISE_TOKENS = {
     "internal",
     "readnfo",
 }
+LIBRARY_JUNK_TOKENS = {
+    "season",
+    "seasons",
+    "special",
+    "specials",
+    "extras",
+    "extra",
+    "featurette",
+    "featurettes",
+    "sample",
+    "samples",
+    "trickplay",
+    "subtitle",
+    "subtitles",
+    "subs",
+}
+EPISODE_TOKEN_RE = re.compile(r"\bs\d{1,2}e\d{1,3}\b", re.IGNORECASE)
 
 
 def scan_provider_path_issues(
@@ -59,7 +77,7 @@ def scan_provider_path_issues(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     start_provider_index: int = 1,
 ) -> dict[str, Any]:
-    manager = default_storage_manager(lan_connections=lan_connections)
+    _ = lan_connections
     providers = [provider for provider in ["radarr", "sonarr"] if integrations.get(provider, {}).get("enabled")]
     issues: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -104,24 +122,13 @@ def scan_provider_path_issues(
                     "items": len(items),
                 }
             )
-
         issues_before = len(issues)
         total_items = len(items)
         for item_index, item in enumerate(items, start=1):
             raw_path = str(item.get("path") or "").strip()
-            if not raw_path:
-                issues.append(_build_issue(provider, item, reason="missing_path", suggestions=[]))
-            else:
-                resolved, status = resolve_provider_directory(raw_path=raw_path, roots=roots, manager=manager)
-                if resolved is None:
-                    issues.append(
-                        _build_issue(
-                            provider,
-                            item,
-                            reason=status,
-                            suggestions=[],
-                        )
-                    )
+            status = _provider_path_status(raw_path, roots=roots)
+            if status != "ok":
+                issues.append(_build_issue(provider, item, reason=status))
 
             if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
                 progress_callback(
@@ -149,14 +156,12 @@ def scan_provider_path_issues(
                 }
             )
 
-    with_suggestions = sum(1 for issue in issues if issue.get("suggestions"))
     if progress_callback is not None:
         progress_callback(
             {
                 "event": "scan_completed",
                 "total_providers": total_providers,
                 "issues": len(issues),
-                "with_suggestions": with_suggestions,
                 "errors": len(errors),
             }
         )
@@ -166,12 +171,23 @@ def scan_provider_path_issues(
         "summary": {
             "providers": total_providers,
             "issues": len(issues),
-            "with_suggestions": with_suggestions,
             "errors": len(errors),
         },
         "issues": issues,
         "errors": errors,
     }
+
+
+def _provider_path_status(raw_path: str, *, roots: list[RootConfig]) -> str:
+    text = str(raw_path or "").strip()
+    if not text:
+        return "missing_path"
+    local_path = Path(text).expanduser().resolve()
+    if not local_path.exists():
+        return "ok" if provider_path_maps_to_connected_root(raw_path=text, roots=roots) else "path_not_found"
+    if not local_path.is_dir():
+        return "path_not_directory"
+    return "ok"
 
 
 def update_provider_item_path(integrations: dict[str, Any], *, provider: str, item_id: int, new_path: str) -> dict[str, Any]:
@@ -183,17 +199,13 @@ def update_provider_item_path(integrations: dict[str, Any], *, provider: str, it
     try:
         if provider == "radarr":
             client = RadarrClient(config)
-            movie = next((item for item in client.list_movies() if int(item.get("id") or 0) == int(item_id)), None)
-            if movie is None:
-                return {"status": "error", "message": f"radarr item not found: {item_id}"}
+            movie = client.get_movie(int(item_id))
             movie["path"] = resolved_path
             updated = client.update_movie(movie)
             refresh = client.refresh_movie(int(item_id))
         elif provider == "sonarr":
             client = SonarrClient(config)
-            series = next((item for item in client.list_series() if int(item.get("id") or 0) == int(item_id)), None)
-            if series is None:
-                return {"status": "error", "message": f"sonarr item not found: {item_id}"}
+            series = client.get_series(int(item_id))
             series["path"] = resolved_path
             updated = client.update_series(series)
             refresh = client.refresh_series(int(item_id))
@@ -276,6 +288,9 @@ def search_library_paths(
 
     manager = default_storage_manager(lan_connections=lan_connections)
     provider_roots = _iter_provider_roots(provider, roots)
+    rclone_roots = [root for root in provider_roots if _root_to_storage_path(root).backend == "rclone"]
+    if rclone_roots:
+        provider_roots = rclone_roots
     if progress_callback is not None:
         progress_callback(
             {
@@ -287,23 +302,61 @@ def search_library_paths(
                 "max_depth": max_depth,
             }
         )
-    candidates = _index_provider_candidates(
-        provider=provider,
-        roots=roots,
-        manager=manager,
-        max_depth=max_depth,
-        progress_callback=progress_callback,
-        provider_index=1,
-        total_providers=1,
-    )
-    results = _rank_candidates(candidates, aliases=aliases, year=None, max_suggestions=max_results)
+    results: list[dict[str, Any]] = []
+    primary_kind = _primary_root_kind(provider)
+    total_roots = len(provider_roots)
+    total_indexed_folders = 0
+    for root_index, root in enumerate(provider_roots, start=1):
+        root_storage_path = _root_to_storage_path(root)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "root_index_started",
+                    "provider": provider,
+                    "provider_index": 1,
+                    "total_providers": 1,
+                    "root_index": root_index,
+                    "total_roots": total_roots,
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                }
+            )
+        root_results, indexed_folders, exact_match_found = _search_root_matches(
+            manager,
+            root,
+            root_storage_path,
+            aliases=aliases,
+            year=None,
+            max_depth=max_depth,
+            max_results=max_results,
+        )
+        total_indexed_folders += indexed_folders
+        results = _merge_ranked_results(results, root_results, max_results=max_results)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "root_index_completed",
+                    "provider": provider,
+                    "provider_index": 1,
+                    "total_providers": 1,
+                    "root_index": root_index,
+                    "total_roots": total_roots,
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                    "indexed_folders": indexed_folders,
+                    "total_indexed_folders": total_indexed_folders,
+                }
+            )
+        if results and root.kind == primary_kind and exact_match_found:
+            break
+
     if progress_callback is not None:
         progress_callback(
             {
                 "event": "search_completed",
                 "provider": provider,
                 "query": query,
-                "candidate_count": len(candidates),
+                "candidate_count": total_indexed_folders,
                 "result_count": len(results),
             }
         )
@@ -361,6 +414,7 @@ def _index_provider_candidates(
 
 def _collect_root_matches(manager: Any, root: RootConfig, current: StoragePath, *, max_depth: int) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
+    root_storage_path = _root_to_storage_path(root)
     pending: list[tuple[StoragePath, int]] = [(current, 0)]
     while pending:
         path, depth = pending.pop()
@@ -378,7 +432,7 @@ def _collect_root_matches(manager: Any, root: RootConfig, current: StoragePath, 
                 {
                     "label": candidate_name,
                     "normalized_name": normalize_title(candidate_name),
-                    "path": entry.path.normalized_path(),
+                    "path": _storage_entry_display_path(root=root, root_storage_path=root_storage_path, entry_path=entry.path),
                     "storage_uri": entry.path.to_uri(),
                     "root_label": root.label,
                     "root_path": str(root.path),
@@ -388,6 +442,176 @@ def _collect_root_matches(manager: Any, root: RootConfig, current: StoragePath, 
             )
             pending.append((entry.path, depth + 1))
     return matches
+
+
+def _search_root_matches(
+    manager: Any,
+    root: RootConfig,
+    current: StoragePath,
+    *,
+    aliases: list[str],
+    year: int | None,
+    max_depth: int,
+    max_results: int,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    if current.backend == "rclone":
+        return _search_rclone_root_matches(
+            root,
+            current,
+            aliases=aliases,
+            year=year,
+            max_results=max_results,
+        )
+
+    matches: list[dict[str, Any]] = []
+    root_storage_path = _root_to_storage_path(root)
+    pending: list[tuple[StoragePath, int]] = [(current, 0)]
+    indexed_folders = 0
+    exact_match_found = False
+
+    while pending:
+        path, depth = pending.pop()
+        if depth > max_depth:
+            continue
+        try:
+            entries = manager.list_dir(path)
+        except Exception:
+            continue
+        for entry in entries:
+            if not entry.is_dir:
+                continue
+            indexed_folders += 1
+            candidate = {
+                "label": entry.name,
+                "normalized_name": normalize_title(entry.name),
+                "path": _storage_entry_display_path(root=root, root_storage_path=root_storage_path, entry_path=entry.path),
+                "storage_uri": entry.path.to_uri(),
+                "root_label": root.label,
+                "root_path": str(root.path),
+                "kind": root.kind,
+                "depth": depth + 1,
+            }
+            matches = _merge_ranked_results(
+                matches,
+                _rank_candidates([candidate], aliases=aliases, year=year, max_suggestions=max_results),
+                max_results=max_results,
+            )
+            if any(int(item.get("score", 0)) >= 120 for item in matches):
+                exact_match_found = True
+            if exact_match_found:
+                return matches, indexed_folders, True
+            pending.append((entry.path, depth + 1))
+
+    return matches, indexed_folders, exact_match_found
+
+
+def _search_rclone_root_matches(
+    root: RootConfig,
+    root_storage_path: StoragePath,
+    *,
+    aliases: list[str],
+    year: int | None,
+    max_results: int,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    filtered_rows = list_entries_recursive(
+        root_storage_path.rclone_remote,
+        root_storage_path.normalized_path(),
+        dirs_only=True,
+        fast_list=True,
+        include_patterns=_build_rclone_include_patterns(aliases),
+    )
+    rows = filtered_rows or list_entries_recursive(
+        root_storage_path.rclone_remote,
+        root_storage_path.normalized_path(),
+        dirs_only=True,
+        fast_list=True,
+    )
+    matches: list[dict[str, Any]] = []
+    exact_match_found = False
+    indexed_folders = 0
+    for row in rows:
+        if not bool(row.get("IsDir", True)):
+            continue
+        raw_relative_path = str(row.get("Path") or row.get("Name") or "").strip().strip("/")
+        if not raw_relative_path:
+            continue
+        indexed_folders += 1
+        relative_parts = [segment for segment in raw_relative_path.split("/") if segment and segment != "."]
+        if not relative_parts:
+            continue
+        entry_path = root_storage_path.join(*relative_parts)
+        candidate = {
+            "label": relative_parts[-1],
+            "normalized_name": normalize_title(relative_parts[-1]),
+            "path": _storage_entry_display_path(root=root, root_storage_path=root_storage_path, entry_path=entry_path),
+            "storage_uri": entry_path.to_uri(),
+            "root_label": root.label,
+            "root_path": str(root.path),
+            "kind": root.kind,
+            "depth": len(relative_parts),
+        }
+        matches = _merge_ranked_results(
+            matches,
+            _rank_candidates([candidate], aliases=aliases, year=year, max_suggestions=max_results),
+            max_results=max_results,
+        )
+        if any(int(item.get("score", 0)) >= 120 for item in matches):
+            exact_match_found = True
+            break
+    return matches, indexed_folders, exact_match_found
+
+
+def _build_rclone_include_patterns(aliases: list[str]) -> list[str]:
+    patterns: list[str] = []
+    for alias in aliases:
+        text = str(alias or "").strip()
+        if not text:
+            continue
+        variants = {
+            text,
+            text.lower(),
+            text.upper(),
+            text.title(),
+            text.replace(" ", "*"),
+            text.lower().replace(" ", "*"),
+        }
+        for variant in variants:
+            clean_variant = str(variant or "").strip()
+            if clean_variant:
+                patterns.append(f"*{clean_variant}*")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        if pattern in seen:
+            continue
+        seen.add(pattern)
+        deduped.append(pattern)
+    return deduped
+
+
+def _merge_ranked_results(existing: list[dict[str, Any]], new_items: list[dict[str, Any]], *, max_results: int) -> list[dict[str, Any]]:
+    if not existing:
+        return list(new_items[:max_results])
+    merged: dict[str, dict[str, Any]] = {str(item.get("path") or ""): item for item in existing}
+    for item in new_items:
+        path = str(item.get("path") or "")
+        if not path:
+            continue
+        current = merged.get(path)
+        if current is None or int(item.get("score", 0)) > int(current.get("score", 0)):
+            merged[path] = item
+    ranked = sorted(merged.values(), key=lambda item: (-int(item.get("score", 0)), str(item.get("path") or "").lower()))
+    return ranked[:max_results]
+
+
+def _storage_entry_display_path(*, root: RootConfig, root_storage_path: StoragePath, entry_path: StoragePath) -> str:
+    if entry_path.backend == "local":
+        return entry_path.normalized_path()
+    relative = entry_path.relative_to(root_storage_path)
+    parts = [segment for segment in str(relative).split("/") if segment and segment != "."]
+    if not parts:
+        return str(root.path)
+    return str(Path(root.path).joinpath(*parts))
 
 
 def _rank_candidates(
@@ -400,7 +624,7 @@ def _rank_candidates(
 ) -> list[dict[str, Any]]:
     ranked: list[tuple[int, dict[str, Any]]] = []
     for candidate in candidates:
-        score = _score_candidate(candidate.get("normalized_name", ""), aliases=aliases, year=year, root_kind=str(candidate.get("kind") or "mixed"))
+        score = _score_candidate(candidate, aliases=aliases, year=year)
         if score >= min_score:
             ranked.append((score, candidate))
 
@@ -418,7 +642,19 @@ def _rank_candidates(
     return suggestions
 
 
-def _score_candidate(name: str, *, aliases: list[str], year: int | None, root_kind: str) -> int:
+def _score_candidate(candidate: dict[str, Any] | str, *, aliases: list[str], year: int | None) -> int:
+    if isinstance(candidate, dict):
+        name = str(candidate.get("normalized_name", "") or candidate.get("label", ""))
+        root_kind = str(candidate.get("kind") or "mixed")
+        depth = int(candidate.get("depth", 0) or 0)
+        label = str(candidate.get("label") or "")
+        path = str(candidate.get("path") or "")
+    else:
+        name = str(candidate or "")
+        root_kind = "mixed"
+        depth = 0
+        label = str(candidate or "")
+        path = ""
     normalized_name = name if " " in str(name) else normalize_title(name)
     aliases = [alias for alias in aliases if alias]
     if not normalized_name or not aliases:
@@ -432,10 +668,38 @@ def _score_candidate(name: str, *, aliases: list[str], year: int | None, root_ki
             score -= 20
     if root_kind != "mixed":
         score += 5
+    score -= _candidate_penalty(label=label, path=path, depth=depth, aliases=aliases)
     return max(score, 0)
 
 
-def _build_issue(provider: str, item: dict[str, Any], *, reason: str, suggestions: list[dict[str, Any]]) -> dict[str, Any]:
+def _candidate_penalty(*, label: str, path: str, depth: int, aliases: list[str]) -> int:
+    penalty = 0
+    normalized_label = normalize_title(label)
+    label_tokens = set(_meaningful_title_tokens(normalized_label))
+    raw_text = f"{label} {path}".lower()
+
+    if EPISODE_TOKEN_RE.search(raw_text):
+        penalty += 50
+
+    if label_tokens & LIBRARY_JUNK_TOKENS:
+        penalty += 35
+
+    extra_depth = max(depth - 2, 0)
+    penalty += extra_depth * 8
+
+    alias_token_lengths = [len(_meaningful_title_tokens(alias)) for alias in aliases if alias]
+    if alias_token_lengths:
+        shortest_alias = min(alias_token_lengths)
+        label_token_count = len(_meaningful_title_tokens(normalized_label))
+        if shortest_alias <= 1 and label_token_count >= 3:
+            penalty += 30
+        elif shortest_alias > 0 and label_token_count >= shortest_alias + 3:
+            penalty += 12
+
+    return penalty
+
+
+def _build_issue(provider: str, item: dict[str, Any], *, reason: str) -> dict[str, Any]:
     return {
         "id": f"{provider}:{item.get('id')}",
         "provider": provider,
@@ -444,7 +708,6 @@ def _build_issue(provider: str, item: dict[str, Any], *, reason: str, suggestion
         "year": item.get("year"),
         "path": item.get("path"),
         "reason": reason,
-        "suggestions": suggestions,
     }
 
 
@@ -471,7 +734,12 @@ def _iter_provider_roots(provider: str, roots: list[RootConfig]) -> list[RootCon
         if provider == "sonarr" and root.kind not in {"series", "mixed"}:
             continue
         matched.append(root)
-    return matched
+    primary_kind = _primary_root_kind(provider)
+    return sorted(matched, key=lambda root: (0 if root.kind == primary_kind else 1, str(root.label or "").lower(), str(root.path)))
+
+
+def _primary_root_kind(provider: str) -> str:
+    return "movie" if provider == "radarr" else "series"
 
 
 def _build_search_aliases(item: dict[str, Any]) -> list[str]:

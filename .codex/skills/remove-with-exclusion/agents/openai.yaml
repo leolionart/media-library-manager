@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remove With Exclusion"
+  short_description: "Remove items and add import exclusion."
+  default_prompt: "Use this skill to remove a provider item without deleting media files and add import exclusion so it is not automatically re-imported."

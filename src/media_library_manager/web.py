@@ -35,7 +35,7 @@ from .path_repair import delete_provider_item, scan_provider_path_issues, search
 from .operations import apply_plan, delete_folder, delete_media_file, move_folder, move_folder_contents
 from .operation_storage import OperationStorageRouter
 from .planner import load_report, media_from_dict, plan_actions
-from .provider_path_resolution import ResolvedProviderDirectory, resolve_provider_directory
+from .provider_path_resolution import ResolvedProviderDirectory, find_provider_path_replacement, resolve_provider_directory
 from .scanner import rebuild_scan_report, scan_roots
 from .scanner_storage import StorageManagerScannerStorage
 from .state import StateStore
@@ -154,52 +154,10 @@ def _resolve_provider_library_root(
     resolved, status = resolve_provider_directory(raw_path=raw_path, roots=roots, manager=manager)
     if resolved is not None and status == "ok":
         return resolved, status
-    fallback = _resolve_rclone_library_root_from_provider_path(raw_path=raw_path, roots=roots, manager=manager)
+    fallback = find_provider_path_replacement(raw_path=raw_path, roots=roots, manager=manager)
     if fallback is not None:
         return fallback, "ok"
     return resolved, status
-
-
-def _resolve_rclone_library_root_from_provider_path(
-    *,
-    raw_path: str,
-    roots: list[RootConfig],
-    manager: Any,
-) -> ResolvedProviderDirectory | None:
-    segments = [segment for segment in PurePosixPath(str(raw_path or "")).parts if segment not in {"", "/"}]
-    try:
-        rclone_index = next(index for index, segment in enumerate(segments) if segment.lower() == "rclone")
-    except StopIteration:
-        return None
-    if rclone_index + 2 >= len(segments):
-        return None
-
-    remote_alias = segments[rclone_index + 1]
-    relative_segments = segments[rclone_index + 2 :]
-    normalized_alias = _normalize_root_hint(remote_alias)
-
-    for root in roots:
-        root_storage = _root_to_storage_path(root)
-        if root_storage.backend != "rclone":
-            continue
-        if normalized_alias not in _normalize_root_hint(root.label):
-            continue
-        candidate_storage = root_storage.join(*relative_segments)
-        if not manager.exists(candidate_storage) or not manager.is_dir(candidate_storage):
-            continue
-        candidate_path = Path(root.path).joinpath(*relative_segments)
-        return ResolvedProviderDirectory(
-            path=candidate_path,
-            storage_uri=candidate_storage.to_uri(),
-            connection_id=root.connection_id,
-            connection_label=root.connection_label,
-            share_name=root.share_name,
-        )
-    return None
-
-
-def _normalize_root_hint(value: str) -> str:
-    return "".join(character for character in str(value or "").lower() if character.isalnum())
 
 
 def default_retry_policy() -> dict[str, int]:
@@ -1821,7 +1779,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "summary": {
                 **(report.get("summary", {}) or {}),
                 "issues": len(issues),
-                "with_suggestions": sum(1 for issue in issues if issue.get("suggestions")),
                 "errors": len(report.get("errors", []) or []),
             },
             "generated_at": now_iso(),
@@ -2051,7 +2008,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 message="Finished provider path repair scan.",
                 details={
                     "issues": int(event.get("issues", 0)),
-                    "with_suggestions": int(event.get("with_suggestions", 0)),
                     "errors": int(event.get("errors", 0)),
                 },
             )

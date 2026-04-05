@@ -148,8 +148,9 @@ function createRcloneRootPayload(values) {
 
   const rootPath = buildRclonePath(values.rclone_path);
   const storageUri = `rclone://${encodeURIComponent(remoteName)}${encodeRcloneUriPath(rootPath)}`;
-  const pseudoBase = `/rclone/${toSmbPseudoSegment(remoteName, "remote")}`;
-  const path = rootPath === "/" ? pseudoBase : `${pseudoBase}${rootPath}`;
+  const mountBase = String(values.rclone_mount_path || "").trim();
+  const normalizedMountBase = mountBase ? buildRclonePath(mountBase) : `/rclone/${toSmbPseudoSegment(remoteName, "remote")}`;
+  const path = rootPath === "/" ? normalizedMountBase : `${normalizedMountBase}${rootPath}`;
 
   return {
     path,
@@ -165,7 +166,7 @@ function createRcloneRootPayload(values) {
 
 function buildRootFormValues(root) {
   if (!root) {
-    return { mode: "local", priority: 50, kind: "mixed", share_path: "/", rclone_path: "/" };
+    return { mode: "local", priority: 50, kind: "mixed", share_path: "/", rclone_path: "/", rclone_mount_path: "" };
   }
 
   if (root.storage_uri) {
@@ -177,6 +178,7 @@ function buildRootFormValues(root) {
           original_path: root.path,
           rclone_remote: decodeURIComponent(parsed.hostname || ""),
           rclone_path: decodeURIComponent(parsed.pathname || "/"),
+          rclone_mount_path: root.path || "",
           label: root.label || "",
           priority: Number(root.priority || 50),
           kind: root.kind || "mixed",
@@ -202,6 +204,7 @@ function buildRootFormValues(root) {
         kind: root.kind || "mixed",
         share_path: "/",
         rclone_path: "/",
+        rclone_mount_path: "",
       };
     }
   }
@@ -215,6 +218,7 @@ function buildRootFormValues(root) {
     kind: root.kind || "mixed",
     share_path: "/",
     rclone_path: "/",
+    rclone_mount_path: "",
   };
 }
 
@@ -1030,7 +1034,7 @@ export function SettingsView() {
         <Form
           form={rootForm}
           layout="vertical"
-          initialValues={{ mode: "local", priority: 50, kind: "mixed", share_path: "/", rclone_path: "/" }}
+          initialValues={{ mode: "local", priority: 50, kind: "mixed", share_path: "/", rclone_path: "/", rclone_mount_path: "" }}
           onFinish={async (values) => {
             try {
               const originalPath = String(values.original_path || editingRoot?.path || "").trim();
@@ -1101,6 +1105,9 @@ export function SettingsView() {
                 <>
                   <Form.Item name="rclone_remote" label="Rclone Remote Name" rules={[{ required: true }]}>
                     <Input placeholder="gdrive" />
+                  </Form.Item>
+                  <Form.Item name="rclone_mount_path" label="Mounted Path Alias">
+                    <Input placeholder="/volume2/DATA/rclone/gdrive" />
                   </Form.Item>
                   <Form.Item name="rclone_path" label="Folder Path Inside Remote">
                     <Input placeholder="/Movies" />

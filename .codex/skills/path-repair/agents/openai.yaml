@@ -1,0 +1,4 @@
+interface:
+  display_name: "Path Repair"
+  short_description: "Repair verified provider path mismatches."
+  default_prompt: "Use this skill to inspect provider path issues, search connected roots for a replacement path, and update Radarr or Sonarr only when the new path is verified and differs from the old one."

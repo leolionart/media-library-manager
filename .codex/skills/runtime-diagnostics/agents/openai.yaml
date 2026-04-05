@@ -1,0 +1,4 @@
+interface:
+  display_name: "Runtime Diagnostics"
+  short_description: "Debug local runtime state and jobs."
+  default_prompt: "Use this skill to debug the local media-library-manager runtime, inspect current jobs and state artifacts, and restart the backend cleanly when the runtime is stuck or stale."

@@ -31,6 +31,12 @@ class SonarrClient(JsonApiClient):
             raise ProviderError("Unexpected Sonarr series payload.")
         return payload
 
+    def get_series(self, series_id: int) -> dict[str, Any]:
+        payload = self.get(f"/api/v3/series/{series_id}")
+        if not isinstance(payload, dict):
+            raise ProviderError("Unexpected Sonarr series payload.")
+        return payload
+
     def update_series(self, series: dict[str, Any]) -> dict[str, Any]:
         return self.put(f"/api/v3/series/{series['id']}?moveFiles=false", series)
 

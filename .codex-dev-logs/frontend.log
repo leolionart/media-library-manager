@@ -128,3 +128,17 @@ React will try to recreate this component tree from scratch using the error boun
 11:24:33 AM [vite] (client) hmr update /src/components/OperationsView.jsx
 11:26:36 AM [vite] (client) hmr update /src/components/OperationsView.jsx
 11:29:34 AM [vite] (client) hmr update /src/components/PathRepairView.jsx, /src/components/OperationsView.jsx, /src/components/OverviewView.jsx, /src/components/SettingsView.jsx, /src/components/MediaLibraryLogPanel.jsx
+11:41:36 AM [vite] (client) hmr update /src/components/PathRepairView.jsx
+11:42:21 AM [vite] (client) hmr update /src/components/SettingsView.jsx
+11:42:25 AM [vite] (client) hmr update /src/components/SettingsView.jsx
+11:45:43 AM [vite] (client) hmr update /src/components/PathRepairView.jsx
+11:57:40 AM [vite] http proxy error: /api/path-repair/scan
+Error: socket hang up
+    at Socket.socketOnEnd (node:_http_client:598:25)
+    at Socket.emit (node:events:531:35)
+    at endReadableNT (node:internal/streams/readable:1698:12)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+3:32:56 PM [vite] (client) hmr update /src/components/PathRepairView.jsx
+3:32:56 PM [vite] (client) hmr update /src/components/OverviewView.jsx
+3:34:51 PM [vite] (client) hmr update /src/components/PathRepairView.jsx
+3:45:38 PM [vite] (client) hmr update /src/components/PathRepairView.jsx

@@ -195,10 +195,11 @@ Payload:
 ### `POST /api/path-repair/scan`
 
 Scan item Radarr/Sonarr có path lỗi.
+Flow này chỉ phát hiện item có `path` bị thiếu, không còn là directory hợp lệ, hoặc không map được vào bất kỳ connected root nào đã connect.
 
 ### `POST /api/path-repair/search`
 
-Search folder phù hợp trong connected roots.
+Search folder phù hợp trong connected roots để user chọn thư mục đúng rồi cập nhật lại provider path.
 
 Payload:
 

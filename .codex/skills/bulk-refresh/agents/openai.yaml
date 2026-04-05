@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bulk Refresh"
+  short_description: "Run controlled bulk provider refreshes."
+  default_prompt: "Use this skill to batch-update provider items with known paths, refresh them, and track successes and failures safely."

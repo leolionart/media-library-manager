@@ -31,6 +31,12 @@ class RadarrClient(JsonApiClient):
             raise ProviderError("Unexpected Radarr movie payload.")
         return payload
 
+    def get_movie(self, movie_id: int) -> dict[str, Any]:
+        payload = self.get(f"/api/v3/movie/{movie_id}")
+        if not isinstance(payload, dict):
+            raise ProviderError("Unexpected Radarr movie payload.")
+        return payload
+
     def update_movie(self, movie: dict[str, Any]) -> dict[str, Any]:
         return self.put(f"/api/v3/movie/{movie['id']}?moveFiles=false", movie)
 
