@@ -1843,6 +1843,70 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if event_name == "remote_listing_started":
+            directory_path = str(event.get("directory_path") or event.get("root_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Listing rclone root for {event['root_label']}: {directory_path}",
+                details={"path": directory_path},
+            )
+            return
+        if event_name == "remote_branch_started":
+            directory_path = str(event.get("directory_path") or event.get("root_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Expanding rclone branch in {event['root_label']}: {directory_path}",
+                details={"path": directory_path},
+            )
+            return
+        if event_name == "remote_listing_completed":
+            self.store.append_job_log(
+                level="info",
+                message=f"Finished rclone root listing for {event['root_label']}",
+                details={
+                    "path": event.get("root_path"),
+                    "directories_scanned": int(event.get("directories_scanned", 0)),
+                    "indexed_files": int(event.get("root_indexed_files", 0)),
+                    "total_indexed_files": int(event.get("total_indexed_files", 0)),
+                },
+            )
+            return
+        if event_name == "folder_review_started":
+            folder_path = str(event.get("folder_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Reviewing duplicate folder inventory {event.get('index')}/{event.get('total_groups')}: {folder_path}",
+                details={"path": folder_path},
+            )
+            return
+        if event_name == "folder_review_failed":
+            folder_path = str(event.get("folder_path") or "")
+            self.store.append_job_log(
+                level="warning",
+                message=f"Failed to review duplicate folder inventory: {folder_path}",
+                details={"path": folder_path, "error": event.get("message")},
+            )
+            return
+        if event_name == "inventory_started":
+            directory_path = str(event.get("directory_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Listing video inventory: {directory_path}",
+                details={"path": directory_path},
+            )
+            return
+        if event_name == "inventory_completed":
+            directory_path = str(event.get("directory_path") or "")
+            self.store.append_job_log(
+                level="info",
+                message=f"Finished video inventory: {directory_path}",
+                details={
+                    "path": directory_path,
+                    "video_count": int(event.get("video_count", 0)),
+                    "episode_count": int(event.get("episode_count", 0)),
+                },
+            )
+            return
         if event_name == "file_indexed":
             relative_path = str(event.get("relative_path") or event.get("file_path") or "")
             self.store.append_job_log(

@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from .models import RootConfig
-from .rclone_cli import list_entries_recursive
+from .rclone_cli import RcloneError, is_rclone_not_found_error, list_entries_recursive
 from .scanner import VIDEO_EXTENSIONS, parse_media_details
 from .storage import StoragePath, default_storage_manager
 
@@ -143,26 +143,67 @@ def scan_duplicate_empty_folders(
                 item["has_video"] = has_video
                 item["has_any_file"] = has_any_file
             if item.get("has_video") and item.get("inventory") is None:
-                item["inventory"] = _build_folder_inventory(
-                    manager=manager,
-                    path=item["storage_path"],
-                    should_cancel=should_cancel,
-                )
+                if progress_callback:
+                    progress_callback(
+                        {
+                            "event": "folder_review_started",
+                            "index": group_index,
+                            "total_groups": len(duplicate_groups),
+                            "folder_path": item.get("path"),
+                            "root_label": item.get("root_label"),
+                        }
+                    )
+                try:
+                    item["inventory"] = _build_folder_inventory(
+                        manager=manager,
+                        path=item["storage_path"],
+                        progress_callback=progress_callback,
+                        progress_label=str(item.get("path") or item.get("storage_uri") or ""),
+                        should_cancel=should_cancel,
+                    )
+                except Exception as exc:
+                    item["inventory_error"] = str(exc)
+                    item["missing_during_review"] = bool(is_rclone_not_found_error(exc))
+                    item["inventory"] = {
+                        "video_count": 0,
+                        "episode_count": 0,
+                        "episode_keys": set(),
+                        "unparsed_video_count": 0,
+                        "unparsed_video_samples": [],
+                        "sample_episode_keys": [],
+                    }
+                    if is_rclone_not_found_error(exc):
+                        item["has_video"] = False
+                        item["has_any_file"] = False
+                    if progress_callback:
+                        progress_callback(
+                            {
+                                "event": "folder_review_failed",
+                                "folder_path": item.get("path"),
+                                "root_label": item.get("root_label"),
+                                "message": str(exc),
+                            }
+                        )
             reviewed = {
                 key: value
                 for key, value in item.items()
                 if key not in {"match_relative_path", "storage_path", "has_any_file", "inventory"}
             }
             reviewed["has_video"] = bool(item.get("has_video"))
-            reviewed["is_deletion_candidate"] = not reviewed["has_video"]
-            reviewed["empty_reason"] = None if reviewed["has_video"] else ("empty" if not item.get("has_any_file") else "sidecar-only")
+            reviewed["is_deletion_candidate"] = bool(not reviewed["has_video"] and not item.get("missing_during_review"))
+            reviewed["empty_reason"] = (
+                "missing-during-scan"
+                if item.get("missing_during_review")
+                else (None if reviewed["has_video"] else ("empty" if not item.get("has_any_file") else "sidecar-only"))
+            )
             inventory = item.get("inventory") or {}
             reviewed["video_count"] = int(inventory.get("video_count") or 0)
             reviewed["episode_count"] = int(inventory.get("episode_count") or 0)
             reviewed["unparsed_video_count"] = int(inventory.get("unparsed_video_count") or 0)
             reviewed["episode_keys"] = sorted(inventory.get("episode_keys") or [])
+            reviewed["scan_error"] = item.get("inventory_error")
             reviewed_items.append(reviewed)
-            if not reviewed["has_video"]:
+            if reviewed["is_deletion_candidate"]:
                 deletion_candidates.append(reviewed)
 
         _mark_inferior_video_set_candidates(reviewed_items, deletion_candidates)
@@ -315,7 +356,17 @@ def _index_rclone_root_folders(
     indexed_count = 0
     scanned_count = 0
     indexed_folders_by_path: dict[str, dict[str, Any]] = {}
-
+    if progress_callback:
+        progress_callback(
+            {
+                "event": "remote_listing_started",
+                "index": root_index,
+                "total_roots": total_roots,
+                "root_label": root.label,
+                "root_path": str(root.path),
+                "directory_path": root_storage.normalized_path(),
+            }
+        )
     rows = list_entries_recursive(
         root_storage.rclone_remote,
         root_storage.normalized_path(),
@@ -346,8 +397,7 @@ def _index_rclone_root_folders(
                 }
             )
 
-        is_dir = bool(row.get("IsDir"))
-        if is_dir:
+        if bool(row.get("IsDir")):
             folder_name = relative_path.rsplit("/", 1)[-1]
             if _should_ignore_folder(folder_name):
                 continue
@@ -387,6 +437,20 @@ def _index_rclone_root_folders(
                 root_storage=root_storage,
                 field_name="has_video",
             )
+
+    if progress_callback:
+        progress_callback(
+            {
+                "event": "remote_listing_completed",
+                "index": root_index,
+                "total_roots": total_roots,
+                "root_label": root.label,
+                "root_path": str(root.path),
+                "directories_scanned": scanned_count,
+                "root_indexed_files": indexed_count,
+                "total_indexed_files": total_folders_indexed + indexed_count,
+            }
+        )
 
     return indexed_count
 
@@ -444,6 +508,8 @@ def _build_folder_inventory(
     *,
     manager: Any,
     path: StoragePath,
+    progress_callback: CleanupProgressCallback | None = None,
+    progress_label: str = "",
     should_cancel: CleanupCancellationCallback | None = None,
 ) -> dict[str, Any]:
     episode_keys: set[str] = set()
@@ -466,6 +532,13 @@ def _build_folder_inventory(
         unmatched_video_files.append(relative_path)
 
     if path.backend == "rclone":
+        if progress_callback:
+            progress_callback(
+                {
+                    "event": "inventory_started",
+                    "directory_path": progress_label or path.to_uri(),
+                }
+            )
         rows = list_entries_recursive(
             path.rclone_remote,
             path.normalized_path(),
@@ -480,6 +553,15 @@ def _build_folder_inventory(
             if not relative_path or _path_contains_ignored_folder(relative_path):
                 continue
             record_video(relative_path)
+        if progress_callback:
+            progress_callback(
+                {
+                    "event": "inventory_completed",
+                    "directory_path": progress_label or path.to_uri(),
+                    "video_count": video_count,
+                    "episode_count": len(episode_keys),
+                }
+            )
     else:
         pending = [path]
         while pending:
