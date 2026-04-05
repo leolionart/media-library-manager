@@ -19,6 +19,7 @@ Overview là màn giám sát tổng hợp.
 Hiện hiển thị:
 
 - KPI về duplicate, apply, sync, cleanup, path repair
+- KPI resolved và latest-operation được tổng hợp từ cả artifact `last-*` lẫn `activity_log`, nên các thao tác như `Folder deleted.`, `Provider item removed.`, hoặc `Provider path updated.` cũng được phản ánh trên dashboard
 - trạng thái roots và providers
 - current process
 - recent activity

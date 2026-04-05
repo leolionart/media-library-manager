@@ -38,6 +38,7 @@ const emptyState = {
   apply_result: null,
   sync_result: null,
   cleanup_report: null,
+  empty_folder_cleanup_report: null,
   path_repair_report: null,
   managed_folders: [],
   activity_log: [],
@@ -46,6 +47,7 @@ const emptyState = {
   last_apply_at: null,
   last_sync_at: null,
   last_cleanup_at: null,
+  last_empty_folder_cleanup_at: null,
   last_path_repair_at: null,
 };
 
@@ -114,6 +116,33 @@ function countSuccessfulMessages(entries, messages) {
   return (entries || []).filter(
     (entry) => String(entry?.status || "").toLowerCase() === "success" && messageSet.has(String(entry?.message || ""))
   ).length;
+}
+
+function getActivityEntryTime(entry) {
+  return String(entry?.created_at || entry?.timestamp || "").trim();
+}
+
+function getLatestSuccessfulActivityAt(entries, messages) {
+  const messageSet = new Set(messages);
+  const values = (entries || [])
+    .filter(
+      (entry) =>
+        String(entry?.status || "").toLowerCase() === "success" && messageSet.has(String(entry?.message || ""))
+    )
+    .map((entry) => getActivityEntryTime(entry))
+    .filter(Boolean);
+  if (!values.length) return null;
+  values.sort((left, right) => Date.parse(right) - Date.parse(left));
+  return values[0] || null;
+}
+
+function getLatestDate(...values) {
+  return values
+    .filter(Boolean)
+    .reduce((latest, value) => {
+      if (!latest) return value;
+      return Date.parse(value) > Date.parse(latest) ? value : latest;
+    }, null);
 }
 
 function getProcessProgress(job) {
@@ -220,6 +249,7 @@ export function OverviewView() {
 
   const reportSummary = state.report?.summary || {};
   const cleanupSummary = state.cleanup_report?.summary || {};
+  const emptyFolderCleanupSummary = state.empty_folder_cleanup_report?.summary || {};
   const pathRepairSummary = state.path_repair_report?.summary || {};
   const syncSummary = state.sync_result?.summary || {};
   const activePlan = useMemo(
@@ -235,10 +265,11 @@ export function OverviewView() {
   const duplicateGroups =
     toSafeNumber(reportSummary.exact_duplicate_groups) +
     toSafeNumber(reportSummary.media_collision_groups) +
-    toSafeNumber(cleanupSummary.folder_media_duplicate_groups);
+    toSafeNumber(cleanupSummary.folder_media_duplicate_groups) +
+    toSafeNumber(emptyFolderCleanupSummary.duplicate_groups);
   const plannedChanges =
     toSafeNumber(planSummary.move) + toSafeNumber(planSummary.delete) + toSafeNumber(planSummary.review);
-  const cleanupDeletedCount = countSuccessfulMessages(state.activity_log, ["File deleted."]);
+  const cleanupDeletedCount = countSuccessfulMessages(state.activity_log, ["File deleted.", "Folder deleted."]);
   const repairedPathCount = countSuccessfulMessages(state.activity_log, ["Provider path updated."]);
   const removedProviderItemCount = countSuccessfulMessages(state.activity_log, ["Provider item removed."]);
   const providerFixCount = repairedPathCount + removedProviderItemCount;
@@ -248,7 +279,14 @@ export function OverviewView() {
   const attentionCount =
     toSafeNumber(planSummary.review) +
     toSafeNumber(cleanupSummary.folder_media_duplicate_groups) +
+    toSafeNumber(emptyFolderCleanupSummary.duplicate_groups) +
     toSafeNumber(pathRepairSummary.issues);
+  const latestCleanupAt = getLatestDate(state.last_cleanup_at, state.last_empty_folder_cleanup_at);
+  const latestResolutionActivityAt = getLatestDate(
+    getLatestSuccessfulActivityAt(state.activity_log, ["File deleted.", "Folder deleted."]),
+    getLatestSuccessfulActivityAt(state.activity_log, ["Provider path updated.", "Provider item removed."])
+  );
+  const latestResolvedAt = getLatestDate(state.last_apply_at, state.last_empty_folder_cleanup_at, latestResolutionActivityAt);
   const processProgress = useMemo(() => getProcessProgress(currentJob), [currentJob]);
   const processSummaryTags = useMemo(() => buildProcessSummaryTags(currentJob), [currentJob]);
 
@@ -262,8 +300,8 @@ export function OverviewView() {
     },
     {
       key: "cleanup",
-      label: "Cleanup files deleted",
-      description: "Recent duplicate video files removed from provider-managed folders.",
+      label: "Cleanup deletions",
+      description: "Recent duplicate files or duplicate folders removed by cleanup workflows.",
       value: cleanupDeletedCount,
       status: cleanupDeletedCount ? "success" : "default",
     },
@@ -301,9 +339,15 @@ export function OverviewView() {
     {
       key: "cleanup-groups",
       label: "Cleanup duplicate groups",
-      description: "Movie folders that still contain multiple candidate video files.",
-      value: toSafeNumber(cleanupSummary.folder_media_duplicate_groups),
-      status: toSafeNumber(cleanupSummary.folder_media_duplicate_groups) ? "warning" : "default",
+      description: "Provider duplicate-file groups and root-folder duplicate groups still waiting for cleanup.",
+      value:
+        toSafeNumber(cleanupSummary.folder_media_duplicate_groups) +
+        toSafeNumber(emptyFolderCleanupSummary.duplicate_groups),
+      status:
+        toSafeNumber(cleanupSummary.folder_media_duplicate_groups) +
+          toSafeNumber(emptyFolderCleanupSummary.duplicate_groups)
+        ? "warning"
+        : "default",
     },
     {
       key: "repair-issues",
@@ -347,11 +391,15 @@ export function OverviewView() {
             title="Duplicate Findings"
             value={duplicateGroups}
             prefix={<CloudServerOutlined />}
-            note={`${toSafeNumber(reportSummary.exact_duplicate_groups)} exact, ${toSafeNumber(reportSummary.media_collision_groups)} collision, ${toSafeNumber(cleanupSummary.folder_media_duplicate_groups)} cleanup`}
+            note={`${toSafeNumber(reportSummary.exact_duplicate_groups)} exact, ${toSafeNumber(reportSummary.media_collision_groups)} collision, ${toSafeNumber(cleanupSummary.folder_media_duplicate_groups)} provider cleanup, ${toSafeNumber(emptyFolderCleanupSummary.duplicate_groups)} folder cleanup`}
             extra={<Tag color={duplicateGroups ? "warning" : "success"}>{duplicateGroups ? "open" : "clear"}</Tag>}
             tags={[
               { key: "indexed", color: "default", label: `${toSafeNumber(reportSummary.files)} indexed` },
-              { key: "cleanup", color: "warning", label: `${toSafeNumber(cleanupSummary.skipped)} skipped` },
+              {
+                key: "cleanup",
+                color: "warning",
+                label: `${toSafeNumber(cleanupSummary.skipped) + toSafeNumber(emptyFolderCleanupSummary.errors)} skipped/errors`,
+              },
             ]}
           />
         </Col>
@@ -498,9 +546,9 @@ export function OverviewView() {
               className="overview-descriptions"
               items={[
                 ["Latest Scan", formatDate(state.last_scan_at)],
-                ["Latest Cleanup Scan", formatDate(state.last_cleanup_at)],
+                ["Latest Cleanup Scan", formatDate(latestCleanupAt)],
                 ["Latest Path Repair", formatDate(state.last_path_repair_at)],
-                ["Latest Changes", formatDate(state.last_apply_at)],
+                ["Latest Changes", formatDate(latestResolvedAt)],
                 ["Latest Sync", formatDate(state.last_sync_at)],
                 ["Enabled Integrations", enabledIntegrations.length ? enabledIntegrations.join(" + ") : "No provider enabled"],
               ].map(([label, children]) => ({
