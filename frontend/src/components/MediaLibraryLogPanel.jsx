@@ -143,7 +143,7 @@ function getReadableJobKindLabel(kind) {
   if (normalized === "scan") return "Scan";
   if (normalized === "plan") return "Change plan";
   if (normalized === "apply") return "File changes";
-  if (normalized === "cleanup-scan") return "Library Cleanup";
+  if (normalized === "cleanup-scan") return "Folder cleanup";
   if (normalized === "path-repair") return "Path Repair";
   if (normalized === "folder") return "Folder action";
   if (normalized === "integration") return "Provider action";
@@ -274,7 +274,7 @@ function getProcessSummaryNote(scope, currentJob, applyResult, logStreamPaused) 
 function jobMatchesScope(scope, job) {
   const kind = String(job?.kind || "").toLowerCase();
   if (scope === "activity") return Boolean(job);
-  if (scope === "operations") return ["scan", "plan", "apply"].includes(kind);
+  if (scope === "operations") return ["scan", "plan", "apply", "cleanup-scan"].includes(kind);
   if (scope === "cleanup") return kind === "cleanup-scan";
   if (scope === "repair") return kind === "path-repair";
   return false;

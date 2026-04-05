@@ -1,0 +1,130 @@
+
+> dev
+> vite --host 127.0.0.1 --port 5173
+
+
+  VITE v8.0.3  ready in 103 ms
+
+  ➜  Local:   http://127.0.0.1:5173/
+  ➜  press h + enter to show help
+8:22:12 AM [vite] (client) [console.error] TypeError: Cannot read properties of undefined (reading 'length')
+    at OverviewView (http://127.0.0.1:5173/src/components/OverviewView.jsx:358:27)
+    at Object.react_stack_bottom_frame (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:12867:12)
+    at renderWithHooks (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:4212:19)
+    at updateFunctionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:5568:16)
+    at beginWork (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:6139:20)
+    at runWithFiberInDEV (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:850:66)
+    at performUnitOfWork (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:8428:92)
+    at workLoopSync (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:8324:37)
+    at renderRootSync (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:8308:6)
+    at performWorkOnRoot (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:7993:27)
+
+The above error occurred in the <OverviewView> component.
+
+React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.
+
+8:22:12 AM [vite] (client) [console.error] Root render failed TypeError: Cannot read properties of undefined (reading 'length')
+    at OverviewView (http://127.0.0.1:5173/src/components/OverviewView.jsx:358:27)
+    at Object.react_stack_bottom_frame (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:12867:12)
+    at renderWithHooks (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:4212:19)
+    at updateFunctionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:5568:16)
+    at beginWork (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:6139:20)
+    at runWithFiberInDEV (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:850:66)
+    at performUnitOfWork (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:8428:92)
+    at workLoopSync (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:8324:37)
+    at renderRootSync (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:8308:6)
+    at performWorkOnRoot (http://127.0.0.1:5173/node_modules/.vite/deps/client-DMQJPiS4.js?v=f4df5abf:7993:27)
+8:22:47 AM [vite] vite.config.js changed, restarting server...
+8:22:47 AM [vite] server restarted.
+8:22:48 AM [vite] (client) [console.error] Warning: [antd: List] The `List` component is deprecated. And will be removed in next major version.
+
+> dev
+> vite --host 127.0.0.1 --port 5173
+
+
+  VITE v8.0.3  ready in 76 ms
+
+  ➜  Local:   http://127.0.0.1:5173/
+  ➜  press h + enter to show help
+8:22:56 AM [vite] (client) [console.error] Warning: [antd: List] The `List` component is deprecated. And will be removed in next major version.
+8:23:02 AM [vite] (client) [console.error] Warning: [antd: List] The `List` component is deprecated. And will be removed in next major version.
+8:23:18 AM [vite] (client) [console.error] Warning: [antd: List] The `List` component is deprecated. And will be removed in next major version.
+8:23:26 AM [vite] (client) [console.error] Warning: Instance created by `useForm` is not connected to any Form element. Forget to pass `form` prop?
+8:23:26 AM [vite] (client) [console.error] Warning: [antd: Space] `direction` is deprecated. Please use `orientation` instead.
+8:23:26 AM [vite] (client) [console.error] Warning: [antd: Tag] `bordered={false}` is deprecated. Please use `variant="filled"` instead.
+8:23:58 AM [vite] (client) [console.error] Warning: Instance created by `useForm` is not connected to any Form element. Forget to pass `form` prop?
+8:23:58 AM [vite] (client) [console.error] Warning: [antd: Space] `direction` is deprecated. Please use `orientation` instead.
+8:23:58 AM [vite] (client) [console.error] Warning: [antd: Tag] `bordered={false}` is deprecated. Please use `variant="filled"` instead.
+8:26:51 AM [vite] (client) [console.error] Warning: Instance created by `useForm` is not connected to any Form element. Forget to pass `form` prop?
+8:26:51 AM [vite] (client) [console.error] Warning: [antd: Space] `direction` is deprecated. Please use `orientation` instead.
+8:26:51 AM [vite] (client) [console.error] Warning: [antd: Tag] `bordered={false}` is deprecated. Please use `variant="filled"` instead.
+8:31:48 AM [vite] (client) hmr update /src/components/PathRepairView.jsx, /src/components/OperationsView.jsx, /src/components/OverviewView.jsx, /src/components/SettingsView.jsx, /src/components/FileCleanupView.jsx, /src/components/MediaLibraryLogPanel.jsx
+8:33:46 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+8:33:55 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+8:34:04 AM [vite] (client) hmr update /src/App.jsx
+8:35:28 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+8:35:42 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+8:39:02 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+8:48:03 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+8:48:23 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+9:16:28 AM [vite] (client) hmr update /src/components/SettingsView.jsx
+9:26:17 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:00:38 AM [vite] (client) hmr update /src/styles.css
+10:01:28 AM [vite] (client) hmr update /src/styles.css
+10:03:40 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:07:17 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:09:40 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:09:48 AM [vite] (client) hmr update /src/styles.css
+10:19:04 AM [vite] (client) hmr update /src/components/PathRepairView.jsx, /src/components/OperationsView.jsx, /src/components/OverviewView.jsx, /src/components/SettingsView.jsx, /src/components/FileCleanupView.jsx, /src/components/MediaLibraryLogPanel.jsx
+10:19:05 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:19:17 AM [vite] (client) hmr update /src/styles.css
+10:19:21 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:19:48 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:21:05 AM [vite] (client) hmr update /src/App.jsx
+10:21:52 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:22:00 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:22:39 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:23:48 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:23:48 AM [vite] (client) hmr update /src/App.jsx
+10:24:20 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:24:27 AM [vite] (client) hmr update /src/App.jsx
+10:24:28 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:24:50 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+10:24:57 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:38:48 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:39:45 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:39:50 AM [vite] (client) hmr update /src/App.jsx
+10:42:41 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:43:28 AM [vite] (client) hmr update /src/components/FileCleanupView.jsx
+10:59:06 AM [vite] (client) hmr update /src/components/PathRepairView.jsx, /src/components/OperationsView.jsx, /src/components/OverviewView.jsx, /src/components/SettingsView.jsx, /src/components/MediaLibraryLogPanel.jsx
+11:02:16 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:02:21 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:02:31 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:02:36 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:02:44 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:02:50 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:03:00 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:03:14 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:03:37 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:03:49 AM [vite] (client) hmr update /src/App.jsx
+11:15:04 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:09 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:13 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:19 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:25 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:38 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:50 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:15:57 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:16:12 AM [vite] (client) hmr update /src/components/MediaLibraryLogPanel.jsx
+11:19:23 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:19:29 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:19:37 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:19:59 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:23:33 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:23:39 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:23:45 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:23:51 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:24:15 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:24:33 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:26:36 AM [vite] (client) hmr update /src/components/OperationsView.jsx
+11:29:34 AM [vite] (client) hmr update /src/components/PathRepairView.jsx, /src/components/OperationsView.jsx, /src/components/OverviewView.jsx, /src/components/SettingsView.jsx, /src/components/MediaLibraryLogPanel.jsx

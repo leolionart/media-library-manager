@@ -3041,6 +3041,8 @@ def _count_tree_nodes(nodes: list[dict[str, Any]]) -> int:
 
 
 def _storage_path_has_dir_children(manager: Any, path: ScanStoragePath) -> bool:
+    if path.backend == "rclone":
+        return True
     try:
         return any(entry.is_dir for entry in manager.list_dir(path))
     except Exception:

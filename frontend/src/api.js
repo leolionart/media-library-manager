@@ -83,12 +83,18 @@ export function resumeCurrentProcess() {
   });
 }
 
-export function fetchOperationsFolderChildren({ storageUri, rootStorageUri, timeoutMs = 8000 }) {
+export function fetchOperationsFolderChildren({ storageUri, rootStorageUri, timeoutMs }) {
+  const effectiveTimeoutMs =
+    typeof timeoutMs === "number" && timeoutMs > 0
+      ? timeoutMs
+      : String(storageUri || rootStorageUri || "").startsWith("rclone://")
+        ? 60000
+        : 15000;
   const params = new URLSearchParams({
     storage_uri: storageUri,
     root_storage_uri: rootStorageUri,
   });
-  return request(`/api/operations/folders/children?${params.toString()}`, { timeoutMs });
+  return request(`/api/operations/folders/children?${params.toString()}`, { timeoutMs: effectiveTimeoutMs });
 }
 
 export function fetchProviderItems(provider) {

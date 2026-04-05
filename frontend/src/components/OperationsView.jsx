@@ -19,6 +19,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
@@ -94,6 +95,11 @@ function normalizeCleanupErrorMessage(value) {
   return message;
 }
 
+function isRateLimitedCleanupError(value) {
+  const message = String(value || "").toLowerCase();
+  return message.includes("rate_limit_exceeded") || message.includes("ratelimitexceeded") || message.includes("quota exceeded");
+}
+
 function normalizeSearchText(value) {
   return String(value || "")
     .toLowerCase()
@@ -143,6 +149,19 @@ function cleanupFolderStatusMeta(item) {
   if (item?.empty_reason === "sidecar-only") return { color: "warning", label: "Sidecar Only" };
   if (item?.has_video) return { color: "success", label: "Has Video" };
   return { color: "warning", label: "No Video" };
+}
+
+function buildCleanupRootErrorMap(errors) {
+  return (errors || []).reduce((map, item) => {
+    const key = String(item?.root_path || item?.root_label || "").trim();
+    if (!key) return map;
+    map.set(key, {
+      rootLabel: item?.root_label || item?.root_path || "Unknown root",
+      message: normalizeCleanupErrorMessage(item?.message),
+      isRateLimited: isRateLimitedCleanupError(item?.message),
+    });
+    return map;
+  }, new Map());
 }
 
 function scoreProviderItem(item, query) {
@@ -628,6 +647,142 @@ function PlanReviewModal({
   );
 }
 
+function DuplicateFolderCleanupModal({
+  open,
+  report,
+  selectedRootCount,
+  selectedGroups,
+  selectedGroupIds,
+  selectedGroupSummary,
+  cleanupFolderRows,
+  cleanupDeleteRows,
+  cleanupGroupColumns,
+  cleanupFolderColumns,
+  selectedCleanupFolderKeys,
+  actionLoading,
+  onClose,
+  onSelectGroups,
+  onSelectFolders,
+  onToggleGroup,
+  onToggleFolder,
+  onClearSelection,
+  onDelete,
+}) {
+  const summary = report?.summary || {};
+  const groups = report?.groups || [];
+
+  return (
+    <Modal
+      open={open}
+      title="Review Duplicate Folder Cleanup"
+      onCancel={onClose}
+      footer={null}
+      width={1080}
+    >
+      <Flex vertical gap={16}>
+        <Alert
+          type="info"
+          showIcon
+          message="Review duplicate folder groups before removing anything."
+          description="Select the duplicate groups to inspect, then delete only the candidate folders you want to remove."
+        />
+
+        <Descriptions
+          bordered
+          size="small"
+          column={{ xs: 1, md: 2 }}
+          items={[
+            { key: "generated", label: "Latest Scan", children: formatDate(report?.generated_at) },
+            { key: "selected-roots", label: "Selected Roots", children: selectedRootCount },
+            { key: "groups", label: "Groups", children: Number(summary.duplicate_groups || 0) },
+            { key: "candidates", label: "Candidates", children: Number(summary.deletion_candidates || 0) },
+          ]}
+        />
+
+        <div className="plan-review-list">
+          <Flex justify="space-between" align="center" gap={12} wrap className="plan-review-list-head">
+            <Space wrap>
+              <Text strong>Duplicate groups</Text>
+              <Tag>{groups.length} items</Tag>
+            </Space>
+          </Flex>
+          <Table
+            size="small"
+            rowKey={(group) => String(group.id)}
+            pagination={{ pageSize: 8 }}
+            dataSource={groups}
+            rowSelection={{
+              selectedRowKeys: selectedGroupIds,
+              onChange: (keys) => onSelectGroups(keys.map(String)),
+            }}
+            locale={{
+              emptyText: report?.generated_at
+                ? "No duplicate folder groups found in the latest selected-root scan."
+                : "Run a duplicate folder scan to review cleanup candidates.",
+            }}
+            columns={cleanupGroupColumns}
+            onRow={(group) => ({
+              onClick: (event) => {
+                if (event.target.closest("button")) return;
+                onToggleGroup(group.id);
+              },
+            })}
+          />
+        </div>
+
+        {selectedGroups.length ? (
+          <div className="plan-review-list">
+            <Flex justify="space-between" align="center" gap={12} wrap className="plan-review-list-head">
+              <Space wrap>
+                <Text strong>Selected duplicate copies</Text>
+                <Tag>{selectedGroupSummary}</Tag>
+                <Tag>{cleanupFolderRows.length} copies</Tag>
+                <Tag>{cleanupDeleteRows.length} delete candidate{cleanupDeleteRows.length === 1 ? "" : "s"}</Tag>
+              </Space>
+              <Button onClick={onClearSelection}>Clear Selection</Button>
+            </Flex>
+            <Table
+              size="small"
+              rowKey="rowKey"
+              dataSource={cleanupFolderRows}
+              pagination={{ pageSize: 12 }}
+              rowSelection={{
+                selectedRowKeys: selectedCleanupFolderKeys,
+                onChange: (keys) => onSelectFolders(keys.map(String)),
+                getCheckboxProps: (item) => ({
+                  disabled: !item.is_deletion_candidate,
+                }),
+              }}
+              columns={cleanupFolderColumns}
+              onRow={(item) => ({
+                onClick: (event) => {
+                  if (event.target.closest("button")) return;
+                  onToggleFolder(item.rowKey);
+                },
+              })}
+            />
+          </div>
+        ) : null}
+
+        <Flex justify="space-between" align="center" gap={12} wrap>
+          <Text type="secondary">Progress continues in Process Logs after deletion starts.</Text>
+          <Space wrap>
+            <Button onClick={onClose}>Close</Button>
+            <Button
+              danger
+              disabled={!cleanupDeleteRows.length}
+              loading={actionLoading === "delete-folder-cleanup"}
+              onClick={onDelete}
+            >
+              Delete Selected Candidates
+            </Button>
+          </Space>
+        </Flex>
+      </Flex>
+    </Modal>
+  );
+}
+
 export function OperationsView() {
   const { message, modal } = AntApp.useApp();
   const [loading, setLoading] = useState(true);
@@ -645,6 +800,7 @@ export function OperationsView() {
   const [pruneEmptyDirs, setPruneEmptyDirs] = useState(true);
   const [providerModal, setProviderModal] = useState(emptyProviderModal);
   const [planReviewOpen, setPlanReviewOpen] = useState(false);
+  const [cleanupReviewOpen, setCleanupReviewOpen] = useState(false);
   const [processPollingEnabled, setProcessPollingEnabled] = useState(false);
   const [selectedCleanupGroupIds, setSelectedCleanupGroupIds] = useState([]);
   const [selectedCleanupFolderKeys, setSelectedCleanupFolderKeys] = useState([]);
@@ -775,6 +931,11 @@ export function OperationsView() {
   const folderCleanupReport = payload.empty_folder_cleanup_report || EMPTY_REPORT;
   const folderCleanupGroups = useMemo(() => folderCleanupReport.groups || [], [folderCleanupReport]);
   const folderCleanupErrors = folderCleanupReport.errors || [];
+  const cleanupRootErrors = useMemo(() => buildCleanupRootErrorMap(folderCleanupErrors), [folderCleanupErrors]);
+  const rateLimitedCleanupRoots = useMemo(
+    () => [...cleanupRootErrors.values()].filter((item) => item.isRateLimited),
+    [cleanupRootErrors]
+  );
   const selectedCleanupGroups = useMemo(
     () => folderCleanupGroups.filter((group) => selectedCleanupGroupIds.includes(String(group.id))),
     [folderCleanupGroups, selectedCleanupGroupIds]
@@ -1006,12 +1167,14 @@ export function OperationsView() {
       message.warning("Select at least two folders or roots to compare.");
       return;
     }
-    await runAction(
+    const scanResult = await runAction(
       "scan-folder-cleanup",
       () => runOperationsFolderCleanupScan(duplicateScanSelection),
       "Duplicate library folder scan completed.",
       { trackProcess: true }
     );
+    if (!scanResult) return;
+    setCleanupReviewOpen(true);
   };
 
   const handleDeleteDuplicateFolders = async () => {
@@ -1139,7 +1302,14 @@ export function OperationsView() {
             {record.kind ? <Tag>{record.kind}</Tag> : null}
             {record.is_root ? <Tag color="blue">Root</Tag> : null}
             {record.is_file ? <Tag>File</Tag> : null}
+            {record.is_root && cleanupRootErrors.get(record.path)?.isRateLimited ? <Tag color="error">Rate Limited</Tag> : null}
+            {record.is_root && cleanupRootErrors.get(record.path) && !cleanupRootErrors.get(record.path)?.isRateLimited ? (
+              <Tag color="warning">Scan Issue</Tag>
+            ) : null}
           </Space>
+          {record.is_root && cleanupRootErrors.get(record.path)?.message ? (
+            <Text type="secondary">{cleanupRootErrors.get(record.path).message}</Text>
+          ) : null}
         </Flex>
       ),
     },
@@ -1270,15 +1440,33 @@ export function OperationsView() {
               >
                 Move To Sonarr
               </Button>
-              <Button
-                type="primary"
-                ghost
-                disabled={!duplicateScanSelection.length}
-                loading={actionLoading === "scan" || actionLoading === "plan"}
-                onClick={handleDetectDuplicates}
-              >
-                Detect Duplicates
-              </Button>
+              <Tooltip title="Scan selected folders for duplicate media/files and build a cleanup plan for preview or apply.">
+                <span>
+                  <Button
+                    type="primary"
+                    ghost
+                    disabled={!duplicateScanSelection.length}
+                    loading={actionLoading === "scan" || actionLoading === "plan"}
+                    onClick={handleDetectDuplicates}
+                  >
+                    Plan Media Cleanup
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title="Compare selected roots/folders to find duplicate folder groups across local, SMB, and rclone storage.">
+                <span>
+                  <Button
+                    type="primary"
+                    ghost
+                    disabled={duplicateScanSelection.length < 2}
+                    loading={actionLoading === "scan-folder-cleanup" || actionLoading === "delete-folder-cleanup"}
+                    onClick={handleScanDuplicateFolders}
+                  >
+                    Find Duplicate Folders
+                  </Button>
+                </span>
+              </Tooltip>
+              {folderCleanupGroups.length ? <Button onClick={() => setCleanupReviewOpen(true)}>Review Folder Cleanup</Button> : null}
               {planActions.length ? <Button onClick={() => setPlanReviewOpen(true)}>Preview Changes</Button> : null}
               <Dropdown
                 trigger={["click"]}
@@ -1333,6 +1521,21 @@ export function OperationsView() {
               label: "Selected",
               children: `${duplicateScanSelection.length} folder${duplicateScanSelection.length === 1 ? "" : "s"}`,
             },
+            {
+              key: "cleanup-groups",
+              label: "Duplicate Folder Groups",
+              children: Number(folderCleanupReport.summary?.duplicate_groups || 0),
+            },
+            {
+              key: "cleanup-candidates",
+              label: "Cleanup Candidates",
+              children: Number(folderCleanupReport.summary?.deletion_candidates || 0),
+            },
+            {
+              key: "cleanup-ratelimited",
+              label: "Rate Limited Roots",
+              children: rateLimitedCleanupRoots.length,
+            },
           ]}
         />
         {filteredTableData.length ? (
@@ -1371,145 +1574,7 @@ export function OperationsView() {
         ) : (
           <Empty description={search ? "No folders match the current filter." : "No connected folders yet. Add one from Settings."} />
         )}
-      </Card>
 
-      <Card
-        title={
-          <Space>
-            <SearchOutlined />
-            <span>Duplicate Library Folders</span>
-          </Space>
-        }
-      >
-        <Flex vertical gap={16}>
-          <Flex justify="space-between" align="center" gap={12} wrap>
-            <Space wrap>
-              <Button
-                type="primary"
-                ghost
-                disabled={duplicateScanSelection.length < 2}
-                loading={actionLoading === "scan-folder-cleanup"}
-                onClick={handleScanDuplicateFolders}
-              >
-                Scan Selected Folders
-              </Button>
-              <Button
-                danger
-                disabled={!cleanupDeleteRows.length}
-                loading={actionLoading === "delete-folder-cleanup"}
-                onClick={() =>
-                  modal.confirm({
-                    title: cleanupDeleteRows.length === 1 ? "Delete this duplicate folder?" : `Delete ${cleanupDeleteRows.length} duplicate folders?`,
-                    content:
-                      cleanupDeleteRows.length === 1
-                        ? cleanupDeleteRows[0]?.path
-                        : "The selected duplicate folders will be deleted from their current roots.",
-                    okText: "Delete",
-                    okButtonProps: { danger: true },
-                    onOk: handleDeleteDuplicateFolders,
-                  })
-                }
-              >
-                Delete Selected Candidates
-              </Button>
-            </Space>
-            <Descriptions
-              size="small"
-              column={{ xs: 1, md: 4 }}
-              items={[
-                { key: "last-folder-cleanup-scan", label: "Latest Scan", children: formatDate(payload.last_empty_folder_cleanup_at) },
-                { key: "cleanup-groups", label: "Groups", children: Number(folderCleanupReport.summary?.duplicate_groups || 0) },
-                { key: "cleanup-candidates", label: "Candidates", children: Number(folderCleanupReport.summary?.deletion_candidates || 0) },
-                { key: "cleanup-selection", label: "Selected Roots", children: duplicateScanSelection.length },
-              ]}
-            />
-          </Flex>
-
-          <Alert
-            type="info"
-            showIcon
-            message="Library Finder handles real folder cleanup across local, SMB, and rclone roots."
-            description="Select at least two roots or folders above, scan for duplicate folder groups, then delete only the candidates you want to remove."
-          />
-
-          {folderCleanupErrors.length ? (
-            <Alert
-              type="error"
-              showIcon
-              message="Duplicate folder scan errors"
-              description={
-                <div className="cleanup-error-list">
-                  {folderCleanupErrors.map((item, index) => (
-                    <div key={`${item.root_label || item.root_path || "error"}-${index}`} className="cleanup-error-item">
-                      <Text strong className="cleanup-error-source">
-                        {item.root_label || item.root_path || "Unknown root"}
-                      </Text>
-                      <Text className="cleanup-error-message">{normalizeCleanupErrorMessage(item.message)}</Text>
-                    </div>
-                  ))}
-                </div>
-              }
-            />
-          ) : null}
-
-          <Table
-            size="small"
-            rowKey={(group) => String(group.id)}
-            pagination={{ pageSize: 8 }}
-            dataSource={folderCleanupGroups}
-            rowSelection={{
-              selectedRowKeys: selectedCleanupGroupIds,
-              onChange: (keys) => setSelectedCleanupGroupIds(keys.map(String)),
-            }}
-            locale={{
-              emptyText: payload.last_empty_folder_cleanup_at
-                ? "No duplicate folder groups found in the latest selected-root scan."
-                : "Run a duplicate folder scan from the selected roots to review cleanup candidates.",
-            }}
-            columns={cleanupGroupColumns}
-            onRow={(group) => ({
-              onClick: (event) => {
-                if (event.target.closest("button")) return;
-                toggleCleanupGroupSelection(group.id);
-              },
-            })}
-          />
-
-          {selectedCleanupGroups.length ? (
-            <Flex vertical gap={16}>
-              <Flex justify="space-between" align="center" gap={12} wrap>
-                <Space wrap>
-                  <Text strong>Selected Duplicate Folder Copies</Text>
-                  <Tag>{selectedCleanupGroupSummary}</Tag>
-                  <Tag>{cleanupFolderRows.length} copies</Tag>
-                  <Tag>{cleanupDeleteRows.length} delete candidate{cleanupDeleteRows.length === 1 ? "" : "s"}</Tag>
-                </Space>
-                <Button onClick={() => setSelectedCleanupGroupIds([])}>Clear Selection</Button>
-              </Flex>
-
-              <Table
-                size="small"
-                rowKey="rowKey"
-                dataSource={cleanupFolderRows}
-                pagination={{ pageSize: 12 }}
-                rowSelection={{
-                  selectedRowKeys: selectedCleanupFolderKeys,
-                  onChange: (keys) => setSelectedCleanupFolderKeys(keys.map(String)),
-                  getCheckboxProps: (item) => ({
-                    disabled: !item.is_deletion_candidate,
-                  }),
-                }}
-                columns={cleanupFolderColumns}
-                onRow={(item) => ({
-                  onClick: (event) => {
-                    if (event.target.closest("button")) return;
-                    toggleCleanupFolderSelection(item.rowKey);
-                  },
-                })}
-              />
-            </Flex>
-          ) : null}
-        </Flex>
       </Card>
 
       <MediaLibraryLogPanel
@@ -1526,20 +1591,6 @@ export function OperationsView() {
             ) : null}
             {planActions.length ? <Button onClick={() => setPlanReviewOpen(true)}>Open Change Preview</Button> : null}
           </Space>
-        }
-      />
-
-      <MediaLibraryLogPanel
-        scope="cleanup"
-        title="Folder Cleanup Logs"
-        stateData={payload}
-        currentJobData={currentJob}
-        extra={
-          currentJob?.kind === "cleanup-scan" && currentJob?.status === "running" ? (
-            <Button danger loading={actionLoading === "cancel-job"} onClick={handleCancelCurrentJob}>
-              Stop Cleanup Job
-            </Button>
-          ) : null
         }
       />
 
@@ -1595,6 +1646,41 @@ export function OperationsView() {
         onPruneEmptyDirsChange={setPruneEmptyDirs}
         onDryRun={handleDryRunFromReview}
         onExecute={handleExecuteFromReview}
+      />
+      <DuplicateFolderCleanupModal
+        open={cleanupReviewOpen}
+        report={folderCleanupReport}
+        selectedRootCount={duplicateScanSelection.length}
+        selectedGroups={selectedCleanupGroups}
+        selectedGroupIds={selectedCleanupGroupIds}
+        selectedGroupSummary={selectedCleanupGroupSummary}
+        cleanupFolderRows={cleanupFolderRows}
+        cleanupDeleteRows={cleanupDeleteRows}
+        cleanupGroupColumns={cleanupGroupColumns}
+        cleanupFolderColumns={cleanupFolderColumns}
+        selectedCleanupFolderKeys={selectedCleanupFolderKeys}
+        actionLoading={actionLoading}
+        onClose={() => setCleanupReviewOpen(false)}
+        onSelectGroups={setSelectedCleanupGroupIds}
+        onSelectFolders={setSelectedCleanupFolderKeys}
+        onToggleGroup={toggleCleanupGroupSelection}
+        onToggleFolder={toggleCleanupFolderSelection}
+        onClearSelection={() => setSelectedCleanupGroupIds([])}
+        onDelete={() =>
+          modal.confirm({
+            title: cleanupDeleteRows.length === 1 ? "Delete this duplicate folder?" : `Delete ${cleanupDeleteRows.length} duplicate folders?`,
+            content:
+              cleanupDeleteRows.length === 1
+                ? cleanupDeleteRows[0]?.path
+                : "The selected duplicate folders will be deleted from their current roots.",
+            okText: "Delete",
+            okButtonProps: { danger: true },
+            onOk: async () => {
+              await handleDeleteDuplicateFolders();
+              setCleanupReviewOpen(false);
+            },
+          })
+        }
       />
     </Flex>
   );
