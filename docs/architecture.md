@@ -150,7 +150,7 @@ Giữ logic scan các folder trùng tên giữa nhiều roots:
 
 Giữ logic path repair:
 
-- scan item provider có path lỗi khi path hiện tại không tồn tại local và cũng không map được vào connected roots
+- scan item provider mà chính Radarr/Sonarr đang báo `missing`
 - index connected roots
 - rank candidate folders theo title similarity
 - update provider path

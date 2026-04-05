@@ -132,3 +132,9 @@ Frontend hiện tải phần lớn UI từ payload này cộng với một số 
 - `/api/operations/folders`
 - `/api/operations/folders/children`
 - `/api/operations/folders/tree`
+
+Lưu ý cho `path_repair_report`:
+
+- report này hiện phản ánh item `missing` theo chính Radarr/Sonarr
+- không dùng report này như nguồn sự thật để suy luận `path_not_found` từ connected roots
+- việc tìm folder thay thế đúng vẫn là bước search riêng sau khi user chọn từng issue

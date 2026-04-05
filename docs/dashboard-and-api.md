@@ -194,9 +194,10 @@ Payload:
 
 ### `POST /api/path-repair/scan`
 
-Scan item Radarr/Sonarr có path lỗi.
-Flow này chỉ phát hiện item có `path` bị thiếu, không còn là directory hợp lệ, hoặc không map được vào bất kỳ connected root nào đã connect.
-Với Radarr, scan hiện chỉ đưa vào report các movie đã available/released và đang `missing` trong provider để tránh lẫn các item chưa phát hành hoặc đã có file.
+Scan item Radarr/Sonarr mà chính provider đang báo `missing`.
+Flow này không còn tự so sánh connected roots hoặc local path để suy luận `path_not_found`.
+Với Radarr, scan chỉ đưa vào report các movie đã available/released và đang `missing` trong provider để tránh lẫn các item chưa phát hành hoặc đã có file.
+Với Sonarr, scan chỉ đưa vào report các series mà thống kê của Sonarr cho thấy chưa có episode files.
 
 ### `POST /api/path-repair/search`
 

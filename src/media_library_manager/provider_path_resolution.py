@@ -19,6 +19,7 @@ class ResolvedProviderDirectory:
 
 
 TRAILING_DIGITS_RE = re.compile(r"^(.*?)(\d+)$")
+GENERIC_ROOT_HINTS = {"data", "media", "library", "libraries", "storage", "rclone", "smb"}
 
 
 def resolve_provider_directory(
@@ -170,6 +171,10 @@ def _root_match_candidates(*, root: RootConfig, storage_path: StoragePath) -> li
     storage_segments = _root_match_segments(storage_path)
     if storage_segments:
         candidates.append(storage_segments)
+    if storage_path.backend == "rclone":
+        for rclone_alias_segments in _rclone_alias_candidates(storage_path=storage_path, root=root):
+            if rclone_alias_segments and rclone_alias_segments not in candidates:
+                candidates.append(rclone_alias_segments)
     if storage_path.backend == "smb":
         share_alias_segments = _smb_share_alias_segments(storage_path)
         if share_alias_segments and share_alias_segments not in candidates:
@@ -220,6 +225,30 @@ def _smb_share_alias_segments(path: StoragePath) -> list[str]:
     return [alias, *tail]
 
 
+def _rclone_alias_candidates(*, storage_path: StoragePath, root: RootConfig) -> list[list[str]]:
+    tail = _path_segments(storage_path.normalized_path())
+    candidates: list[list[str]] = []
+    aliases = _extract_root_hints(root)
+    for alias in aliases:
+        normalized = _normalize_root_hint(alias)
+        if normalized and normalized != _normalize_root_hint(storage_path.rclone_remote):
+            candidate = [normalized, *tail]
+            if candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _extract_root_hints(root: RootConfig) -> list[str]:
+    hints: list[str] = []
+    for value in (root.label, str(root.path), root.storage_uri, root.share_name):
+        text = str(value or "")
+        for part in [*re.split(r"[^A-Za-z0-9]+", text), *_path_segments(text)]:
+            normalized = _normalize_root_hint(part)
+            if normalized and normalized not in GENERIC_ROOT_HINTS and normalized not in hints:
+                hints.append(normalized)
+    return hints
+
+
 def _segments_equivalent(left: str, right: str) -> bool:
     left_normalized = _normalize_segment(left)
     right_normalized = _normalize_segment(right)
@@ -230,6 +259,11 @@ def _segments_equivalent(left: str, right: str) -> bool:
 
 def _normalize_segment(value: str) -> str:
     return str(value or "").strip().strip("/").lower()
+
+
+def _normalize_root_hint(value: str) -> str:
+    normalized = _normalize_segment(value)
+    return re.sub(r"[^a-z0-9]+", "", normalized)
 
 
 def _segment_alias(value: str) -> str:

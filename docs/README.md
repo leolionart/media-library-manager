@@ -6,7 +6,7 @@ Thư mục `docs/` mô tả trạng thái hiện tại của dự án sau khi:
 - backend chuyển mạnh sang SMB-native
 - folder inventory có cả list và tree
 - cleanup có thể resolve provider path qua connected roots trước khi báo thiếu media
-- path repair scan chỉ phát hiện provider items có folder path lỗi; việc tìm folder đúng là bước search thủ công riêng
+- path repair scan hiện chỉ lấy item mà Radarr/Sonarr đang báo `missing`; việc tìm folder đúng là bước search thủ công riêng
 - current job có log chi tiết, cancel request, và persist qua refresh
 - dashboard có 5 màn chính và dùng chung log component cho các flow dài
 

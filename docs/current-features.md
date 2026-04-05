@@ -65,8 +65,9 @@ Cleanup không dùng `plan` và `apply`.
 Hiện có:
 
 - scan item Radarr/Sonarr có path lỗi
-- scan chỉ dùng để phát hiện item có provider path đang thiếu, không còn là directory hợp lệ, hoặc không map được vào bất kỳ connected root nào đã connect
+- scan report hiện chỉ lấy theo trạng thái `missing` mà chính Radarr/Sonarr báo, không còn tự so sánh connected roots để suy luận `path_not_found`
 - với Radarr, scan chỉ đưa vào report các movie đã available/released và đang bị `missing` trong provider
+- với Sonarr, scan chỉ đưa vào report các series mà provider đang báo thiếu episode files theo thống kê của Sonarr
 - với Sonarr, search và path-mapping hiện kiểm tra cả rclone lẫn SMB series roots, kể cả alias Synology-style như `usbshare/Series`
 - search folder phù hợp trong connected roots khi user chủ động bấm tìm
 - update path trong provider

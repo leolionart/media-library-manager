@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from .models import RootConfig
-from .provider_path_resolution import provider_path_maps_to_connected_root
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
 from .rclone_cli import list_entries_recursive
@@ -78,6 +77,7 @@ def scan_provider_path_issues(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     start_provider_index: int = 1,
 ) -> dict[str, Any]:
+    _ = roots
     _ = lan_connections
     providers = [provider for provider in ["radarr", "sonarr"] if integrations.get(provider, {}).get("enabled")]
     issues: list[dict[str, Any]] = []
@@ -140,15 +140,7 @@ def scan_provider_path_issues(
                         }
                     )
                 continue
-            raw_path = str(item.get("path") or "").strip()
-            status = _provider_path_status(raw_path, roots=roots)
-            if provider == "radarr":
-                status = "item_missing"
-            elif status == "ok" and _is_item_missing_in_provider(provider, item):
-                status = "item_missing"
-
-            if status != "ok":
-                issues.append(_build_issue(provider, item, reason=status))
+            issues.append(_build_issue(provider, item, reason="item_missing"))
 
             if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
                 progress_callback(
@@ -204,18 +196,19 @@ def _is_item_missing_in_provider(provider: str, item: dict[str, Any]) -> bool:
             return False
         return not bool(item.get("hasFile"))
     if provider == "sonarr":
-        if "statistics" not in item:
-            return False
         stats = item.get("statistics") or {}
-        # A series is missing if it has monitored episodes but no files
-        return int(stats.get("episodeFileCount") or 0) == 0 and int(stats.get("episodeCount") or 0) > 0
+        episode_count = int(stats.get("episodeCount") or 0)
+        episode_file_count = int(stats.get("episodeFileCount") or 0)
+        return episode_count > 0 and episode_file_count == 0
     return False
 
 
 def _should_include_item_in_path_repair_scan(provider: str, item: dict[str, Any]) -> bool:
     if provider == "radarr":
         return _is_item_released_in_provider(provider, item) and _is_item_missing_in_provider(provider, item)
-    return True
+    if provider == "sonarr":
+        return _is_item_missing_in_provider(provider, item)
+    return False
 
 
 def _is_item_released_in_provider(provider: str, item: dict[str, Any]) -> bool:
@@ -241,18 +234,6 @@ def _provider_date_has_reached(value: Any) -> bool:
     if release_at.tzinfo is None:
         release_at = release_at.replace(tzinfo=UTC)
     return release_at <= datetime.now(UTC)
-
-
-def _provider_path_status(raw_path: str, *, roots: list[RootConfig]) -> str:
-    text = str(raw_path or "").strip()
-    if not text:
-        return "missing_path"
-    local_path = Path(text).expanduser().resolve()
-    if not local_path.exists():
-        return "ok" if provider_path_maps_to_connected_root(raw_path=text, roots=roots) else "path_not_found"
-    if not local_path.is_dir():
-        return "path_not_directory"
-    return "ok"
 
 
 def update_provider_item_path(integrations: dict[str, Any], *, provider: str, item_id: int, new_path: str) -> dict[str, Any]:

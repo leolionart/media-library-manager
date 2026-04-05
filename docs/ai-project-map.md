@@ -34,7 +34,7 @@ Dashboard hiện có 5 màn:
    Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots.
 
 4. `Library Path Repair`
-   Màn sửa item của Radarr/Sonarr khi path lưu trong provider không còn tồn tại. Có scan lỗi, tìm folder thủ công, cập nhật path, hoặc remove item khỏi provider mà không xóa media file. Với Radarr, scan chỉ giữ lại movie đã available/released và đang missing trong provider để tránh report phình do item chưa phát hành. Với Sonarr, search và path mapping phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
+   Màn sửa item của Radarr/Sonarr khi user muốn tìm lại folder đúng cho item mà chính provider đang báo thiếu. Scan hiện không còn tự so sánh connected roots để suy luận `path_not_found`; nó chỉ giữ lại item mà Radarr/Sonarr đang báo `missing`. Search và path mapping vẫn phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
 
 5. `Settings`
    Màn cấu hình roots, SMB profiles, LAN discovery, Radarr/Sonarr, sync options, và manual sync.
@@ -249,7 +249,7 @@ Workflow này cũng tách khỏi duplicate workflow.
 Luồng:
 
 1. `POST /api/path-repair/scan`
-   Tìm item của Radarr/Sonarr có path bị thiếu hoặc không còn là directory hợp lệ.
+   Lấy item của Radarr/Sonarr mà chính provider đang báo `missing`, để user xử lý tìm folder đúng thủ công.
 
 2. `POST /api/path-repair/search`
    Tìm folder phù hợp trong connected roots bằng normalized title và score match.
@@ -262,10 +262,9 @@ Luồng:
 
 Điểm quan trọng:
 
-- scan path repair chỉ xác nhận path mà provider đang lưu có còn là một local directory hợp lệ hay không
-- scan coi item là hợp lệ nếu path local còn dùng được hoặc map được vào một connected root
-- scan không tự kiểm tra từng mapped path trên SMB/rclone và không tự gợi ý replacement path
-- tìm gợi ý thủ công vẫn là một bước search riêng theo từng item
+- scan path repair không còn tự suy luận `path_not_found` từ connected roots hoặc local filesystem
+- scan chỉ giữ lại item mà provider đang báo `missing`
+- scan không tự gợi ý replacement path; tìm gợi ý thủ công vẫn là một bước search riêng theo từng item
 - sau update/delete, backend prune issue tương ứng ra khỏi saved repair report
 - search có log realtime riêng vì đây là thao tác index/scoring có thể kéo dài
 

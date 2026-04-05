@@ -254,6 +254,58 @@ class PathRepairTests(unittest.TestCase):
             )
         )
 
+    def test_provider_path_maps_to_connected_root_accepts_rclone_root_label_alias(self) -> None:
+        roots = [
+            RootConfig(
+                path=Path("/rclone/aitran"),
+                label="DATA gdrive",
+                kind="mixed",
+                storage_uri="rclone://aitran/",
+            ),
+            RootConfig(
+                path=Path("/rclone/naai"),
+                label="DATA drive",
+                kind="mixed",
+                storage_uri="rclone://naai/",
+            ),
+        ]
+
+        self.assertTrue(
+            provider_path_maps_to_connected_root(
+                raw_path="/volume2/DATA/rclone/gdrive/TV Series/Sweet Tooth",
+                roots=roots,
+            )
+        )
+        self.assertTrue(
+            provider_path_maps_to_connected_root(
+                raw_path="/volume2/DATA/rclone/drive/Series/Gen V",
+                roots=roots,
+            )
+        )
+
+    def test_provider_path_maps_to_connected_root_prefers_specific_drive_alias_over_generic_rclone_hint(self) -> None:
+        roots = [
+            RootConfig(
+                path=Path("/rclone/aitran"),
+                label="DATA gdrive",
+                kind="mixed",
+                storage_uri="rclone://aitran/",
+            ),
+            RootConfig(
+                path=Path("/rclone/naai"),
+                label="DATA drive",
+                kind="mixed",
+                storage_uri="rclone://naai/",
+            ),
+        ]
+
+        self.assertTrue(
+            provider_path_maps_to_connected_root(
+                raw_path="/volume2/DATA/rclone/drive/Series/ONE PIECE (2023)",
+                roots=roots,
+            )
+        )
+
     def test_resolve_provider_directory_maps_usbshare_alias_to_connected_root(self) -> None:
         class FakeStorageManager:
             def exists(self, path) -> bool:
@@ -283,21 +335,11 @@ class PathRepairTests(unittest.TestCase):
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.storage_uri, "smb://usbshare1/Series/BEEF?connection_id=smb-1")
 
-    @patch("media_library_manager.path_repair.default_storage_manager")
     @patch("media_library_manager.path_repair.RadarrClient.list_movies")
     def test_scan_provider_path_issues_accepts_path_resolved_through_connected_smb_root(
         self,
         list_movies_mock,
-        default_storage_manager_mock,
     ) -> None:
-        class FakeStorageManager:
-            def exists(self, path) -> bool:
-                return path.backend == "smb" and path.share_name == "DATA" and path.normalized_path() == "/rclone/drive/Movies/Edge of Tomorrow (2014)"
-
-            def is_dir(self, path) -> bool:
-                return self.exists(path)
-
-        default_storage_manager_mock.return_value = FakeStorageManager()
         list_movies_mock.return_value = [
             {
                 "id": 15,
@@ -328,24 +370,11 @@ class PathRepairTests(unittest.TestCase):
         self.assertEqual(result["summary"]["issues"], 0)
         self.assertEqual(result["issues"], [])
 
-    @patch("media_library_manager.path_repair.default_storage_manager")
     @patch("media_library_manager.path_repair.RadarrClient.list_movies")
     def test_scan_provider_path_issues_accepts_path_resolved_through_connected_rclone_mount_alias(
         self,
         list_movies_mock,
-        default_storage_manager_mock,
     ) -> None:
-        class FakeStorageManager:
-            def exists(self, path) -> bool:
-                return path.backend == "rclone" and path.rclone_remote == "aitran" and path.normalized_path() == "/Movies/Borderlands (2024)"
-
-            def is_dir(self, path) -> bool:
-                return self.exists(path)
-
-            def list_dir(self, path) -> list[object]:
-                return []
-
-        default_storage_manager_mock.return_value = FakeStorageManager()
         list_movies_mock.return_value = [
             {
                 "id": 3,
@@ -494,6 +523,109 @@ class PathRepairTests(unittest.TestCase):
         result = scan_provider_path_issues(
             {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
             [RootConfig(path=Path("/volume2/DATA/rclone/gdrive/Movies"), label="Movies", kind="movie", storage_uri="rclone://aitran/Movies")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        self.assertEqual(result["issues"], [])
+
+    @patch("media_library_manager.path_repair.SonarrClient.list_series")
+    def test_scan_provider_path_issues_keeps_sonarr_series_when_provider_reports_it_missing(self, list_series_mock) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            series_root = Path(raw_tmp) / "TV Series"
+            series_path = series_root / "Parasyte - The Grey"
+            series_path.mkdir(parents=True)
+            list_series_mock.return_value = [
+                {
+                    "id": 8,
+                    "title": "Parasyte: The Grey",
+                    "year": 2024,
+                    "path": str(series_path),
+                    "statistics": {
+                        "episodeCount": 6,
+                        "episodeFileCount": 0,
+                    },
+                }
+            ]
+
+            result = scan_provider_path_issues(
+                {"radarr": {"enabled": False}, "sonarr": {"enabled": True, "base_url": "http://sonarr.local", "api_key": "abc"}},
+                [RootConfig(path=series_root, label="TV Series", kind="series")],
+                {"smb": []},
+            )
+
+            self.assertEqual(result["summary"]["issues"], 1)
+            self.assertEqual(result["issues"][0]["reason"], "item_missing")
+
+    @patch("media_library_manager.path_repair.SonarrClient.list_series")
+    def test_scan_provider_path_issues_keeps_sonarr_series_when_path_is_missing(self, list_series_mock) -> None:
+        list_series_mock.return_value = [
+            {
+                "id": 8,
+                "title": "Parasyte: The Grey",
+                "year": 2024,
+                "path": "/volume2/DATA/rclone/gdrive/TV Series/Parasyte - The Grey",
+                "statistics": {
+                    "episodeCount": 6,
+                    "episodeFileCount": 0,
+                },
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": False}, "sonarr": {"enabled": True, "base_url": "http://sonarr.local", "api_key": "abc"}},
+            [RootConfig(path=Path("/volume5/TV Series"), label="TV Series", kind="series")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 1)
+        self.assertEqual(result["issues"][0]["reason"], "item_missing")
+
+    @patch("media_library_manager.path_repair.SonarrClient.list_series")
+    def test_scan_provider_path_issues_keeps_sonarr_series_when_rclone_alias_maps_to_connected_root(
+        self,
+        list_series_mock,
+    ) -> None:
+        list_series_mock.return_value = [
+            {
+                "id": 4,
+                "title": "Sweet Tooth",
+                "year": 2021,
+                "path": "/volume2/DATA/rclone/gdrive/TV Series/Sweet Tooth",
+                "statistics": {
+                    "episodeCount": 24,
+                    "episodeFileCount": 0,
+                },
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": False}, "sonarr": {"enabled": True, "base_url": "http://sonarr.local", "api_key": "abc"}},
+            [RootConfig(path=Path("/volume2/DATA/rclone/gdrive"), label="DATA gdrive", kind="mixed", storage_uri="rclone://aitran/")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 1)
+        self.assertEqual(result["issues"][0]["reason"], "item_missing")
+
+    @patch("media_library_manager.path_repair.SonarrClient.list_series")
+    def test_scan_provider_path_issues_skips_sonarr_series_when_provider_has_episode_files(self, list_series_mock) -> None:
+        list_series_mock.return_value = [
+            {
+                "id": 441,
+                "title": "ONE PIECE (2023)",
+                "year": 2023,
+                "path": "/volume2/DATA/rclone/drive/Series/ONE PIECE (2023)",
+                "statistics": {
+                    "episodeCount": 16,
+                    "episodeFileCount": 16,
+                },
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": False}, "sonarr": {"enabled": True, "base_url": "http://sonarr.local", "api_key": "abc"}},
+            [RootConfig(path=Path("/rclone/naai"), label="DATA drive", kind="mixed", storage_uri="rclone://naai/")],
             {"smb": []},
         )
 
