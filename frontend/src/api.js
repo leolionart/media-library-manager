@@ -36,16 +36,15 @@ export async function request(url, options = {}) {
 }
 
 export async function fetchOperationsData() {
-  const [state, process, mounts] = await Promise.all([
+  const [state, process] = await Promise.all([
     request("/api/state"),
-    request("/api/process"),
-    request("/api/system/mounts")
+    request("/api/process")
   ]);
 
   return {
     state,
     process: process.current_job || null,
-    mounts: mounts.mounts || [],
+    mounts: [],
     operationsFolders: [],
     operationsSummary: { items: 0, roots: state?.roots?.length || 0 }
   };

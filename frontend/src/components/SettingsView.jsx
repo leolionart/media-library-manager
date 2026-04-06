@@ -233,6 +233,18 @@ function rootTypeLabel(record) {
   return "Local";
 }
 
+function parsePseudoSmbPath(value) {
+  const parts = String(value || "")
+    .split("/")
+    .filter(Boolean);
+  if (parts.length < 3 || parts[0] !== "smb") return null;
+  return {
+    connectionId: parts[1],
+    shareName: parts[2],
+    path: parts.length > 3 ? `/${parts.slice(3).join("/")}` : "/",
+  };
+}
+
 function ProviderSettingsCard({ provider, testResult, onSave, onTest, saving, testing }) {
   const title = provider === "radarr" ? "Radarr" : "Sonarr";
 
@@ -431,6 +443,10 @@ export function SettingsView() {
   }));
 
   const loadLocalPathBrowser = async (path) => {
+    const smbPath = parsePseudoSmbPath(path);
+    if (smbPath) {
+      return loadSmbPathBrowser(smbPath);
+    }
     setPathBrowser((current) => ({ ...current, open: true, mode: "local", loading: true, error: "" }));
     try {
       const result = await browseLocalPath(path);

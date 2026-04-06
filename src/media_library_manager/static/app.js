@@ -43379,7 +43379,11 @@ var TV = /* @__PURE__ */ c(h(), 1), EV = {
 			headerBg: "#2d2d35",
 			headerColor: "#6a6a6a",
 			rowHoverBg: "#32323c",
-			borderColor: "#3a3a44"
+			borderColor: "#3a3a44",
+			cellPaddingInline: 8,
+			cellPaddingVertical: 10,
+			cellPaddingInlineSM: 6,
+			cellPaddingVerticalSM: 8
 		},
 		Modal: {
 			contentBg: "#282830",
@@ -43755,15 +43759,11 @@ async function oH(e, t = {}) {
 	}
 }
 async function sH() {
-	let [e, t, n] = await Promise.all([
-		oH("/api/state"),
-		oH("/api/process"),
-		oH("/api/system/mounts")
-	]);
+	let [e, t] = await Promise.all([oH("/api/state"), oH("/api/process")]);
 	return {
 		state: e,
 		process: t.current_job || null,
-		mounts: n.mounts || [],
+		mounts: [],
 		operationsFolders: [],
 		operationsSummary: {
 			items: 0,
@@ -46178,17 +46178,30 @@ function pW(e) {
 	let t = fW(e.display_path || e.path || ""), n = fW(e.root_label || "");
 	return t ? t === e.label ? n ? `${n} / ${e.label}` : e.label : t : "-";
 }
-function mW(e, t = 3) {
+function mW(e) {
+	let t = String(e?.root_storage_uri || e?.storage_uri || "").toLowerCase();
+	return t.startsWith("smb://") ? {
+		label: "SMB",
+		color: "geekblue"
+	} : t.startsWith("rclone://") ? {
+		label: "Rclone",
+		color: "purple"
+	} : {
+		label: "Local",
+		color: "default"
+	};
+}
+function hW(e, t = 3) {
 	let n = e.map((e) => fW(e?.folder_name || e?.canonical_name || e?.label || e?.path || "")).filter(Boolean);
 	return n.length ? n.length <= t ? n.join(", ") : `${n.slice(0, t).join(", ")} +${n.length - t} more` : "None";
 }
-function hW(e, t) {
+function gW(e, t) {
 	if (e === t) return !0;
 	if (e.length !== t.length) return !1;
 	for (let n = 0; n < e.length; n += 1) if (String(e[n]) !== String(t[n])) return !1;
 	return !0;
 }
-function gW(e) {
+function _W(e) {
 	return e?.empty_reason === "inferior-video-set" ? {
 		color: "volcano",
 		label: "Inferior Episode Set"
@@ -46206,17 +46219,20 @@ function gW(e) {
 		label: "No Video"
 	};
 }
-function _W(e) {
+function vW(e, t = [], n = []) {
+	let r = new Set((n || []).map((e) => String(e?.id || "").trim()).filter(Boolean)), i = new Set((t || []).map((e) => String(e?.path || "").trim()).filter(Boolean));
 	return (e || []).reduce((e, t) => {
 		let n = String(t?.root_path || t?.root_label || "").trim();
-		return n && e.set(n, {
+		if (!n) return e;
+		let a = lW(t?.message), o = String(t?.connection_id || "").trim();
+		return a.startsWith("connection not found:") && (o && r.has(o) || i.has(n)) || e.set(n, {
 			rootLabel: t?.root_label || t?.root_path || "Unknown root",
-			message: lW(t?.message),
+			message: a,
 			isRateLimited: uW(t?.message)
 		}), e;
 	}, /* @__PURE__ */ new Map());
 }
-function vW(e, t) {
+function yW(e, t) {
 	let n = dW(t), r = dW(e.title);
 	if (!n) return 0;
 	if (r === n) return 100;
@@ -46225,14 +46241,14 @@ function vW(e, t) {
 	let i = n.split(" ").filter(Boolean), a = new Set(r.split(" ").filter(Boolean));
 	return i.filter((e) => a.has(e)).length * 10;
 }
-function yW(e) {
+function bW(e) {
 	let t = String(e || "").toLowerCase();
 	return t === "move" ? "Move" : t === "delete" ? "Delete" : t === "review" ? "Check" : e || "Action";
 }
-function bW(e) {
+function xW(e) {
 	return String(e || "unknown_action").replaceAll("_", " ");
 }
-function xW(e) {
+function SW(e) {
 	let t = String(e || "");
 	if (!t) return "";
 	try {
@@ -46241,46 +46257,46 @@ function xW(e) {
 		return t;
 	}
 }
-function SW(e) {
+function CW(e) {
 	let t = String(e?.details?.canonical_name || "").trim();
 	if (t) return t;
-	let n = xW(e?.keep_path || e?.destination || e?.source || ""), r = n.split("?")[0].split("/").filter(Boolean);
+	let n = SW(e?.keep_path || e?.destination || e?.source || ""), r = n.split("?")[0].split("/").filter(Boolean);
 	return r[r.length - 1] || n || "Upcoming change";
 }
-function CW(e) {
+function wW(e) {
 	let t = [];
 	return e.source && t.push({
 		key: `source-${e.source}`,
 		tone: "remove",
 		sign: "-",
 		label: e.type === "move" ? "from" : e.type === "delete" ? "remove" : "check",
-		path: xW(e.source)
+		path: SW(e.source)
 	}), e.destination && t.push({
 		key: `destination-${e.destination}`,
 		tone: "add",
 		sign: "+",
 		label: e.type === "review" ? "suggested folder" : "to",
-		path: xW(e.destination)
+		path: SW(e.destination)
 	}), e.keep_path && e.keep_path !== e.destination && t.push({
 		key: `keep-${e.keep_path}`,
 		tone: "keep",
 		sign: "+",
 		label: "keep",
-		path: xW(e.keep_path)
+		path: SW(e.keep_path)
 	}), t;
 }
-function wW(e) {
+function TW(e) {
 	return ["apply", "execute"].includes(String(e || "").toLowerCase());
 }
-function TW(e, t, n, r) {
+function EW(e, t, n, r) {
 	if (!e) return null;
-	if (!t || !wW(t.mode)) return e;
+	if (!t || !TW(t.mode)) return e;
 	let i = String(t.plan_generated_at || "").trim(), a = String(e.generated_at || "").trim();
 	if (i && a) return i === a ? null : e;
 	let o = Date.parse(a || n || "") || 0, s = Date.parse(t.generated_at || r || "") || 0;
 	return o && s && s >= o ? null : e;
 }
-function EW(e, t) {
+function DW(e, t) {
 	let n = (e || []).map((e) => ({
 		key: e.storage_uri || e.path,
 		label: e.label,
@@ -46322,7 +46338,7 @@ function EW(e, t) {
 		};
 	});
 }
-function DW(e) {
+function OW(e) {
 	return (e || []).filter((e) => e && !e.is_file).map((e) => ({
 		label: e.label,
 		path: e.path,
@@ -46336,7 +46352,7 @@ function DW(e) {
 		root_storage_uri: String(e.root_storage_uri || "").includes("://") ? e.root_storage_uri : ""
 	}));
 }
-function OW(e, t, n) {
+function kW(e, t, n) {
 	return e.map((e) => e.key === t ? {
 		...e,
 		children: n.length ? n : void 0,
@@ -46345,16 +46361,16 @@ function OW(e, t, n) {
 		is_loading: !1
 	} : e.children?.length ? {
 		...e,
-		children: OW(e.children, t, n)
-	} : e);
-}
-function kW(e, t, n) {
-	return e.map((e) => e.key === t ? n(e) : e.children?.length ? {
-		...e,
 		children: kW(e.children, t, n)
 	} : e);
 }
-function AW(e, t) {
+function AW(e, t, n) {
+	return e.map((e) => e.key === t ? n(e) : e.children?.length ? {
+		...e,
+		children: AW(e.children, t, n)
+	} : e);
+}
+function jW(e, t) {
 	return t ? e.map((e) => {
 		if ([
 			e.label,
@@ -46378,7 +46394,7 @@ function AW(e, t) {
 		} : null;
 	}).filter(Boolean) : e;
 }
-function jW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, actionLoading: i, onCancel: a, onQueryChange: o, onSelectItem: s, onPreview: c, onConfirm: l }) {
+function MW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, actionLoading: i, onCancel: a, onQueryChange: o, onSelectItem: s, onPreview: c, onConfirm: l }) {
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e.open,
 		title: e.provider === "radarr" ? "Move Folder To Radarr Movie" : "Move Folder To Sonarr Series",
@@ -46488,7 +46504,7 @@ function jW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, 
 		})
 	});
 }
-function MW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, actionLoading: i, onClose: a, onDeleteLowerQualityChange: o, onPruneEmptyDirsChange: s, onDryRun: c, onExecute: l }) {
+function NW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, actionLoading: i, onClose: a, onDeleteLowerQualityChange: o, onPruneEmptyDirsChange: s, onDryRun: c, onExecute: l }) {
 	let u = t?.summary || {}, d = t?.actions || [];
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e,
@@ -46584,11 +46600,11 @@ function MW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 										children: [
 											/* @__PURE__ */ (0, $.jsx)(dB, {
 												color: e.type === "delete" ? "error" : e.type === "review" ? "warning" : "processing",
-												children: yW(e.type)
+												children: bW(e.type)
 											}),
 											/* @__PURE__ */ (0, $.jsx)(iW, {
 												strong: !0,
-												children: bW(e.reason)
+												children: xW(e.reason)
 											}),
 											e.details?.kind ? /* @__PURE__ */ (0, $.jsx)(dB, { children: String(e.details.kind).toUpperCase() }) : null,
 											Number.isFinite(Number(e.details?.candidate_quality_rank)) ? /* @__PURE__ */ (0, $.jsxs)(dB, { children: ["Candidate Q", Number(e.details?.candidate_quality_rank)] }) : null,
@@ -46599,11 +46615,11 @@ function MW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 										]
 									}), /* @__PURE__ */ (0, $.jsx)(iW, {
 										className: "plan-review-entry-title",
-										children: SW(e)
+										children: CW(e)
 									})]
 								}), /* @__PURE__ */ (0, $.jsx)("div", {
 									className: "plan-review-diff",
-									children: CW(e).map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
+									children: wW(e).map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
 										className: `plan-review-diff-line tone-${e.tone}`,
 										children: [
 											/* @__PURE__ */ (0, $.jsx)(iW, {
@@ -46658,7 +46674,7 @@ function MW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 		})
 	});
 }
-function NW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selectedGroupIds: i, selectedGroupSummary: a, cleanupFolderRows: o, cleanupDeleteRows: s, cleanupGroupColumns: c, cleanupFolderColumns: l, selectedCleanupFolderKeys: u, actionLoading: d, onClose: f, onSelectGroups: p, onSelectFolders: m, onToggleGroup: h, onToggleFolder: g, onClearSelection: _, onDelete: v }) {
+function PW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selectedGroupIds: i, selectedGroupSummary: a, cleanupFolderRows: o, cleanupDeleteRows: s, cleanupGroupColumns: c, cleanupFolderColumns: l, selectedCleanupFolderKeys: u, actionLoading: d, onClose: f, onSelectGroups: p, onSelectFolders: m, onToggleGroup: h, onToggleFolder: g, onClearSelection: _, onDelete: v }) {
 	let y = t?.summary || {}, b = t?.groups || [];
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e,
@@ -46806,7 +46822,7 @@ function NW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selec
 		})
 	});
 }
-function PW() {
+function FW() {
 	let { message: e, modal: t } = Q_.useApp(), [n, r] = (0, C.useState)(!0), [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(oW), [c, l] = (0, C.useState)(null), [u, d] = (0, C.useState)([]), [f, p] = (0, C.useState)([]), [m, h] = (0, C.useState)({
 		items: 0,
 		roots: 0
@@ -46816,7 +46832,7 @@ function PW() {
 			items: 0,
 			roots: 0
 		});
-		let t = EW(e.state?.roots || [], e.operationsFolders || []);
+		let t = DW(e.state?.roots || [], e.operationsFolders || []);
 		p(t), _(t.filter((e) => e.children?.length).map((e) => e.key));
 		let n = /* @__PURE__ */ new Set(), r = (e) => e.forEach((e) => {
 			n.add(e.key), e.children?.length && r(e.children);
@@ -46854,19 +46870,23 @@ function PW() {
 			});
 		};
 		return t(H), e;
-	}, [H]), W = (0, C.useMemo)(() => AW(H, dW(b)), [b, H]), ee = (0, C.useMemo)(() => S.map((e) => U.get(e)).filter(Boolean), [U, S]), G = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && !e.is_file), [ee]), K = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && e.is_file), [ee]), te = (0, C.useMemo)(() => ee.filter((e) => e.is_root), [ee]), q = G.length === 1 && te.length === 0 && K.length === 0 ? G[0] : null, ne = !!(o.integrations?.radarr?.enabled && q), re = !!(o.integrations?.sonarr?.enabled && q), ie = G.map((e) => e.path), ae = te.map((e) => e.path), oe = (0, C.useMemo)(() => DW(ee), [ee]), se = {
+	}, [H]), W = (0, C.useMemo)(() => jW(H, dW(b)), [b, H]), ee = (0, C.useMemo)(() => S.map((e) => U.get(e)).filter(Boolean), [U, S]), G = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && !e.is_file), [ee]), K = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && e.is_file), [ee]), te = (0, C.useMemo)(() => ee.filter((e) => e.is_root), [ee]), q = G.length === 1 && te.length === 0 && K.length === 0 ? G[0] : null, ne = !!(o.integrations?.radarr?.enabled && q), re = !!(o.integrations?.sonarr?.enabled && q), ie = G.map((e) => e.path), ae = te.map((e) => e.path), oe = (0, C.useMemo)(() => OW(ee), [ee]), se = {
 		roots: m.roots || o.roots?.length || 0,
 		nodes: u.length || 0,
 		max_depth: "Unlimited"
 	}, ce = (0, C.useMemo)(() => [...k.items].map((e) => ({
 		item: e,
-		score: vW(e, k.query)
-	})).filter(({ item: e, score: t }) => k.query.trim() ? t > 0 || dW(e.title).includes(dW(k.query)) : !0).sort((e, t) => t.score - e.score || String(e.item.title).localeCompare(String(t.item.title))), [k.items, k.query]), le = (0, C.useMemo)(() => k.items.find((e) => String(e.id) === String(k.selectedItemId)) || null, [k.items, k.selectedItemId]), ue = ce[0] || null, de = (0, C.useMemo)(() => TW(o.plan, o.apply_result, o.last_plan_at, o.last_apply_at), [
+		score: yW(e, k.query)
+	})).filter(({ item: e, score: t }) => k.query.trim() ? t > 0 || dW(e.title).includes(dW(k.query)) : !0).sort((e, t) => t.score - e.score || String(e.item.title).localeCompare(String(t.item.title))), [k.items, k.query]), le = (0, C.useMemo)(() => k.items.find((e) => String(e.id) === String(k.selectedItemId)) || null, [k.items, k.selectedItemId]), ue = ce[0] || null, de = (0, C.useMemo)(() => EW(o.plan, o.apply_result, o.last_plan_at, o.last_apply_at), [
 		o.plan,
 		o.apply_result,
 		o.last_plan_at,
 		o.last_apply_at
-	]), fe = de?.actions || [], pe = o.empty_folder_cleanup_report || aW, me = (0, C.useMemo)(() => pe.groups || [], [pe]), he = pe.errors || [], ge = (0, C.useMemo)(() => _W(he), [he]), _e = (0, C.useMemo)(() => [...ge.values()].filter((e) => e.isRateLimited), [ge]), ve = (0, C.useMemo)(() => me.filter((e) => L.includes(String(e.id))), [me, L]), ye = (0, C.useMemo)(() => mW(ve), [ve]), be = (0, C.useMemo)(() => ve.flatMap((e) => (e.items || []).map((t) => ({
+	]), fe = de?.actions || [], pe = o.empty_folder_cleanup_report || aW, me = (0, C.useMemo)(() => pe.groups || [], [pe]), he = pe.errors || [], ge = (0, C.useMemo)(() => vW(he, o.roots || [], o.lan_connections?.smb || []), [
+		he,
+		o.roots,
+		o.lan_connections
+	]), _e = (0, C.useMemo)(() => [...ge.values()].filter((e) => e.isRateLimited), [ge]), ve = (0, C.useMemo)(() => me.filter((e) => L.includes(String(e.id))), [me, L]), ye = (0, C.useMemo)(() => hW(ve), [ve]), be = (0, C.useMemo)(() => ve.flatMap((e) => (e.items || []).map((t) => ({
 		...t,
 		groupId: String(e.id),
 		groupFolderName: e.folder_name || e.relative_path || e.canonical_name,
@@ -46876,20 +46896,20 @@ function PW() {
 		let e = new Set(me.map((e) => String(e.id)));
 		R((t) => {
 			let n = t.filter((t) => e.has(String(t)));
-			return hW(t, n) ? t : n;
+			return gW(t, n) ? t : n;
 		});
 	}, [me]), (0, C.useEffect)(() => {
 		let e = new Set(be.map((e) => e.rowKey));
 		B((t) => {
 			let n = t.filter((t) => e.has(String(t)));
-			return hW(t, n) ? t : n;
+			return gW(t, n) ? t : n;
 		});
 	}, [be]), (0, C.useEffect)(() => {
 		if (!L.length) return;
 		let e = be.filter((e) => e.is_deletion_candidate).map((e) => e.rowKey);
 		B((t) => {
 			let n = [...new Set([...t, ...e])];
-			return hW(t, n) ? t : n;
+			return gW(t, n) ? t : n;
 		});
 	}, [be, L.length]);
 	let Se = async (t, n, r, i = {}) => {
@@ -46919,7 +46939,7 @@ function PW() {
 		}
 	}, we = async (t) => {
 		if (!(!t?.storage_uri || !t?.root_storage_uri || t.children_loaded || t.has_children === !1 || t.is_file)) {
-			y((e) => e.includes(t.key) ? e : [...e, t.key]), p((e) => kW(e, t.key, (e) => ({
+			y((e) => e.includes(t.key) ? e : [...e, t.key]), p((e) => AW(e, t.key, (e) => ({
 				...e,
 				is_loading: !0
 			})));
@@ -46935,9 +46955,9 @@ function PW() {
 					is_loading: !1,
 					children: e.has_children ? [] : void 0
 				}));
-				p((n) => OW(n, t.key, e));
+				p((n) => kW(n, t.key, e));
 			} catch (n) {
-				p((e) => kW(e, t.key, (e) => ({
+				p((e) => AW(e, t.key, (e) => ({
 					...e,
 					is_loading: !1
 				}))), e.error(n.message);
@@ -46963,7 +46983,7 @@ function PW() {
 			try {
 				let e = (await mH(t)).items || [], r = [...e].map((e) => ({
 					item: e,
-					score: vW(e, n.label)
+					score: yW(e, n.label)
 				})).sort((e, t) => t.score - e.score || String(e.item.title).localeCompare(String(t.item.title)))[0];
 				A((t) => ({
 					...t,
@@ -47244,33 +47264,36 @@ function PW() {
 						]
 					}),
 					W.length ? /* @__PURE__ */ (0, $.jsx)(Qz, {
+						className: "operations-folder-table",
 						rowKey: "key",
-						size: "middle",
+						size: "small",
 						pagination: !1,
 						columns: [
 							{
 								title: "Folder",
 								dataIndex: "label",
 								key: "folder",
-								width: "42%",
-								render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(HA, {
-									vertical: !0,
-									gap: 6,
-									style: { minWidth: 0 },
+								render: (e, t) => /* @__PURE__ */ (0, $.jsxs)("div", {
+									className: "operations-folder-cell",
 									children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
 										size: [4, 4],
 										wrap: !0,
+										className: "operations-folder-title",
 										children: [
-											t.is_loading ? /* @__PURE__ */ (0, $.jsx)(Dl, { spin: !0 }) : null,
-											t.is_file ? /* @__PURE__ */ (0, $.jsx)(dR, {}) : null,
+											t.is_loading ? /* @__PURE__ */ (0, $.jsx)(Dl, {
+												spin: !0,
+												className: "operations-folder-leading-icon"
+											}) : null,
+											t.is_file ? /* @__PURE__ */ (0, $.jsx)(dR, { className: "operations-folder-leading-icon" }) : null,
 											/* @__PURE__ */ (0, $.jsx)(iW, {
 												strong: !0,
+												className: "operations-folder-name",
 												children: fW(t.label)
 											}),
 											t.kind ? /* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }) : null,
 											t.is_root ? /* @__PURE__ */ (0, $.jsx)(dB, {
-												color: "blue",
-												children: "Root"
+												color: mW(t).color,
+												children: mW(t).label
 											}) : null,
 											t.is_file ? /* @__PURE__ */ (0, $.jsx)(dB, { children: "File" }) : null,
 											t.is_root && ge.get(t.path)?.isRateLimited ? /* @__PURE__ */ (0, $.jsx)(dB, {
@@ -47284,6 +47307,7 @@ function PW() {
 										]
 									}), t.is_root && ge.get(t.path)?.message ? /* @__PURE__ */ (0, $.jsx)(iW, {
 										type: "secondary",
+										className: "operations-folder-note",
 										children: ge.get(t.path).message
 									}) : null]
 								})
@@ -47292,7 +47316,7 @@ function PW() {
 								title: "Path",
 								dataIndex: "display_path",
 								key: "path",
-								width: "30%",
+								width: "45%",
 								render: (e, t) => /* @__PURE__ */ (0, $.jsx)(iW, {
 									type: "secondary",
 									className: "mono",
@@ -47302,7 +47326,7 @@ function PW() {
 							{
 								title: "",
 								key: "actions",
-								width: 64,
+								width: 48,
 								align: "right",
 								render: (e, t) => Le(t)
 							}
@@ -47311,6 +47335,8 @@ function PW() {
 						expandable: {
 							childrenColumnName: "children",
 							expandedRowKeys: g,
+							expandIconColumnIndex: 1,
+							columnWidth: 40,
 							onExpand: async (e, t) => {
 								_((n) => e ? [...new Set([...n, t.key])] : n.filter((e) => e !== t.key)), e && await we(t);
 							},
@@ -47320,6 +47346,7 @@ function PW() {
 						rowSelection: {
 							selectedRowKeys: S,
 							checkStrictly: !0,
+							columnWidth: 44,
 							onChange: (e) => w(e),
 							getCheckboxProps: (e) => ({ disabled: e.is_file })
 						},
@@ -47345,7 +47372,7 @@ function PW() {
 					}) : null]
 				})
 			}),
-			/* @__PURE__ */ (0, $.jsx)(jW, {
+			/* @__PURE__ */ (0, $.jsx)(MW, {
 				modalState: k,
 				rankedItems: ce,
 				selectedItem: le,
@@ -47384,7 +47411,7 @@ function PW() {
 					}), "Folder moved into provider path.") && Te();
 				}
 			}),
-			/* @__PURE__ */ (0, $.jsx)(MW, {
+			/* @__PURE__ */ (0, $.jsx)(NW, {
 				open: j,
 				plan: de,
 				deleteLowerQuality: T,
@@ -47396,7 +47423,7 @@ function PW() {
 				onDryRun: Fe,
 				onExecute: Ie
 			}),
-			/* @__PURE__ */ (0, $.jsx)(NW, {
+			/* @__PURE__ */ (0, $.jsx)(PW, {
 				open: N,
 				report: pe,
 				selectedRootCount: oe.length,
@@ -47433,7 +47460,7 @@ function PW() {
 								}) : null,
 								/* @__PURE__ */ (0, $.jsx)(iW, {
 									type: "secondary",
-									children: mW(t.items || [])
+									children: hW(t.items || [])
 								})
 							]
 						})
@@ -47472,8 +47499,8 @@ function PW() {
 									children: fW(String(t.path || "").split("/").pop() || t.groupFolderName)
 								}),
 								/* @__PURE__ */ (0, $.jsx)(dB, {
-									color: gW(t).color,
-									children: gW(t).label
+									color: _W(t).color,
+									children: _W(t).label
 								}),
 								t.is_deletion_candidate ? /* @__PURE__ */ (0, $.jsx)(dB, {
 									color: "warning",
@@ -47528,7 +47555,7 @@ function PW() {
 }
 //#endregion
 //#region src/components/SettingsView.jsx
-var { Text: FW } = wV, IW = [
+var { Text: IW } = wV, LW = [
 	{
 		label: "Mixed",
 		value: "mixed"
@@ -47545,7 +47572,7 @@ var { Text: FW } = wV, IW = [
 		label: "Review",
 		value: "review"
 	}
-], LW = [
+], RW = [
 	"3.0",
 	"2.1",
 	"2.0",
@@ -47553,7 +47580,7 @@ var { Text: FW } = wV, IW = [
 ].map((e) => ({
 	label: `SMB ${e}`,
 	value: e
-})), RW = {
+})), zW = {
 	roots: [],
 	integrations: {
 		radarr: {
@@ -47578,27 +47605,27 @@ var { Text: FW } = wV, IW = [
 	sync_result: null,
 	activity_log: []
 };
-function zW(e) {
+function BW(e) {
 	return e ? new Date(e).toLocaleString() : "Never";
 }
-function BW(e) {
+function VW(e) {
 	return String(e || "").replace(/\s+P\d+$/, "").trim();
 }
-function VW(e) {
+function HW(e) {
 	let t = String(e || "").trim();
 	return !t || t === "/" ? "/" : `/${t.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 }
-function HW(e) {
-	let t = VW(e);
+function UW(e) {
+	let t = HW(e);
 	return t === "/" ? "/" : `/${t.slice(1).split("/").filter(Boolean).map((e) => encodeURIComponent(e)).join("/")}`;
 }
-function UW(e, t) {
+function WW(e, t) {
 	return String(e || "").trim().replaceAll("/", "_") || t;
 }
-function WW(e, t) {
+function GW(e, t) {
 	let n = String(e.share_name || t?.share_name || "").trim().replace(/^\/+|\/+$/g, ""), r = String(t?.id || e.connection_id || "").trim();
 	if (!n || !r) return null;
-	let i = VW(e.share_path), a = `smb://${encodeURIComponent(n)}${HW(i)}?connection_id=${encodeURIComponent(r)}`, o = `/smb/${UW(r, "connection")}/${UW(n, "share")}`;
+	let i = HW(e.share_path), a = `smb://${encodeURIComponent(n)}${UW(i)}?connection_id=${encodeURIComponent(r)}`, o = `/smb/${WW(r, "connection")}/${WW(n, "share")}`;
 	return {
 		path: i === "/" ? o : `${o}${i}`,
 		storage_uri: a,
@@ -47610,18 +47637,18 @@ function WW(e, t) {
 		connection_label: t?.label || ""
 	};
 }
-function GW(e) {
+function KW(e) {
 	let t = String(e || "").trim();
 	return !t || t === "/" ? "/" : `/${t.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 }
-function KW(e) {
-	let t = GW(e);
+function qW(e) {
+	let t = KW(e);
 	return t === "/" ? "/" : `/${t.slice(1).split("/").filter(Boolean).map((e) => encodeURIComponent(e)).join("/")}`;
 }
-function qW(e) {
+function JW(e) {
 	let t = String(e.rclone_remote || "").trim().replace(/^\/+|\/+$/g, "");
 	if (!t) return null;
-	let n = GW(e.rclone_path), r = `rclone://${encodeURIComponent(t)}${KW(n)}`, i = String(e.rclone_mount_path || "").trim(), a = i ? GW(i) : `/rclone/${UW(t, "remote")}`;
+	let n = KW(e.rclone_path), r = `rclone://${encodeURIComponent(t)}${qW(n)}`, i = String(e.rclone_mount_path || "").trim(), a = i ? KW(i) : `/rclone/${WW(t, "remote")}`;
 	return {
 		path: n === "/" ? a : `${a}${n}`,
 		storage_uri: r,
@@ -47633,7 +47660,7 @@ function qW(e) {
 		connection_label: `rclone:${t}`
 	};
 }
-function JW(e) {
+function YW(e) {
 	if (!e) return {
 		mode: "local",
 		priority: 50,
@@ -47688,11 +47715,19 @@ function JW(e) {
 		rclone_mount_path: ""
 	};
 }
-function YW(e) {
+function XW(e) {
 	let t = String(e?.storage_uri || "");
 	return t.startsWith("rclone://") ? "Rclone" : t.startsWith("smb://") ? "SMB" : "Local";
 }
-function XW({ provider: e, testResult: t, onSave: n, onTest: r, saving: i, testing: a }) {
+function ZW(e) {
+	let t = String(e || "").split("/").filter(Boolean);
+	return t.length < 3 || t[0] !== "smb" ? null : {
+		connectionId: t[1],
+		shareName: t[2],
+		path: t.length > 3 ? `/${t.slice(3).join("/")}` : "/"
+	};
+}
+function QW({ provider: e, testResult: t, onSave: n, onTest: r, saving: i, testing: a }) {
 	let o = e === "radarr" ? "Radarr" : "Sonarr";
 	return /* @__PURE__ */ (0, $.jsx)(RD, {
 		className: "integration-provider-card-react",
@@ -47746,7 +47781,7 @@ function XW({ provider: e, testResult: t, onSave: n, onTest: r, saving: i, testi
 		})
 	});
 }
-function ZW({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
+function $W({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e.open,
 		title: e.mode === "smb" ? "Choose SMB Folder" : "Choose Folder",
@@ -47769,7 +47804,7 @@ function ZW({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
 					align: "center",
 					gap: 12,
 					wrap: !0,
-					children: [/* @__PURE__ */ (0, $.jsx)(FW, {
+					children: [/* @__PURE__ */ (0, $.jsx)(IW, {
 						type: "secondary",
 						className: "mono",
 						children: e.mode === "smb" ? `${e.shareName ? `${e.shareName}:` : ""}${e.path || "/"}` : e.path || "/"
@@ -47826,8 +47861,8 @@ function ZW({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
 		})
 	});
 }
-function QW() {
-	let { message: e } = Q_.useApp(), [t, n] = (0, C.useState)(!0), [r, i] = (0, C.useState)(RW), [a, o] = (0, C.useState)(!1), [s, c] = (0, C.useState)([]), [l, u] = (0, C.useState)(null), [d, f] = (0, C.useState)(!1), [p, m] = (0, C.useState)(!1), [h, g] = (0, C.useState)(null), [_, v] = (0, C.useState)(!1), [y, b] = (0, C.useState)(null), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(""), [E, D] = (0, C.useState)(""), [O, k] = (0, C.useState)(!1), [A, j] = (0, C.useState)(""), [M, N] = (0, C.useState)(""), [P, F] = (0, C.useState)({
+function eG() {
+	let { message: e } = Q_.useApp(), [t, n] = (0, C.useState)(!0), [r, i] = (0, C.useState)(zW), [a, o] = (0, C.useState)(!1), [s, c] = (0, C.useState)([]), [l, u] = (0, C.useState)(null), [d, f] = (0, C.useState)(!1), [p, m] = (0, C.useState)(!1), [h, g] = (0, C.useState)(null), [_, v] = (0, C.useState)(!1), [y, b] = (0, C.useState)(null), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(""), [E, D] = (0, C.useState)(""), [O, k] = (0, C.useState)(!1), [A, j] = (0, C.useState)(""), [M, N] = (0, C.useState)(""), [P, F] = (0, C.useState)({
 		open: !1,
 		mode: "local",
 		loading: !1,
@@ -47841,7 +47876,7 @@ function QW() {
 		shareName: ""
 	}), [I] = Fj.useForm(), [L] = Fj.useForm(), [R] = Fj.useForm(), [z, B] = (0, C.useState)({}), V = r.lan_connections?.smb || [], H = Fj.useWatch("connection_id", I), U = (0, C.useMemo)(() => V.find((e) => e.id === H) || null, [V, H]), W = async () => {
 		let e = await hH();
-		i(e || RW), R.setFieldsValue(e?.integrations || RW.integrations);
+		i(e || zW), R.setFieldsValue(e?.integrations || zW.integrations);
 	};
 	(0, C.useEffect)(() => {
 		W().catch((t) => e.error(t.message)).finally(() => n(!1));
@@ -47850,6 +47885,8 @@ function QW() {
 		provider: e,
 		testResult: l?.[e] || null
 	})), G = async (e) => {
+		let t = ZW(e);
+		if (t) return K(t);
 		F((e) => ({
 			...e,
 			open: !0,
@@ -47941,7 +47978,7 @@ function QW() {
 								type: "primary",
 								icon: /* @__PURE__ */ (0, $.jsx)(xE, {}),
 								onClick: () => {
-									g(null), I.setFieldsValue(JW(null)), m(!0);
+									g(null), I.setFieldsValue(YW(null)), m(!0);
 								},
 								children: "Add Root"
 							}),
@@ -47955,16 +47992,16 @@ function QW() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(wA, {
 											direction: "vertical",
 											size: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(FW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(IW, {
 												strong: !0,
-												children: BW(e)
+												children: VW(e)
 											}), /* @__PURE__ */ (0, $.jsxs)(wA, {
 												size: [4, 4],
 												wrap: !0,
-												children: [/* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }), YW(t) === "SMB" ? /* @__PURE__ */ (0, $.jsx)(dB, {
+												children: [/* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }), XW(t) === "SMB" ? /* @__PURE__ */ (0, $.jsx)(dB, {
 													color: "processing",
 													children: "SMB"
-												}) : YW(t) === "Rclone" ? /* @__PURE__ */ (0, $.jsx)(dB, {
+												}) : XW(t) === "Rclone" ? /* @__PURE__ */ (0, $.jsx)(dB, {
 													color: "geekblue",
 													children: "Rclone"
 												}) : /* @__PURE__ */ (0, $.jsx)(dB, { children: "Local" })]
@@ -47977,10 +48014,10 @@ function QW() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(HA, {
 											vertical: !0,
 											gap: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(FW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(IW, {
 												className: "mono",
 												children: t.path
-											}), t.storage_uri ? /* @__PURE__ */ (0, $.jsx)(FW, {
+											}), t.storage_uri ? /* @__PURE__ */ (0, $.jsx)(IW, {
 												type: "secondary",
 												className: "mono",
 												children: t.storage_uri
@@ -47991,9 +48028,9 @@ function QW() {
 										title: "Source",
 										key: "source",
 										width: 220,
-										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(FW, {
+										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(IW, {
 											type: "secondary",
-											children: YW(t) === "Rclone" ? t.connection_label || "Rclone remote" : t.connection_label || t.share_name || "Direct filesystem path"
+											children: XW(t) === "Rclone" ? t.connection_label || "Rclone remote" : t.connection_label || t.share_name || "Direct filesystem path"
 										})
 									},
 									{
@@ -48005,7 +48042,7 @@ function QW() {
 											children: [/* @__PURE__ */ (0, $.jsx)(fp, {
 												icon: /* @__PURE__ */ (0, $.jsx)(TB, {}),
 												onClick: () => {
-													g(n), I.setFieldsValue(JW(n)), m(!0);
+													g(n), I.setFieldsValue(YW(n)), m(!0);
 												},
 												children: "Edit"
 											}), /* @__PURE__ */ (0, $.jsx)(oP, {
@@ -48076,7 +48113,7 @@ function QW() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(wA, {
 											direction: "vertical",
 											size: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(FW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(IW, {
 												strong: !0,
 												children: t.label
 											}), /* @__PURE__ */ (0, $.jsxs)(wA, {
@@ -48102,10 +48139,10 @@ function QW() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(HA, {
 											vertical: !0,
 											gap: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(FW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(IW, {
 												className: "mono",
 												children: `//${t.host}${t.share_name ? `/${t.share_name}` : ""}`
-											}), /* @__PURE__ */ (0, $.jsx)(FW, {
+											}), /* @__PURE__ */ (0, $.jsx)(IW, {
 												type: "secondary",
 												className: "mono",
 												children: t.base_path || "/"
@@ -48116,7 +48153,7 @@ function QW() {
 										title: "Account",
 										key: "account",
 										width: 220,
-										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(FW, {
+										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(IW, {
 											type: "secondary",
 											children: t.username || "Anonymous"
 										})
@@ -48196,7 +48233,7 @@ function QW() {
 										showIcon: !0,
 										message: t.status === "error" ? "Connection test failed" : "Connection test passed",
 										description: t.message || t.target || "Connection is ready"
-									}) : /* @__PURE__ */ (0, $.jsx)(FW, {
+									}) : /* @__PURE__ */ (0, $.jsx)(IW, {
 										type: "secondary",
 										children: "Run Test to validate this connection from the current runtime."
 									});
@@ -48246,7 +48283,7 @@ function QW() {
 										description: /* @__PURE__ */ (0, $.jsxs)(wA, {
 											size: [8, 8],
 											wrap: !0,
-											children: [e.address ? /* @__PURE__ */ (0, $.jsx)(FW, {
+											children: [e.address ? /* @__PURE__ */ (0, $.jsx)(IW, {
 												className: "mono",
 												children: e.address
 											}) : null, (e.connect_urls || []).map((e) => /* @__PURE__ */ (0, $.jsx)(dB, { children: e }, e))]
@@ -48272,7 +48309,7 @@ function QW() {
 								children: ee.map(({ provider: t, testResult: n }) => /* @__PURE__ */ (0, $.jsx)(SO, {
 									xs: 24,
 									xl: 12,
-									children: /* @__PURE__ */ (0, $.jsx)(XW, {
+									children: /* @__PURE__ */ (0, $.jsx)(QW, {
 										provider: t,
 										testResult: n,
 										saving: x,
@@ -48357,11 +48394,11 @@ function QW() {
 														})
 													}),
 													/* @__PURE__ */ (0, $.jsx)(OO, {}),
-													/* @__PURE__ */ (0, $.jsx)(FW, {
+													/* @__PURE__ */ (0, $.jsx)(IW, {
 														strong: !0,
 														children: "Sync after apply"
 													}),
-													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(FW, {
+													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(IW, {
 														type: "secondary",
 														children: "Run provider update after an apply result is executed."
 													}) })
@@ -48385,11 +48422,11 @@ function QW() {
 														})
 													}),
 													/* @__PURE__ */ (0, $.jsx)(OO, {}),
-													/* @__PURE__ */ (0, $.jsx)(FW, {
+													/* @__PURE__ */ (0, $.jsx)(IW, {
 														strong: !0,
 														children: "Rescan after update"
 													}),
-													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(FW, {
+													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(IW, {
 														type: "secondary",
 														children: "Trigger Radarr or Sonarr rescan after the path changes."
 													}) })
@@ -48413,11 +48450,11 @@ function QW() {
 														})
 													}),
 													/* @__PURE__ */ (0, $.jsx)(OO, {}),
-													/* @__PURE__ */ (0, $.jsx)(FW, {
+													/* @__PURE__ */ (0, $.jsx)(IW, {
 														strong: !0,
 														children: "Create missing provider roots"
 													}),
-													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(FW, {
+													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(IW, {
 														type: "secondary",
 														children: "Ensure configured root folders exist before provider updates."
 													}) })
@@ -48430,7 +48467,7 @@ function QW() {
 									type: r.sync_result.status === "error" ? "error" : "info",
 									showIcon: !0,
 									message: `Last sync: ${r.sync_result.status || "unknown"}`,
-									description: zW(r.sync_result.generated_at)
+									description: BW(r.sync_result.generated_at)
 								}) : null]
 							})]
 						})
@@ -48459,7 +48496,7 @@ function QW() {
 					onFinish: async (t) => {
 						try {
 							let n = String(t.original_path || h?.path || "").trim(), r = null;
-							if (r = t.mode === "smb" ? WW(t, U) : t.mode === "rclone" ? qW(t) : {
+							if (r = t.mode === "smb" ? GW(t, U) : t.mode === "rclone" ? JW(t) : {
 								path: String(t.path || "").trim(),
 								label: String(t.label || "").trim(),
 								priority: Number(t.priority || 50),
@@ -48602,7 +48639,7 @@ function QW() {
 								children: /* @__PURE__ */ (0, $.jsx)(Fj.Item, {
 									name: "kind",
 									label: "Kind",
-									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: IW })
+									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: LW })
 								})
 							})]
 						})
@@ -48677,7 +48714,7 @@ function QW() {
 								children: /* @__PURE__ */ (0, $.jsx)(Fj.Item, {
 									name: "version",
 									label: "SMB Version",
-									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: LW })
+									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: RW })
 								})
 							})]
 						}),
@@ -48736,7 +48773,7 @@ function QW() {
 					]
 				})
 			}),
-			/* @__PURE__ */ (0, $.jsx)(ZW, {
+			/* @__PURE__ */ (0, $.jsx)($W, {
 				state: P,
 				onCancel: () => F({
 					open: !1,
@@ -48782,7 +48819,7 @@ function QW() {
 }
 //#endregion
 //#region src/App.jsx
-var $W = "media-library-manager.active-view", { Header: eG, Sider: tG, Content: nG } = kM, { Title: rG, Text: iG } = wV, aG = {
+var tG = "media-library-manager.active-view", { Header: nG, Sider: rG, Content: iG } = kM, { Title: aG, Text: oG } = wV, sG = {
 	overview: {
 		title: "Overview",
 		description: "Monitor library health, provider status, current processing, and recent activity from a single dashboard."
@@ -48804,17 +48841,17 @@ var $W = "media-library-manager.active-view", { Header: eG, Sider: tG, Content: 
 		description: "Manage connected roots, SMB profiles, provider integrations, and sync behavior from the same control surface."
 	}
 };
-function oG() {
+function cG() {
 	let [e, t] = (0, C.useState)(() => {
 		if (typeof window > "u") return "overview";
-		let e = window.localStorage.getItem($W);
-		return e && aG[e] ? e : "overview";
-	}), n = (0, C.useMemo)(() => aG[e] || aG.operations, [e]), r = (e) => {
-		t(e), typeof window < "u" && window.localStorage.setItem($W, e);
+		let e = window.localStorage.getItem(tG);
+		return e && sG[e] ? e : "overview";
+	}), n = (0, C.useMemo)(() => sG[e] || sG.operations, [e]), r = (e) => {
+		t(e), typeof window < "u" && window.localStorage.setItem(tG, e);
 	};
 	return /* @__PURE__ */ (0, $.jsxs)(kM, {
 		className: "app-shell-react",
-		children: [/* @__PURE__ */ (0, $.jsxs)(tG, {
+		children: [/* @__PURE__ */ (0, $.jsxs)(rG, {
 			width: 248,
 			breakpoint: "lg",
 			collapsedWidth: 0,
@@ -48865,33 +48902,33 @@ function oG() {
 				],
 				onClick: ({ key: e }) => r(e)
 			})]
-		}), /* @__PURE__ */ (0, $.jsxs)(kM, { children: [/* @__PURE__ */ (0, $.jsx)(eG, {
+		}), /* @__PURE__ */ (0, $.jsxs)(kM, { children: [/* @__PURE__ */ (0, $.jsx)(nG, {
 			className: "topbar-react",
 			children: /* @__PURE__ */ (0, $.jsxs)("div", { children: [
 				/* @__PURE__ */ (0, $.jsx)("div", {
 					className: "eyebrow-react",
 					children: "Control Surface"
 				}),
-				/* @__PURE__ */ (0, $.jsx)(rG, {
+				/* @__PURE__ */ (0, $.jsx)(aG, {
 					level: 2,
 					className: "topbar-title-react",
 					children: n.title
 				}),
-				/* @__PURE__ */ (0, $.jsx)(iG, {
+				/* @__PURE__ */ (0, $.jsx)(oG, {
 					type: "secondary",
 					className: "topbar-subtitle-react",
 					children: n.description
 				})
 			] })
-		}), /* @__PURE__ */ (0, $.jsx)(nG, {
+		}), /* @__PURE__ */ (0, $.jsx)(iG, {
 			className: "content-react",
-			children: e === "overview" ? /* @__PURE__ */ (0, $.jsx)(rW, {}) : e === "operations" ? /* @__PURE__ */ (0, $.jsx)(PW, {}) : e === "cleanup" ? /* @__PURE__ */ (0, $.jsx)(EU, {}) : e === "repair" ? /* @__PURE__ */ (0, $.jsx)(RU, {}) : /* @__PURE__ */ (0, $.jsx)(QW, {})
+			children: e === "overview" ? /* @__PURE__ */ (0, $.jsx)(rW, {}) : e === "operations" ? /* @__PURE__ */ (0, $.jsx)(FW, {}) : e === "cleanup" ? /* @__PURE__ */ (0, $.jsx)(EU, {}) : e === "repair" ? /* @__PURE__ */ (0, $.jsx)(RU, {}) : /* @__PURE__ */ (0, $.jsx)(eG, {})
 		})] })]
 	});
 }
 //#endregion
 //#region src/main.jsx
-var sG = class extends C.Component {
+var lG = class extends C.Component {
 	constructor(e) {
 		super(e), this.state = { error: null };
 	}
@@ -48918,8 +48955,8 @@ var sG = class extends C.Component {
 		}) : this.props.children;
 	}
 };
-TV.createRoot(document.getElementById("root")).render(/* @__PURE__ */ (0, $.jsx)(C.StrictMode, { children: /* @__PURE__ */ (0, $.jsx)(sG, { children: /* @__PURE__ */ (0, $.jsx)($s, {
+TV.createRoot(document.getElementById("root")).render(/* @__PURE__ */ (0, $.jsx)(C.StrictMode, { children: /* @__PURE__ */ (0, $.jsx)(lG, { children: /* @__PURE__ */ (0, $.jsx)($s, {
 	theme: EV,
-	children: /* @__PURE__ */ (0, $.jsx)(Q_, { children: /* @__PURE__ */ (0, $.jsx)(oG, {}) })
+	children: /* @__PURE__ */ (0, $.jsx)(Q_, { children: /* @__PURE__ */ (0, $.jsx)(cG, {}) })
 }) }) }));
 //#endregion

@@ -434,6 +434,72 @@ pre {
   word-break: break-all;
 }
 
+.operations-folder-table .ant-table-thead > tr > th,
+.operations-folder-table .ant-table-tbody > tr > td {
+  vertical-align: middle;
+}
+
+.operations-folder-table .ant-table-cell-with-append {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.operations-folder-table .ant-table-cell-with-append .ant-table-row-expand-icon,
+.operations-folder-table .ant-table-cell-with-append .ant-table-row-indent {
+  flex: 0 0 auto;
+}
+
+.operations-folder-table .ant-table-selection-column {
+  padding-inline: 10px 6px !important;
+}
+
+.operations-folder-table .ant-table-selection-column .ant-checkbox-wrapper,
+.operations-folder-table .ant-table-selection-column .ant-table-selection {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.operations-folder-table .ant-table-row-expand-icon-cell {
+  padding-inline: 6px 4px !important;
+}
+
+.operations-folder-table .ant-table-row-expand-icon {
+  margin-inline-end: 0 !important;
+}
+
+.operations-folder-cell {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 4px;
+}
+
+.operations-folder-title.ant-space {
+  gap: 4px !important;
+  min-width: 0;
+}
+
+.operations-folder-title.ant-space .ant-space-item {
+  min-width: 0;
+}
+
+.operations-folder-leading-icon {
+  color: var(--plex-text-secondary);
+  font-size: 13px;
+}
+
+.operations-folder-name.ant-typography {
+  min-width: 0;
+  margin: 0;
+}
+
+.operations-folder-note.ant-typography {
+  margin: 0;
+  line-height: 1.45;
+}
+
 .path-repair-search-progress {
   display: grid;
   gap: var(--plex-space-md);

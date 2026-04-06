@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .browser import browse_path, list_mounts
 from .cleanup_scan import rebuild_cleanup_report, scan_provider_cleanup
@@ -468,6 +468,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             params = parse_qs(parsed.query)
             requested_path = params.get("path", [None])[0]
             try:
+                smb_request = _pseudo_smb_browse_request(requested_path)
+                if smb_request is not None:
+                    connection = resolve_smb_connection(self.store.load_lan_connections(), smb_request["connection_id"])
+                    if connection is None:
+                        self._send_json({"error": f"connection not found: {smb_request['connection_id']}"}, status=HTTPStatus.NOT_FOUND)
+                        return
+                    result = browse_smb_path(
+                        connection,
+                        smb_request["path"],
+                        share_name=smb_request["share_name"],
+                    )
+                    if result.get("status") != "success":
+                        self._send_json({"error": result.get("message", "SMB browse failed")}, status=HTTPStatus.BAD_REQUEST)
+                        return
+                    self._send_json(_adapt_smb_browse_payload(result))
+                    return
                 self._send_json(browse_path(requested_path))
             except (FileNotFoundError, NotADirectoryError, PermissionError) as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -2651,6 +2667,79 @@ def build_root_path(*, storage_uri: str, raw_path: str) -> Path:
     return Path("/").resolve()
 
 
+def _pseudo_smb_browse_request(raw_path: str | None) -> dict[str, str] | None:
+    parts = [part for part in Path(str(raw_path or "")).parts if part not in {"", "/"}]
+    if len(parts) < 3 or parts[0] != "smb":
+        return None
+    connection_id = str(parts[1]).strip()
+    share_name = str(parts[2]).strip()
+    if not connection_id or not share_name:
+        return None
+    relative_parts = parts[3:]
+    share_path = "/" if not relative_parts else "/" + "/".join(relative_parts)
+    return {
+        "connection_id": connection_id,
+        "share_name": share_name,
+        "path": share_path,
+    }
+
+
+def _adapt_smb_browse_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    connection = payload.get("connection") or {}
+    connection_id = str(connection.get("id") or "").strip()
+    default_share_name = str(connection.get("share_name") or "").strip()
+
+    def pseudo_path(*, share_name: str, raw_path: str) -> str:
+        base = Path("/") / "smb" / sanitize_path_segment(connection_id, "connection") / sanitize_path_segment(share_name, "share")
+        normalized = "/" + str(raw_path or "/").strip("/")
+        if normalized in {"", "/"}:
+            return str(base)
+        decoded_segments = [sanitize_path_segment(unquote(segment), "folder") for segment in normalized.strip("/").split("/") if segment]
+        return str(base.joinpath(*decoded_segments))
+
+    current_share_name = default_share_name or str((payload.get("breadcrumbs") or [{}])[-1].get("share_name") or "").strip()
+    current_path = str(payload.get("path") or "/")
+    parent_path = payload.get("parent")
+
+    breadcrumbs = []
+    for crumb in payload.get("breadcrumbs", []) or []:
+        crumb_share_name = str(crumb.get("share_name") or default_share_name).strip()
+        crumb_path = str(crumb.get("path") or "/")
+        breadcrumbs.append(
+            {
+                "name": crumb.get("name") or "/",
+                "path": pseudo_path(share_name=crumb_share_name, raw_path=crumb_path),
+            }
+        )
+
+    entries = []
+    for entry in payload.get("entries", []) or []:
+        entry_share_name = str(entry.get("share_name") or default_share_name).strip()
+        entry_path = str(entry.get("path") or "/")
+        entries.append(
+            {
+                "name": entry.get("name"),
+                "path": pseudo_path(share_name=entry_share_name, raw_path=entry_path),
+                "type": "directory" if entry.get("type") in {"directory", "share"} else entry.get("type"),
+                "size": 0,
+                "modified_at": entry.get("modified_at"),
+                "suffix": "",
+                "share_name": entry_share_name,
+                "comment": entry.get("comment", ""),
+            }
+        )
+
+    return {
+        "path": pseudo_path(share_name=current_share_name, raw_path=current_path),
+        "parent": pseudo_path(share_name=current_share_name, raw_path=str(parent_path or "/")) if parent_path is not None else None,
+        "mount": None,
+        "breadcrumbs": breadcrumbs,
+        "entries": entries,
+        "overflow": False,
+        "favorites": [],
+    }
+
+
 def sanitize_path_segment(value: str, fallback: str) -> str:
     clean = str(value or "").strip().replace("/", "_")
     return clean or fallback
@@ -2997,7 +3086,7 @@ def _count_tree_nodes(nodes: list[dict[str, Any]]) -> int:
 
 
 def _storage_path_has_dir_children(manager: Any, path: ScanStoragePath) -> bool:
-    if path.backend == "rclone":
+    if path.backend in {"rclone", "smb"}:
         return True
     try:
         return any(entry.is_dir for entry in manager.list_dir(path))

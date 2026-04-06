@@ -46,7 +46,11 @@ export const antTheme = {
       headerBg: "#2d2d35",
       headerColor: "#6a6a6a",
       rowHoverBg: "#32323c",
-      borderColor: "#3a3a44"
+      borderColor: "#3a3a44",
+      cellPaddingInline: 8,
+      cellPaddingVertical: 10,
+      cellPaddingInlineSM: 6,
+      cellPaddingVerticalSM: 8
     },
     Modal: {
       contentBg: "#282830",

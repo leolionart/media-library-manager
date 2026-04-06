@@ -131,6 +131,13 @@ function compactDisplayPath(record) {
   return display;
 }
 
+function rootSourceMeta(record) {
+  const storageUri = String(record?.root_storage_uri || record?.storage_uri || "").toLowerCase();
+  if (storageUri.startsWith("smb://")) return { label: "SMB", color: "geekblue" };
+  if (storageUri.startsWith("rclone://")) return { label: "Rclone", color: "purple" };
+  return { label: "Local", color: "default" };
+}
+
 function summarizeLabels(items, limit = 3) {
   const labels = items.map((item) => stripPriorityLabel(item?.folder_name || item?.canonical_name || item?.label || item?.path || "")).filter(Boolean);
   if (!labels.length) return "None";
@@ -155,13 +162,21 @@ function cleanupFolderStatusMeta(item) {
   return { color: "warning", label: "No Video" };
 }
 
-function buildCleanupRootErrorMap(errors) {
+function buildCleanupRootErrorMap(errors, roots = [], connections = []) {
+  const activeConnectionIds = new Set((connections || []).map((item) => String(item?.id || "").trim()).filter(Boolean));
+  const activeRootPaths = new Set((roots || []).map((item) => String(item?.path || "").trim()).filter(Boolean));
   return (errors || []).reduce((map, item) => {
     const key = String(item?.root_path || item?.root_label || "").trim();
     if (!key) return map;
+    const message = normalizeCleanupErrorMessage(item?.message);
+    const connectionId = String(item?.connection_id || "").trim();
+    const staleConnectionError =
+      message.startsWith("connection not found:")
+      && ((connectionId && activeConnectionIds.has(connectionId)) || activeRootPaths.has(key));
+    if (staleConnectionError) return map;
     map.set(key, {
       rootLabel: item?.root_label || item?.root_path || "Unknown root",
-      message: normalizeCleanupErrorMessage(item?.message),
+      message,
       isRateLimited: isRateLimitedCleanupError(item?.message),
     });
     return map;
@@ -935,7 +950,10 @@ export function OperationsView() {
   const folderCleanupReport = payload.empty_folder_cleanup_report || EMPTY_REPORT;
   const folderCleanupGroups = useMemo(() => folderCleanupReport.groups || [], [folderCleanupReport]);
   const folderCleanupErrors = folderCleanupReport.errors || [];
-  const cleanupRootErrors = useMemo(() => buildCleanupRootErrorMap(folderCleanupErrors), [folderCleanupErrors]);
+  const cleanupRootErrors = useMemo(
+    () => buildCleanupRootErrorMap(folderCleanupErrors, payload.roots || [], payload.lan_connections?.smb || []),
+    [folderCleanupErrors, payload.roots, payload.lan_connections]
+  );
   const rateLimitedCleanupRoots = useMemo(
     () => [...cleanupRootErrors.values()].filter((item) => item.isRateLimited),
     [cleanupRootErrors]
@@ -1291,15 +1309,14 @@ export function OperationsView() {
       title: "Folder",
       dataIndex: "label",
       key: "folder",
-      width: "42%",
       render: (_, record) => (
-        <Flex vertical gap={6} style={{ minWidth: 0 }}>
-          <Space size={[4, 4]} wrap>
-            {record.is_loading ? <LoadingOutlined spin /> : null}
-            {record.is_file ? <FileOutlined /> : null}
-            <Text strong>{stripPriorityLabel(record.label)}</Text>
+        <div className="operations-folder-cell">
+          <Space size={[4, 4]} wrap className="operations-folder-title">
+            {record.is_loading ? <LoadingOutlined spin className="operations-folder-leading-icon" /> : null}
+            {record.is_file ? <FileOutlined className="operations-folder-leading-icon" /> : null}
+            <Text strong className="operations-folder-name">{stripPriorityLabel(record.label)}</Text>
             {record.kind ? <Tag>{record.kind}</Tag> : null}
-            {record.is_root ? <Tag color="blue">Root</Tag> : null}
+            {record.is_root ? <Tag color={rootSourceMeta(record).color}>{rootSourceMeta(record).label}</Tag> : null}
             {record.is_file ? <Tag>File</Tag> : null}
             {record.is_root && cleanupRootErrors.get(record.path)?.isRateLimited ? <Tag color="error">Rate Limited</Tag> : null}
             {record.is_root && cleanupRootErrors.get(record.path) && !cleanupRootErrors.get(record.path)?.isRateLimited ? (
@@ -1307,16 +1324,16 @@ export function OperationsView() {
             ) : null}
           </Space>
           {record.is_root && cleanupRootErrors.get(record.path)?.message ? (
-            <Text type="secondary">{cleanupRootErrors.get(record.path).message}</Text>
+            <Text type="secondary" className="operations-folder-note">{cleanupRootErrors.get(record.path).message}</Text>
           ) : null}
-        </Flex>
+        </div>
       ),
     },
     {
       title: "Path",
       dataIndex: "display_path",
       key: "path",
-      width: "30%",
+      width: "45%",
       render: (_, record) => (
         <Text type="secondary" className="mono">
           {compactDisplayPath(record)}
@@ -1326,7 +1343,7 @@ export function OperationsView() {
     {
       title: "",
       key: "actions",
-      width: 64,
+      width: 48,
       align: "right",
       render: (_, record) => renderRowActions(record),
     },
@@ -1539,14 +1556,17 @@ export function OperationsView() {
         />
         {filteredTableData.length ? (
           <Table
+            className="operations-folder-table"
             rowKey="key"
-            size="middle"
+            size="small"
             pagination={false}
             columns={tableColumns}
             dataSource={filteredTableData}
             expandable={{
               childrenColumnName: "children",
               expandedRowKeys,
+              expandIconColumnIndex: 1,
+              columnWidth: 40,
               onExpand: async (expanded, record) => {
                 setExpandedRowKeys((current) =>
                   expanded ? [...new Set([...current, record.key])] : current.filter((key) => key !== record.key)
@@ -1561,6 +1581,7 @@ export function OperationsView() {
             rowSelection={{
               selectedRowKeys: selectedNodeKeys,
               checkStrictly: true,
+              columnWidth: 44,
               onChange: (keys) => setSelectedNodeKeys(keys),
               getCheckboxProps: (record) => ({ disabled: record.is_file }),
             }}

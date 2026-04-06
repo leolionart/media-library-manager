@@ -36,8 +36,9 @@ def list_mounts() -> list[MountInfo]:
     for line in result.stdout.splitlines():
         mount = parse_mount_line(line)
         if mount is not None:
-            if not mount.mount_point.exists() or not mount.mount_point.is_dir():
-                continue
+            if not mount.is_network:
+                if not mount.mount_point.exists() or not mount.mount_point.is_dir():
+                    continue
             mounts.append(mount)
 
     if not mounts:
