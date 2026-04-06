@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .folder_index import filter_index_candidates_for_provider
 from .models import RootConfig
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
@@ -323,6 +324,7 @@ def search_library_paths(
     query: str,
     roots: list[RootConfig],
     lan_connections: dict[str, Any],
+    folder_index_report: dict[str, Any] | None = None,
     max_depth: int = 8,
     max_results: int = 20,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -332,8 +334,38 @@ def search_library_paths(
         return []
     aliases = [normalized_query]
 
+    cached_results = _search_cached_index_matches(
+        provider=provider,
+        query=query,
+        roots=roots,
+        folder_index_report=folder_index_report,
+        aliases=aliases,
+        max_results=max_results,
+    )
+    if cached_results:
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "cache_hit",
+                    "provider": provider,
+                    "query": query,
+                    "generated_at": folder_index_report.get("generated_at") if isinstance(folder_index_report, dict) else None,
+                    "candidate_count": len(filter_index_candidates_for_provider(provider=provider, roots=roots, report=folder_index_report)),
+                    "result_count": len(cached_results),
+                }
+            )
+        return cached_results
+
     manager = default_storage_manager(lan_connections=lan_connections)
     provider_roots = _iter_provider_roots(provider, roots)
+    if progress_callback is not None and folder_index_report:
+        progress_callback(
+            {
+                "event": "cache_miss",
+                "provider": provider,
+                "query": query,
+            }
+        )
     if progress_callback is not None:
         progress_callback(
             {
@@ -404,6 +436,27 @@ def search_library_paths(
             }
         )
     return results
+
+
+def _search_cached_index_matches(
+    *,
+    provider: str,
+    query: str,
+    roots: list[RootConfig],
+    folder_index_report: dict[str, Any] | None,
+    aliases: list[str],
+    max_results: int,
+) -> list[dict[str, Any]]:
+    cached_candidates = filter_index_candidates_for_provider(provider=provider, roots=roots, report=folder_index_report)
+    if not cached_candidates:
+        return []
+    ranked = _rank_candidates(cached_candidates, aliases=aliases, year=None, max_suggestions=max_results)
+    if ranked:
+        return ranked
+    normalized_query = normalize_title(query)
+    if not normalized_query:
+        return []
+    return _rank_candidates(cached_candidates, aliases=[normalized_query], year=None, max_suggestions=max_results, min_score=80)
 
 
 def _index_provider_candidates(

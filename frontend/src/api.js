@@ -96,6 +96,14 @@ export function fetchOperationsFolderChildren({ storageUri, rootStorageUri, time
   return request(`/api/operations/folders/children?${params.toString()}`, { timeoutMs: effectiveTimeoutMs });
 }
 
+export function refreshOperationsFolderIndex(maxDepth = 6) {
+  return request("/api/operations/folder-index/refresh", {
+    method: "POST",
+    body: JSON.stringify({ max_depth: maxDepth }),
+    timeoutMs: 300000,
+  });
+}
+
 export function fetchProviderItems(provider) {
   return request(`/api/integrations/${provider}/items`);
 }

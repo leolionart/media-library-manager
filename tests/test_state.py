@@ -268,3 +268,22 @@ class StateStoreTests(unittest.TestCase):
             self.assertEqual(payload["empty_folder_cleanup_report"]["summary"]["duplicate_groups"], 2)
             self.assertEqual(payload["last_cleanup_at"], "2026-04-05T00:00:00+00:00")
             self.assertEqual(payload["last_empty_folder_cleanup_at"], "2026-04-05T00:10:00+00:00")
+
+    def test_state_store_persists_folder_index_report_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            store = StateStore(tmp_path / "state" / "app-state.json")
+
+            store.save_folder_index_report(
+                {
+                    "generated_at": "2026-04-06T00:00:00+00:00",
+                    "summary": {"roots": 2, "folders": 12, "errors": 0, "max_depth": 3},
+                    "roots": [],
+                    "items": [],
+                    "errors": [],
+                }
+            )
+
+            payload = store.api_payload()
+            self.assertEqual(payload["folder_index_summary"]["folders"], 12)
+            self.assertEqual(payload["last_folder_index_at"], "2026-04-06T00:00:00+00:00")

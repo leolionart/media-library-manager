@@ -35,6 +35,7 @@ Dashboard hiện có 5 màn:
 
 4. `Library Path Repair`
    Màn sửa item của Radarr/Sonarr khi user muốn tìm lại folder đúng cho item mà chính provider đang báo thiếu. Scan hiện không còn tự so sánh connected roots để suy luận `path_not_found`; nó chỉ giữ lại item mà Radarr/Sonarr đang báo `missing`. Search và path mapping vẫn phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
+   Search hiện ưu tiên dùng `folder index` artifact đã cache từ connected roots; chỉ fallback sang live traversal khi cache chưa có hit hoặc chưa đủ sâu.
 
 5. `Settings`
    Màn cấu hình roots, SMB profiles, LAN discovery, Radarr/Sonarr, sync options, và manual sync.
@@ -57,6 +58,7 @@ Dashboard hiện có 5 màn:
 - `last_cleanup_at`
 - `last_empty_folder_cleanup_at`
 - `last_path_repair_at`
+- `last_folder_index_at`
 - `activity_log`
 - `current_job`
 - `report`
@@ -66,6 +68,7 @@ Dashboard hiện có 5 màn:
 - `cleanup_report`
 - `empty_folder_cleanup_report`
 - `path_repair_report`
+- `folder_index_summary`
 
 ### `current_job`
 
@@ -119,6 +122,7 @@ Một số `current_job.kind` đặc thù hơn:
 - `apply`
 - `cleanup-scan`
 - `path-repair`
+- `folder-index`
 
 Job lỗi hoặc cancelled có thể giữ `job_control` trong `details` để frontend/backend gọi lại cùng workflow qua:
 
@@ -140,6 +144,7 @@ State và artifact hiện lưu trong `data/`:
 - `last-cleanup-scan.json`
 - `last-empty-folder-cleanup.json`
 - `last-path-repair-scan.json`
+- `last-folder-index.json`
 
 ## 4. Workflow chính
 
@@ -177,8 +182,10 @@ Frontend load:
 - `GET /api/operations/folders`
 - `GET /api/operations/folders/tree`
 - `GET /api/operations/folders/children`
+- `POST /api/operations/folder-index/refresh`
 
 Mục tiêu là duyệt folder con từ connected roots, lazy-load children, rồi chọn source/destination cho các thao tác.
+Khi user bấm refresh ở `Library Finder`, backend hiện rebuild thêm `folder index` artifact để các luồng như `Path Repair Search` không phải full-scan lại toàn bộ rclone hoặc SMB roots mỗi lần.
 
 #### B. Duplicate workflow
 

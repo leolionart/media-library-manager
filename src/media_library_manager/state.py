@@ -31,6 +31,7 @@ class StateStore:
         self.cleanup_file = self.state_file.parent / "last-cleanup-scan.json"
         self.empty_folder_cleanup_file = self.state_file.parent / "last-empty-folder-cleanup.json"
         self.path_repair_file = self.state_file.parent / "last-path-repair-scan.json"
+        self.folder_index_file = self.state_file.parent / "last-folder-index.json"
         if not self.state_file.exists():
             self._write_state(self.default_state())
 
@@ -53,6 +54,7 @@ class StateStore:
             "last_cleanup_at": None,
             "last_empty_folder_cleanup_at": None,
             "last_path_repair_at": None,
+            "last_folder_index_at": None,
             "activity_log": [],
             "current_job": None,
         }
@@ -300,6 +302,15 @@ class StateStore:
             return None
         return json.loads(self.path_repair_file.read_text(encoding="utf-8"))
 
+    def save_folder_index_report(self, report: dict[str, Any]) -> None:
+        self.folder_index_file.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        self._update_state(lambda state: {**state, "last_folder_index_at": report.get("generated_at")})
+
+    def load_folder_index_report(self) -> dict[str, Any] | None:
+        if not self.folder_index_file.exists():
+            return None
+        return json.loads(self.folder_index_file.read_text(encoding="utf-8"))
+
     def api_payload(self) -> dict[str, Any]:
         state = self.load_state()
         payload = {
@@ -316,6 +327,7 @@ class StateStore:
             "last_cleanup_at": state.get("last_cleanup_at"),
             "last_empty_folder_cleanup_at": state.get("last_empty_folder_cleanup_at"),
             "last_path_repair_at": state.get("last_path_repair_at"),
+            "last_folder_index_at": state.get("last_folder_index_at"),
             "activity_log": state.get("activity_log", []),
             "current_job": state.get("current_job"),
             "report": self.load_report(),
@@ -325,6 +337,7 @@ class StateStore:
             "cleanup_report": self.load_cleanup_report(),
             "empty_folder_cleanup_report": self.load_empty_folder_cleanup_report(),
             "path_repair_report": self.load_path_repair_report(),
+            "folder_index_summary": (self.load_folder_index_report() or {}).get("summary"),
         }
         return payload
 

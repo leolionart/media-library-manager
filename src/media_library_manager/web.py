@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .browser import browse_path, list_mounts
 from .cleanup_scan import rebuild_cleanup_report, scan_provider_cleanup
 from .empty_folder_cleanup import scan_duplicate_empty_folders
+from .folder_index import DEFAULT_FOLDER_INDEX_MAX_DEPTH, build_folder_metadata_index
 from .lan_connections import (
     build_cd_command,
     browse_smb_path,
@@ -845,6 +846,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._run_selected_folder_cleanup_delete(self._read_json(), resume=False)
             return
 
+        if parsed.path == "/api/operations/folder-index/refresh":
+            payload = self._read_json()
+            self._run_folder_index_refresh(max_depth=int(payload.get("max_depth") or DEFAULT_FOLDER_INDEX_MAX_DEPTH))
+            return
+
         if parsed.path == "/api/path-repair/scan":
             self._run_provider_path_repair_scan(resume=False)
             return
@@ -989,6 +995,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     query=query,
                     roots=roots,
                     lan_connections=self.store.load_lan_connections(),
+                    folder_index_report=self.store.load_folder_index_report(),
                     progress_callback=self._path_repair_search_progress_callback,
                 )
             except Exception as exc:
@@ -2032,6 +2039,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._raise_if_cancel_requested()
         event_name = str(event.get("event") or "")
         provider = str(event.get("provider") or "")
+        if event_name == "cache_hit":
+            self.store.update_job_progress(
+                {
+                    "total": 1,
+                    "completed": 1,
+                    "results": int(event.get("result_count", 0) or 0),
+                    "indexed_folders": int(event.get("candidate_count", 0) or 0),
+                }
+            )
+            self.store.append_job_log(
+                level="info",
+                message="Folder search used cached folder metadata.",
+                details={
+                    "provider": provider,
+                    "query": event.get("query"),
+                    "generated_at": event.get("generated_at"),
+                    "indexed_folders": int(event.get("candidate_count", 0) or 0),
+                    "results": int(event.get("result_count", 0) or 0),
+                },
+            )
+            return
+        if event_name == "cache_miss":
+            self.store.append_job_log(
+                level="warning",
+                message="Cached folder metadata had no direct match. Falling back to live root traversal.",
+                details={"provider": provider, "query": event.get("query")},
+            )
+            return
         if event_name == "search_started":
             self.store.append_job_log(
                 level="info",
@@ -2081,12 +2116,68 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
             self.store.append_job_log(
                 level="info",
-                message="Finished scoring indexed folders against the movie title.",
+                message="Finished scoring indexed folders against the folder query.",
                 details={
                     "provider": provider,
                     "query": event.get("query"),
                     "candidates": int(event.get("candidate_count", 0) or 0),
                     "results": int(event.get("result_count", 0) or 0),
+                },
+            )
+
+    def _folder_index_progress_callback(self, event: dict[str, object]) -> None:
+        self._raise_if_cancel_requested()
+        event_name = str(event.get("event") or "")
+        if event_name == "root_started":
+            self.store.append_job_log(
+                level="info",
+                message=f"Indexing root {int(event.get('index', 0))}/{int(event.get('total_roots', 0))}: {event.get('root_label')}",
+                details={"path": event.get("root_path")},
+            )
+            self.store.update_job_progress({"total": int(event.get("total_roots", 0) or 0), "completed": max(int(event.get("index", 1) or 1) - 1, 0)})
+            return
+        if event_name == "root_completed":
+            completed = int(event.get("index", 0) or 0)
+            total_roots = int(event.get("total_roots", 0) or 0)
+            self.store.update_job_progress(
+                {
+                    "total": max(total_roots, 1),
+                    "completed": completed,
+                    "indexed_folders": int(event.get("total_indexed_folders", 0) or 0),
+                }
+            )
+            self.store.append_job_log(
+                level="info",
+                message=f"Indexed root {completed}/{max(total_roots, 1)}: {event.get('root_label')}",
+                details={
+                    "path": event.get("root_path"),
+                    "indexed_folders": int(event.get("indexed_folders", 0) or 0),
+                    "total_indexed_folders": int(event.get("total_indexed_folders", 0) or 0),
+                },
+            )
+            return
+        if event_name == "root_failed":
+            self.store.append_job_log(
+                level="error",
+                message=f"Failed to index root: {event.get('root_label')}",
+                details={"path": event.get("root_path"), "message": event.get("message")},
+            )
+            return
+        if event_name == "scan_completed":
+            self.store.update_job_progress(
+                {
+                    "total": max(int(event.get("total_roots", 0) or 0), 1),
+                    "completed": max(int(event.get("total_roots", 0) or 0), 1),
+                    "indexed_folders": int(event.get("folders", 0) or 0),
+                    "error": int(event.get("errors", 0) or 0),
+                }
+            )
+            self.store.append_job_log(
+                level="info",
+                message="Folder metadata index refresh completed.",
+                details={
+                    "folders": int(event.get("folders", 0) or 0),
+                    "errors": int(event.get("errors", 0) or 0),
                 },
             )
 
@@ -2568,6 +2659,59 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.finish_job(status="success", message="Provider path repair scan completed.", details=details, summary={"total": max(len(providers), 1), "completed": max(len(providers), 1), "issues": result.get("summary", {}).get("issues", 0)})
         self.store.append_activity(kind="scan", status="success", message="Provider path repair scan completed.", details=details)
         self._send_json(result)
+
+    def _run_folder_index_refresh(self, *, max_depth: int) -> None:
+        roots = self.store.list_roots()
+        if not roots:
+            self._send_json({"error": "no connected roots available for folder indexing"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        bounded_depth = max(1, min(int(max_depth or DEFAULT_FOLDER_INDEX_MAX_DEPTH), 8))
+        self.store.start_job(
+            kind="folder-index",
+            message="Refreshing cached folder metadata.",
+            summary={"total": len(roots), "completed": 0, "indexed_folders": 0},
+            details={"action": "refresh-folder-index", "root_count": len(roots), "max_depth": bounded_depth},
+        )
+        self.store.append_activity(
+            kind="folder",
+            status="running",
+            message="Started folder metadata refresh.",
+            details={"root_count": len(roots), "max_depth": bounded_depth},
+        )
+        try:
+            report = build_folder_metadata_index(
+                roots,
+                self.store.load_lan_connections(),
+                max_depth=bounded_depth,
+                progress_callback=self._folder_index_progress_callback,
+            )
+        except JobCancelledError:
+            cancel_details = {**(self.store.load_current_job() or {}).get("details", {}), "cancel_requested": True}
+            self.store.finish_job(status="cancelled", message="Folder metadata refresh cancelled.", details=cancel_details)
+            self.store.append_activity(kind="folder", status="cancelled", message="Folder metadata refresh cancelled.", details=cancel_details)
+            self._send_json({"error": "folder metadata refresh cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+            return
+        except Exception as exc:
+            error_details = {**(self.store.load_current_job() or {}).get("details", {}), "error": str(exc)}
+            self.store.finish_job(status="error", message="Folder metadata refresh failed.", details=error_details)
+            self.store.append_activity(kind="folder", status="error", message="Folder metadata refresh failed.", details=error_details)
+            self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self.store.save_folder_index_report(report)
+        details = {"summary": report.get("summary", {}), **(self.store.load_current_job() or {}).get("details", {})}
+        self.store.finish_job(
+            status="success",
+            message="Folder metadata refresh completed.",
+            details=details,
+            summary={
+                "total": len(roots),
+                "completed": len(roots),
+                "indexed_folders": report.get("summary", {}).get("folders", 0),
+                "error": report.get("summary", {}).get("errors", 0),
+            },
+        )
+        self.store.append_activity(kind="folder", status="success", message="Folder metadata refresh completed.", details=details)
+        self._send_json(report)
 
     def _run_duplicate_scan(self, payload: dict[str, Any], *, resume: bool) -> None:
         roots = self.store.list_roots()

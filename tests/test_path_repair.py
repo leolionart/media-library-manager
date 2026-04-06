@@ -69,6 +69,33 @@ class PathRepairTests(unittest.TestCase):
 
             self.assertEqual(result[0]["path"], str(candidate.resolve()))
 
+    @patch("media_library_manager.path_repair.default_storage_manager")
+    def test_search_library_paths_uses_cached_folder_index_before_live_scan(self, default_storage_manager_mock) -> None:
+        result = search_library_paths(
+            provider="sonarr",
+            query="BEEF",
+            roots=[RootConfig(path=Path("/library/series"), label="Series", kind="series")],
+            lan_connections={"smb": []},
+            folder_index_report={
+                "items": [
+                    {
+                        "label": "BEEF",
+                        "normalized_name": "beef",
+                        "path": "/library/series/BEEF",
+                        "storage_uri": "local:///library/series/BEEF",
+                        "root_label": "Series",
+                        "root_path": "/library/series",
+                        "root_storage_uri": "/library/series",
+                        "kind": "series",
+                        "depth": 1,
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(result[0]["path"], "/library/series/BEEF")
+        default_storage_manager_mock.assert_not_called()
+
     @patch("media_library_manager.path_repair.list_entries_recursive")
     @patch("media_library_manager.path_repair.default_storage_manager")
     def test_search_library_paths_uses_root_mount_path_for_rclone_results(self, default_storage_manager_mock, list_entries_recursive_mock) -> None:

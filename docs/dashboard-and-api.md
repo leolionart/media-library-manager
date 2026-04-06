@@ -45,6 +45,8 @@ Payload tổng hợp cho frontend:
 - `empty_folder_cleanup_report`
 - `last_path_repair_at`
 - `path_repair_report`
+- `last_folder_index_at`
+- `folder_index_summary`
 
 ### `GET /api/process`
 
@@ -139,6 +141,15 @@ Node hiện có:
 - `has_children`
 - `children`
 
+### `POST /api/operations/folder-index/refresh`
+
+Rebuild cached folder metadata from connected roots.
+`Library Finder` refresh hiện gọi endpoint này để các search nặng như `Path Repair Search` có thể đọc artifact trước thay vì luôn full-scan live roots.
+
+Payload:
+
+- `max_depth`
+
 ## 6. Duplicate workflow APIs
 
 ### `POST /api/scan`
@@ -203,6 +214,7 @@ Với Sonarr, scan chỉ đưa vào report các series mà thống kê của Son
 
 Search folder phù hợp trong connected roots để user chọn thư mục đúng rồi cập nhật lại provider path.
 Với Sonarr, search hiện đi qua cả rclone và SMB series roots thay vì bỏ SMB khi có rclone root.
+Search hiện ưu tiên dùng `last-folder-index.json` đã cache; chỉ fallback sang live traversal khi cache chưa có kết quả đủ tốt.
 
 Payload:
 

@@ -25,6 +25,7 @@ State cơ bản hiện gồm:
 - `last_cleanup_at`
 - `last_empty_folder_cleanup_at`
 - `last_path_repair_at`
+- `last_folder_index_at`
 - `activity_log`
 - `current_job`
 
@@ -50,6 +51,7 @@ thì artifacts là:
 - `data/last-cleanup-scan.json`
 - `data/last-empty-folder-cleanup.json`
 - `data/last-path-repair-scan.json`
+- `data/last-folder-index.json`
 
 ## 3. Current job
 
@@ -79,11 +81,12 @@ Job logs hiện lưu các bước chi tiết của:
 - cleanup scan cho duplicate files và empty duplicate folders
 - path repair scan
 - path repair search
+- folder index refresh
 
 Giới hạn:
 
 ```text
-JOB_LOG_LIMIT = 120
+JOB_LOG_LIMIT = 400
 ```
 
 ## 5. Activity log
@@ -104,6 +107,7 @@ Kinds hiện có thể gồm:
 
 - `cleanup-scan`
 - `path-repair`
+- `folder-index`
 
 Giới hạn:
 
@@ -124,6 +128,7 @@ ACTIVITY_LOG_LIMIT = 200
 - `cleanup_report`
 - `empty_folder_cleanup_report`
 - `path_repair_report`
+- `folder_index_summary`
 
 Frontend hiện tải phần lớn UI từ payload này cộng với một số endpoint riêng như:
 
@@ -138,3 +143,9 @@ Lưu ý cho `path_repair_report`:
 - report này hiện phản ánh item `missing` theo chính Radarr/Sonarr
 - không dùng report này như nguồn sự thật để suy luận `path_not_found` từ connected roots
 - việc tìm folder thay thế đúng vẫn là bước search riêng sau khi user chọn từng issue
+
+Lưu ý cho `last-folder-index.json`:
+
+- đây là metadata cache của thư mục con dưới các connected roots
+- artifact này được rebuild từ `Library Finder` refresh
+- `Path Repair Search` có thể dùng artifact này để trả candidate nhanh hơn trước khi fallback sang live traversal

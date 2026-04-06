@@ -20,6 +20,7 @@ import {
   CheckCircleOutlined,
   CloudServerOutlined,
   FolderOpenOutlined,
+  DatabaseOutlined,
   SyncOutlined,
 } from "@ant-design/icons";
 import { request } from "../api";
@@ -49,6 +50,15 @@ const emptyState = {
   last_cleanup_at: null,
   last_empty_folder_cleanup_at: null,
   last_path_repair_at: null,
+  last_folder_index_at: null,
+  folder_index_summary: null,
+};
+
+const emptyProviderStats = {
+  movies: 0,
+  series: 0,
+  movieFiles: 0,
+  episodeFiles: 0,
 };
 
 function formatDate(value) {
@@ -85,6 +95,7 @@ function getReadableJobKindLabel(value) {
   if (normalized === "apply") return "File changes";
   if (normalized === "cleanup-scan") return "Cleanup scan";
   if (normalized === "path-repair") return "Path repair";
+  if (normalized === "folder-index") return "Folder index";
   return value || "Process";
 }
 
@@ -218,6 +229,7 @@ export function OverviewView() {
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState(emptyState);
   const [currentJob, setCurrentJob] = useState(null);
+  const [providerStats, setProviderStats] = useState(emptyProviderStats);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,10 +259,58 @@ export function OverviewView() {
     };
   }, [currentJob?.id, currentJob?.status, message]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProviderStats = async () => {
+      const integrations = state.integrations || {};
+      const enabledProviders = ["radarr", "sonarr"].filter((name) => integrations?.[name]?.enabled);
+      if (!enabledProviders.length) {
+        if (!cancelled) setProviderStats(emptyProviderStats);
+        return;
+      }
+
+      try {
+        const results = await Promise.all(
+          enabledProviders.map((provider) => request(`/api/integrations/${provider}/items`))
+        );
+        if (cancelled) return;
+
+        const nextStats = { ...emptyProviderStats };
+        enabledProviders.forEach((provider, index) => {
+          const items = Array.isArray(results[index]) ? results[index] : [];
+          if (provider === "radarr") {
+            nextStats.movies = items.length;
+            nextStats.movieFiles = items.filter((item) => Boolean(item?.hasFile)).length;
+            return;
+          }
+          nextStats.series = items.length;
+          nextStats.episodeFiles = items.reduce(
+            (total, item) => total + toSafeNumber(item?.statistics?.episodeFileCount),
+            0
+          );
+        });
+        setProviderStats(nextStats);
+      } catch (error) {
+        if (!cancelled) {
+          console.error(error);
+        }
+      }
+    };
+
+    void loadProviderStats();
+    const timerId = window.setInterval(loadProviderStats, 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timerId);
+    };
+  }, [state.integrations]);
+
   const reportSummary = state.report?.summary || {};
   const cleanupSummary = state.cleanup_report?.summary || {};
   const emptyFolderCleanupSummary = state.empty_folder_cleanup_report?.summary || {};
   const pathRepairSummary = state.path_repair_report?.summary || {};
+  const folderIndexSummary = state.folder_index_summary || {};
   const syncSummary = state.sync_result?.summary || {};
   const activePlan = useMemo(
     () => getPendingPlan(state.plan, state.apply_result, state.last_plan_at, state.last_apply_at),
@@ -289,6 +349,18 @@ export function OverviewView() {
   const latestResolvedAt = getLatestDate(state.last_apply_at, state.last_empty_folder_cleanup_at, latestResolutionActivityAt);
   const processProgress = useMemo(() => getProcessProgress(currentJob), [currentJob]);
   const processSummaryTags = useMemo(() => buildProcessSummaryTags(currentJob), [currentJob]);
+  const rootKinds = useMemo(() => {
+    const counts = { movie: 0, series: 0, mixed: 0 };
+    (state.roots || []).forEach((root) => {
+      const key = String(root?.kind || "mixed").toLowerCase();
+      if (Object.hasOwn(counts, key)) {
+        counts[key] += 1;
+      }
+    });
+    return counts;
+  }, [state.roots]);
+  const totalProviderItems = providerStats.movies + providerStats.series;
+  const totalTrackedMediaFiles = providerStats.movieFiles + providerStats.episodeFiles;
 
   const resolutionItems = [
     {
@@ -381,51 +453,53 @@ export function OverviewView() {
             title="Connected Roots"
             value={state.roots.length || 0}
             prefix={<FolderOpenOutlined />}
-            note={`${state.managed_folders?.length || 0} managed SMB folder${state.managed_folders?.length === 1 ? "" : "s"} tracked`}
+            note={`${state.managed_folders?.length || 0} managed SMB folder${state.managed_folders?.length === 1 ? "" : "s"} tracked. ${enabledIntegrations.length} provider${enabledIntegrations.length === 1 ? "" : "s"} enabled.`}
             extra={<Tag>{enabledIntegrations.length} provider{enabledIntegrations.length === 1 ? "" : "s"}</Tag>}
-            tags={enabledIntegrations.map((name) => ({ key: name, color: "processing", label: name }))}
+            tags={[
+              { key: "movie-roots", color: "default", label: `${rootKinds.movie} movie` },
+              { key: "series-roots", color: "processing", label: `${rootKinds.series} series` },
+              { key: "mixed-roots", color: "purple", label: `${rootKinds.mixed} mixed` },
+            ]}
           />
         </Col>
         <Col xs={24} md={12} xl={6}>
           <OverviewMetricCard
-            title="Duplicate Findings"
-            value={duplicateGroups}
+            title="Indexed Folders"
+            value={toSafeNumber(folderIndexSummary.folders)}
+            prefix={<DatabaseOutlined />}
+            note={`Cached folder metadata from connected roots. Last refresh: ${formatDate(state.last_folder_index_at)}`}
+            extra={<Tag color={state.last_folder_index_at ? "success" : "warning"}>{state.last_folder_index_at ? "cached" : "not built"}</Tag>}
+            tags={[
+              { key: "cache-roots", color: "default", label: `${toSafeNumber(folderIndexSummary.roots)} roots` },
+              { key: "cache-depth", color: "processing", label: `depth ${toSafeNumber(folderIndexSummary.max_depth)}` },
+              { key: "cache-errors", color: toSafeNumber(folderIndexSummary.errors) ? "error" : "success", label: `${toSafeNumber(folderIndexSummary.errors)} errors` },
+            ]}
+          />
+        </Col>
+        <Col xs={24} md={12} xl={6}>
+          <OverviewMetricCard
+            title="Provider Library"
+            value={totalProviderItems}
             prefix={<CloudServerOutlined />}
-            note={`${toSafeNumber(reportSummary.exact_duplicate_groups)} exact, ${toSafeNumber(reportSummary.media_collision_groups)} collision, ${toSafeNumber(cleanupSummary.folder_media_duplicate_groups)} provider cleanup, ${toSafeNumber(emptyFolderCleanupSummary.duplicate_groups)} folder cleanup`}
-            extra={<Tag color={duplicateGroups ? "warning" : "success"}>{duplicateGroups ? "open" : "clear"}</Tag>}
+            note={`${providerStats.movies} movies and ${providerStats.series} series currently tracked by enabled providers.`}
+            extra={<Tag color={enabledIntegrations.length ? "processing" : "default"}>{enabledIntegrations.length ? "provider inventory" : "no provider"}</Tag>}
             tags={[
-              { key: "indexed", color: "default", label: `${toSafeNumber(reportSummary.files)} indexed` },
-              {
-                key: "cleanup",
-                color: "warning",
-                label: `${toSafeNumber(cleanupSummary.skipped) + toSafeNumber(emptyFolderCleanupSummary.errors)} skipped/errors`,
-              },
+              { key: "provider-movies", color: "default", label: `${providerStats.movies} movies` },
+              { key: "provider-series", color: "processing", label: `${providerStats.series} series` },
             ]}
           />
         </Col>
         <Col xs={24} md={12} xl={6}>
           <OverviewMetricCard
-            title="Planned Changes"
-            value={plannedChanges}
-            prefix={<SyncOutlined />}
-            note={`${toSafeNumber(planSummary.move)} move, ${toSafeNumber(planSummary.delete)} delete, ${toSafeNumber(planSummary.review)} check manually. Last plan: ${formatDate(state.last_plan_at)}`}
-            extra={<Tag color={activePlan ? "processing" : "default"}>{activePlan ? "saved plan" : "no plan"}</Tag>}
-            tags={[
-              { key: "queue", color: attentionCount ? "warning" : "success", label: `${attentionCount} waiting` },
-            ]}
-          />
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <OverviewMetricCard
-            title="Cases Resolved"
-            value={resolvedCount}
+            title="Tracked Media Files"
+            value={totalTrackedMediaFiles}
             prefix={<CheckCircleOutlined />}
-            note={`${fileChangeCount} file changes, ${cleanupDeletedCount} cleanup deletions, ${providerFixCount} provider fixes`}
-            extra={<Tag color={resolvedCount ? "success" : "default"}>{syncUpdatedCount} synced</Tag>}
+            note={`${providerStats.movieFiles} movie folders with files and ${providerStats.episodeFiles} Sonarr episode files currently recognized.`}
+            extra={<Tag color={toSafeNumber(pathRepairSummary.issues) ? "warning" : "success"}>{toSafeNumber(pathRepairSummary.issues)} repair issues</Tag>}
             tags={[
-              { key: "changed", color: "success", label: `${fileChangeCount} changed` },
-              { key: "cleanup-deleted", color: "warning", label: `${cleanupDeletedCount} deleted` },
-              { key: "provider-fixed", color: "processing", label: `${providerFixCount} repaired` },
+              { key: "movie-files", color: "success", label: `${providerStats.movieFiles} movie titles` },
+              { key: "episode-files", color: "processing", label: `${providerStats.episodeFiles} episodes` },
+              { key: "sync-updated", color: "default", label: `${syncUpdatedCount} synced` },
             ]}
           />
         </Col>

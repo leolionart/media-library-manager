@@ -41,6 +41,7 @@ import {
   fetchOperationsFolderChildren,
   fetchProviderItems,
   previewMoveToProvider,
+  refreshOperationsFolderIndex,
   removeRoot,
   runOperationsFolderCleanupDelete,
   runOperationsFolderCleanupScan,
@@ -1036,15 +1037,12 @@ export function OperationsView() {
   };
 
   const handleRefreshFolders = async () => {
-    setActionLoading("refresh-folders");
-    try {
-      await refreshAll();
-      message.success("Folder list refreshed.");
-    } catch (error) {
-      message.error(error.message);
-    } finally {
-      setActionLoading("");
-    }
+    await runAction(
+      "refresh-folders",
+      () => refreshOperationsFolderIndex(),
+      "Folder list and cached folder metadata refreshed.",
+      { trackProcess: true }
+    );
   };
 
   const loadBranch = async (record) => {

@@ -18,12 +18,17 @@ Overview là màn giám sát tổng hợp.
 
 Hiện hiển thị:
 
-- KPI về duplicate, apply, sync, cleanup, path repair
-- KPI resolved và latest-operation được tổng hợp từ cả artifact `last-*` lẫn `activity_log`, nên các thao tác như `Folder deleted.`, `Provider item removed.`, hoặc `Provider path updated.` cũng được phản ánh trên dashboard
+- KPI inventory ổn định hơn, tập trung vào:
+  - `Connected Roots`
+  - `Indexed Folders`
+  - `Provider Library`
+  - `Tracked Media Files`
+- số liệu folder index lấy từ artifact cache `last-folder-index.json` qua `last_folder_index_at` và `folder_index_summary`
+- số liệu provider inventory được derive từ danh sách item hiện tại của Radarr và Sonarr
 - trạng thái roots và providers
 - current process
 - recent activity
-- các số liệu dẫn xuất như số case đã xử lý
+- các breakdown phụ về resolution và attention vẫn được tổng hợp từ artifact `last-*` lẫn `activity_log`, nên các thao tác như `Folder deleted.`, `Provider item removed.`, hoặc `Provider path updated.` vẫn phản ánh trên dashboard
 
 ## 3. Library Finder
 
@@ -34,6 +39,7 @@ Hiện có:
 - folder inventory phẳng từ `GET /api/operations/folders`
 - folder tree từ `GET /api/operations/folders/tree`
 - lazy child loading từ `GET /api/operations/folders/children`
+- manual refresh của `Library Finder` hiện rebuild thêm `folder index` artifact cho connected roots để tái dùng ở các workflow search nặng
 - duplicate folder cleanup scan từ selection hiện tại trong `Library Finder` cho local, SMB, và rclone roots
 - xóa duplicate folder candidates ngay trong `Library Finder` với shared process logs và retry/resume
 - duplicate workflow `scan -> plan -> preview/apply`
@@ -69,6 +75,7 @@ Hiện có:
 - với Radarr, scan chỉ đưa vào report các movie đã available/released và đang bị `missing` trong provider
 - với Sonarr, scan chỉ đưa vào report các series mà provider đang báo thiếu episode files theo thống kê của Sonarr
 - với Sonarr, search và path-mapping hiện kiểm tra cả rclone lẫn SMB series roots, kể cả alias Synology-style như `usbshare/Series`
+- search hiện ưu tiên đọc `folder index` artifact đã cache từ `Library Finder` refresh, rồi mới fallback sang live traversal nếu cache không có candidate phù hợp
 - search folder phù hợp trong connected roots khi user chủ động bấm tìm
 - update path trong provider
 - remove item khỏi provider mà không xóa media files
