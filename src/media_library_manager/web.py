@@ -1831,12 +1831,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _prune_deleted_file_from_report(self, *, path_value: str, storage_uri: str) -> None:
         report_data = self.store.load_report()
-        if report_data is None:
-            cleanup_data = self.store.load_cleanup_report()
-            if cleanup_data is None:
-                return
-        else:
-            roots = [RootConfig(path=Path(root["path"]), label=root["label"], priority=int(root.get("priority", 50)), kind=root.get("kind", "mixed"), connection_id=str(root.get("connection_id", "") or ""), connection_label=str(root.get("connection_label", "") or ""), storage_uri=str(root.get("storage_uri", "") or ""), share_name=str(root.get("share_name", "") or "")) for root in report_data.get("roots", [])]
+        if report_data is not None:
+            roots = [
+                RootConfig(
+                    path=Path(root["path"]),
+                    label=root["label"],
+                    priority=int(root.get("priority", 50)),
+                    kind=root.get("kind", "mixed"),
+                    connection_id=str(root.get("connection_id", "") or ""),
+                    connection_label=str(root.get("connection_label", "") or ""),
+                    storage_uri=str(root.get("storage_uri", "") or ""),
+                    share_name=str(root.get("share_name", "") or ""),
+                )
+                for root in report_data.get("roots", [])
+            ]
             remaining_files = [
                 media_from_dict(item)
                 for item in report_data.get("files", [])
@@ -1847,16 +1855,43 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.store.save_report(refreshed_report)
 
         cleanup_data = self.store.load_cleanup_report()
-        if cleanup_data is None:
-            return
-        remaining_cleanup_files = [
-            media_from_dict(item)
-            for item in cleanup_data.get("files", [])
-            if str(item.get("path") or "") != path_value and str(item.get("storage_uri") or "") != storage_uri
-        ]
-        refreshed_cleanup = rebuild_cleanup_report(cleanup_data, remaining_cleanup_files)
-        refreshed_cleanup["generated_at"] = now_iso()
-        self.store.save_cleanup_report(refreshed_cleanup)
+        if cleanup_data is not None:
+            remaining_cleanup_files = [
+                media_from_dict(item)
+                for item in cleanup_data.get("files", [])
+                if str(item.get("path") or "") != path_value and str(item.get("storage_uri") or "") != storage_uri
+            ]
+            refreshed_cleanup = rebuild_cleanup_report(cleanup_data, remaining_cleanup_files)
+            refreshed_cleanup["generated_at"] = now_iso()
+            self.store.save_cleanup_report(refreshed_cleanup)
+
+        # Also prune from folder index report to prevent stale entries in future cleanup scans
+        index_report = self.store.load_folder_index_report()
+        if index_report is not None:
+            modified = False
+            for item in index_report.get("items", []):
+                if not isinstance(item, dict):
+                    continue
+                videos = item.get("video_files", [])
+                if not isinstance(videos, list):
+                    continue
+                original_count = len(videos)
+                item["video_files"] = [
+                    v
+                    for v in videos
+                    if isinstance(v, dict) and str(v.get("path") or "") != path_value and str(v.get("storage_uri") or "") != storage_uri
+                ]
+                if len(item["video_files"]) != original_count:
+                    item["video_file_count"] = len(item["video_files"])
+                    modified = True
+
+            if modified:
+                index_report["generated_at"] = now_iso()
+                # Update total video file count in summary
+                total_videos = sum(int(item.get("video_file_count", 0)) for item in index_report.get("items", []) if isinstance(item, dict))
+                if "summary" in index_report:
+                    index_report["summary"]["video_files"] = total_videos
+                self.store.save_folder_index_report(index_report)
 
     def _normalize_cleanup_file_delete_items(self, items: Any) -> list[dict[str, Any]]:
         normalized_items: list[dict[str, Any]] = []

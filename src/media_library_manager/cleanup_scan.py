@@ -42,6 +42,7 @@ def scan_provider_cleanup(
     connected_roots = roots or []
     folder_index_lookup = _build_folder_index_lookup(folder_index_report)
     total_files = 0
+    skipped_ghost_files = 0
 
     for provider in requested:
         config = build_provider_config(integrations.get(provider, {}))
@@ -96,8 +97,18 @@ def scan_provider_cleanup(
                 share_name=resolved.share_name,
             )
             cached_files = _media_files_from_index_rows(folder_rows, root=root)
-            files.extend(cached_files)
-            total_files += len(cached_files)
+            
+            # Verify local files existence to avoid "ghost" duplicates from stale cache
+            verified_files: list[MediaFile] = []
+            for f in cached_files:
+                if not f.storage_uri: # Only check local files for performance
+                    if not f.path.exists():
+                        skipped_ghost_files += 1
+                        continue
+                verified_files.append(f)
+            
+            files.extend(verified_files)
+            total_files += len(verified_files)
             if progress_callback:
                 progress_callback(
                     {
@@ -106,7 +117,7 @@ def scan_provider_cleanup(
                         "total_roots": len(provider_items),
                         "root_label": root.label,
                         "root_path": str(root.path),
-                        "indexed_files": len(cached_files),
+                        "indexed_files": len(verified_files),
                         "total_indexed_files": total_files,
                     }
                 )
@@ -118,6 +129,7 @@ def scan_provider_cleanup(
                 "providers": active_providers,
                 "roots_scanned": len(provider_items),
                 "skipped": len(skipped_items),
+                "ghost_files_skipped": skipped_ghost_files,
                 "errors": len(errors),
             }
         )
