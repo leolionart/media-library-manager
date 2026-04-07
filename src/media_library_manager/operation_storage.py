@@ -425,15 +425,19 @@ class OperationStorageRouter:
     def _rclone_entry(self, path: StoragePath) -> dict[str, Any] | None:
         normalized = self._normalize_rclone_path(path.rclone_path)
         if normalized in {"", "/"}:
-            self._rclone_list_entries(path)
             return {"Name": path.rclone_remote, "IsDir": True}
-        parent = self.parent(path)
-        if parent is None:
-            return None
-        target_name = path.name
-        for entry in self._rclone_list_entries(parent):
-            if str(entry.get("Name") or "") == target_name:
-                return entry
+
+        # Probe the path directly to avoid expensive parent listing or missing entries
+        payload = self._run_rclone_command(
+            [
+                "lsjson",
+                build_rclone_target(path.rclone_remote, path.rclone_path),
+            ],
+            expect_json=True,
+        ).get("payload")
+
+        if isinstance(payload, list) and len(payload) > 0:
+            return payload[0]
         return None
 
     def _rclone_list_entries(self, path: StoragePath) -> list[dict[str, Any]]:

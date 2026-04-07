@@ -28,7 +28,14 @@ def build_rclone_target(remote: str, path: str) -> str:
     if not clean_remote:
         raise ValueError("rclone remote is required")
     clean_path = str(path or "").strip().strip("/")
-    return f"{clean_remote}:{clean_path}" if clean_path else f"{clean_remote}:"
+    if not clean_path:
+        return f"{clean_remote}:"
+
+    # If path contains a colon, rclone might mistake it for a remote name
+    # unless it's explicitly part of the path (e.g., remote:./path:with:colon)
+    if ":" in clean_path:
+        return f"{clean_remote}:./{clean_path}"
+    return f"{clean_remote}:{clean_path}"
 
 
 def build_target(remote: str, path: str) -> str:
