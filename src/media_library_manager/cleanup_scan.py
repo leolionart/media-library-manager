@@ -98,13 +98,25 @@ def scan_provider_cleanup(
             )
             cached_files = _media_files_from_index_rows(folder_rows, root=root)
             
-            # Verify local files existence to avoid "ghost" duplicates from stale cache
+            # Verify files existence to avoid "ghost" duplicates from stale cache.
+            # We check both local and remote files. 
+            # For remote (rclone), we use the router to probe existence which is optimized in _rclone_entry.
             verified_files: list[MediaFile] = []
             for f in cached_files:
-                if not f.storage_uri: # Only check local files for performance
+                if should_cancel and should_cancel():
+                    raise RuntimeError("job cancelled")
+
+                if not f.storage_uri: # Local file
                     if not f.path.exists():
                         skipped_ghost_files += 1
                         continue
+                else: # Remote file (rclone or smb)
+                    # We use a router to check if the file really exists
+                    # This might be slightly slow for rclone but necessary for accuracy
+                    if storage_router and not storage_router.is_file(f.storage_uri):
+                        skipped_ghost_files += 1
+                        continue
+                
                 verified_files.append(f)
             
             files.extend(verified_files)

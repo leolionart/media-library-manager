@@ -60,6 +60,7 @@ class OperationStorageRouter:
         self.smb_connection_resolver = smb_connection_resolver
         self.smb_timeout = smb_timeout
         self.rclone_timeout = rclone_timeout
+        self._rclone_entry_cache: dict[str, dict[str, Any] | None] = {}
 
     def parse_storage_path(self, value: str | Path | StoragePath) -> StoragePath:
         if isinstance(value, StoragePath):
@@ -117,12 +118,17 @@ class OperationStorageRouter:
         if path.backend == "local":
             return str(path.local_path or "")
         if path.backend == "rclone":
-            quoted_remote = quote(path.rclone_remote, safe="")
+            # Remote names are mostly alphanumeric but can have dashes/underscores
+            quoted_remote = quote(path.rclone_remote, safe="-_")
             normalized = self._normalize_rclone_path(path.rclone_path)
             if normalized in {"", "/"}:
                 return f"rclone://{quoted_remote}/"
-            suffix = "/" + "/".join(quote(part, safe="") for part in normalized.strip("/").split("/"))
-            return f"rclone://{quoted_remote}{suffix}"
+            
+            # The path part should be quoted but we must KEEP the forward slashes (/) 
+            # and other rclone-friendly characters unquoted.
+            # Using quote(path, safe="/ ()!-_.") allows the full path to be reconstructed correctly.
+            quoted_path = quote(normalized.lstrip("/"), safe="/ ()!-_.")
+            return f"rclone://{quoted_remote}/{quoted_path}"
         quoted_connection = quote(path.connection_id, safe="")
         quoted_share = quote(path.share_name, safe="")
         suffix = ""
@@ -267,7 +273,9 @@ class OperationStorageRouter:
             path.local_path.mkdir(parents=True, exist_ok=True)
             return
         if path.backend == "rclone":
-            result = self._run_rclone_command(["mkdir", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            # Use build_rclone_target to ensure we have the correct remote:path format for CLI
+            target = build_rclone_target(path.rclone_remote, path.rclone_path)
+            result = self._run_rclone_command(["mkdir", target])
             if result.get("status") != "success":
                 raise ValueError(str(result.get("message") or "rclone mkdir failed"))
             return
@@ -356,7 +364,8 @@ class OperationStorageRouter:
             return
         if path.backend == "rclone":
             self._ensure_not_rclone_root(path, "delete")
-            result = self._run_rclone_command(["deletefile", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            target = build_rclone_target(path.rclone_remote, path.rclone_path)
+            result = self._run_rclone_command(["deletefile", target])
             if result.get("status") != "success":
                 raise ValueError(str(result.get("message") or "rclone deletefile failed"))
             return
@@ -373,7 +382,8 @@ class OperationStorageRouter:
             return
         if path.backend == "rclone":
             self._ensure_not_rclone_root(path, "delete")
-            result = self._run_rclone_command(["purge", build_rclone_target(path.rclone_remote, path.rclone_path)])
+            target = build_rclone_target(path.rclone_remote, path.rclone_path)
+            result = self._run_rclone_command(["purge", target])
             if result.get("status") != "success":
                 raise ValueError(str(result.get("message") or "rclone purge failed"))
             return
@@ -423,9 +433,15 @@ class OperationStorageRouter:
         return parse_smbclient_entries(str(result.get("stdout") or ""))
 
     def _rclone_entry(self, path: StoragePath) -> dict[str, Any] | None:
+        cache_key = self.stringify(path)
+        if cache_key in self._rclone_entry_cache:
+            return self._rclone_entry_cache[cache_key]
+
         normalized = self._normalize_rclone_path(path.rclone_path)
         if normalized in {"", "/"}:
-            return {"Name": path.rclone_remote, "IsDir": True}
+            entry: dict[str, Any] | None = {"Name": path.rclone_remote, "IsDir": True}
+            self._rclone_entry_cache[cache_key] = entry
+            return entry
 
         # Probe the path directly to avoid expensive parent listing or missing entries
         payload = self._run_rclone_command(
@@ -436,9 +452,12 @@ class OperationStorageRouter:
             expect_json=True,
         ).get("payload")
 
+        entry = None
         if isinstance(payload, list) and len(payload) > 0:
-            return payload[0]
-        return None
+            entry = payload[0]
+        
+        self._rclone_entry_cache[cache_key] = entry
+        return entry
 
     def _rclone_list_entries(self, path: StoragePath) -> list[dict[str, Any]]:
         if path.backend != "rclone":

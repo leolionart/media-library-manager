@@ -48,9 +48,15 @@ def run_rclone_command(
     timeout: int = DEFAULT_RCLONE_TIMEOUT,
     expect_json: bool = False,
 ) -> Any:
-    command = ["rclone", *args]
+    # Use shell execution to ensure rclone CLI receives correctly-escaped paths
+    # especially when parentheses and spaces are involved.
+    import shlex
+    
+    # Escape each argument and join into a single command string
+    command_str = "rclone " + " ".join(shlex.quote(arg) for arg in args)
+    
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout)
+        result = subprocess.run(command_str, shell=True, capture_output=True, text=True, check=False, timeout=timeout)
     except FileNotFoundError as exc:
         raise RcloneError("rclone binary is not available in PATH") from exc
     except subprocess.TimeoutExpired as exc:
