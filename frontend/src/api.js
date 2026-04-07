@@ -27,6 +27,9 @@ export async function request(url, options = {}) {
     if (error?.name === "AbortError") {
       throw new Error(`Request timed out after ${timeoutMs}ms`);
     }
+    if (error instanceof TypeError && String(error.message || "").includes("Failed to fetch")) {
+      throw new Error("Could not reach the dashboard backend. Open the app from the active backend URL and refresh the page.");
+    }
     throw error;
   } finally {
     if (timeoutId) {
@@ -294,6 +297,13 @@ export function deleteMovieFile({ path, storageUri, rootPath, rootStorageUri, pr
   if (rootPath) params.set("root_path", rootPath);
   if (rootStorageUri) params.set("root_storage_uri", rootStorageUri);
   return request(`/api/files?${params.toString()}`, { method: "DELETE" });
+}
+
+export function deleteCleanupFiles(items) {
+  return request("/api/cleanup/files/delete", {
+    method: "POST",
+    body: JSON.stringify({ items: items || [] }),
+  });
 }
 
 export function deleteMediaFile({ path, storageUri }) {

@@ -32,20 +32,12 @@ def resolve_provider_directory(
     if not text:
         return None, "missing_path"
 
-    local_path = Path(text).expanduser().resolve()
-    if local_path.exists():
-        if local_path.is_dir():
-            return (
-                ResolvedProviderDirectory(
-                    path=local_path,
-                    storage_uri="",
-                    connection_id="",
-                    connection_label="",
-                    share_name="",
-                ),
-                "ok",
-            )
-        return None, "path_not_directory"
+    mapped_local = map_provider_directory(raw_path=raw_path, roots=roots)
+    if mapped_local is not None and not mapped_local.storage_uri:
+        if mapped_local.path.is_dir():
+            return mapped_local, "ok"
+        if mapped_local.path.exists():
+            return None, "path_not_directory"
 
     provider_segments = _path_segments(text)
     mapped = _find_best_mapped_root(provider_segments=provider_segments, roots=roots)
@@ -62,6 +54,34 @@ def resolve_provider_directory(
             ), "ok"
 
     return None, "path_not_found"
+
+
+def map_provider_directory(*, raw_path: str, roots: list[RootConfig]) -> ResolvedProviderDirectory | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+
+    local_path = Path(text).expanduser().resolve()
+    if local_path.exists():
+        return ResolvedProviderDirectory(
+            path=local_path,
+            storage_uri="",
+            connection_id="",
+            connection_label="",
+            share_name="",
+        )
+
+    provider_segments = _path_segments(text)
+    mapped = _find_best_mapped_root(provider_segments=provider_segments, roots=roots)
+    if mapped is None:
+        return None
+    root, root_storage_path, relative_segments = mapped
+    mapped_storage_path = root_storage_path.join(*relative_segments)
+    return _build_resolved_directory(
+        root=root,
+        root_storage_path=root_storage_path,
+        mapped_storage_path=mapped_storage_path,
+    )
 
 
 def provider_path_maps_to_connected_root(*, raw_path: str, roots: list[RootConfig]) -> bool:

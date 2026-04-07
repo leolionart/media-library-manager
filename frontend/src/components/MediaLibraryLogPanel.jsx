@@ -138,12 +138,16 @@ function getProcessLogWindowTitle(scope, currentJob) {
   return scope === "cleanup" ? "library-cleanup" : "path-repair";
 }
 
-function getReadableJobKindLabel(kind) {
+function getReadableJobKindLabel(kind, currentJob = null) {
   const normalized = String(kind || "").toLowerCase();
+  const action = String(currentJob?.details?.action || "").toLowerCase();
   if (normalized === "scan") return "Scan";
   if (normalized === "plan") return "Change plan";
   if (normalized === "apply") return "File changes";
-  if (normalized === "cleanup-scan") return "Folder cleanup";
+  if (normalized === "cleanup-scan") {
+    if (action === "delete-media-files" || action === "delete-media-file") return "Cleanup file delete";
+    return "Folder cleanup";
+  }
   if (normalized === "folder-index") return "Folder index";
   if (normalized === "path-repair") return "Path Repair";
   if (normalized === "folder") return "Folder action";
@@ -289,6 +293,8 @@ function activityMatchesScope(scope, entry) {
   if (scope === "cleanup") {
     return (
       message.includes("cleanup scan") ||
+      message.includes("cleanup media file delete") ||
+      message.includes("selected media files deleted") ||
       message.includes("empty duplicate folder") ||
       message.includes("file deleted") ||
       message.includes("file delete failed") ||
@@ -490,7 +496,7 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
                       <Tag color={scopedCurrentJob.status === "error" ? "error" : ["cancelled", "waiting"].includes(scopedCurrentJob.status) ? "warning" : "success"}>
                         {getReadableStatusLabel(scopedCurrentJob.status || "running")}
                       </Tag>
-                      <Tag>{getReadableJobKindLabel(scopedCurrentJob.kind)}</Tag>
+                      <Tag>{getReadableJobKindLabel(scopedCurrentJob.kind, scopedCurrentJob)}</Tag>
                       {scopedCurrentJob.cancel_requested ? <Tag color="warning">Stop Requested</Tag> : null}
                       {scopedCurrentJob.status === "running" && !logStreamPaused ? <Tag color="processing">Live</Tag> : null}
                       {logStreamPaused ? <Tag>Paused</Tag> : null}
@@ -639,7 +645,7 @@ export function MediaLibraryLogPanel({ scope, title, extra = null, stateData, cu
                   {getProcessLogWindowTitle(scope, scopedCurrentJob)}
                 </Text>
                 <Text className="process-log-shell-title-sub">
-                  {scopedCurrentJob ? `${getReadableJobKindLabel(scopedCurrentJob.kind)} activity` : `${scope} trace`}
+                  {scopedCurrentJob ? `${getReadableJobKindLabel(scopedCurrentJob.kind, scopedCurrentJob)} activity` : `${scope} trace`}
                 </Text>
               </div>
               <Text className="process-log-shell-state">

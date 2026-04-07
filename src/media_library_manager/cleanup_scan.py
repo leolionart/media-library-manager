@@ -1,20 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 from .models import MediaFile, RootConfig
-from .provider_path_resolution import resolve_provider_directory
+from .provider_path_resolution import map_provider_directory
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
 from .providers.sonarr import SonarrClient
-from .scanner import VIDEO_EXTENSIONS, build_folder_media_duplicate_groups, inspect_media_file
-from .scanner_storage import LocalPathScannerStorage, StorageManagerScannerStorage
-from .storage import default_storage_manager
+from .scanner import build_folder_media_duplicate_groups, inspect_media_file
+from .scanner_storage import ScannedFileEntry
 from .sync_integrations import build_provider_config
 
 
 CleanupProgressCallback = Callable[[dict[str, object]], None]
-FILE_PROGRESS_INTERVAL = 10
+MIN_CLEANUP_FOLDER_INDEX_VERSION = 2
 
 
 def scan_provider_cleanup(
@@ -22,7 +22,7 @@ def scan_provider_cleanup(
     *,
     providers: list[str] | None = None,
     roots: list[RootConfig] | None = None,
-    lan_connections: dict[str, Any] | None = None,
+    folder_index_report: dict[str, Any] | None = None,
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
     start_root_index: int = 1,
@@ -30,15 +30,18 @@ def scan_provider_cleanup(
     requested = [provider for provider in (providers or ["radarr", "sonarr"]) if provider in {"radarr", "sonarr"}]
     if not requested:
         return _build_cleanup_report(providers=[], provider_items=[], files=[], skipped_items=[], errors=[])
+    cache_error = _validate_cleanup_folder_index(folder_index_report)
+    if cache_error:
+        raise ValueError(cache_error)
 
-    all_roots: list[RootConfig] = []
+    files: list[MediaFile] = []
     provider_items: list[dict[str, Any]] = []
     skipped_items: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     active_providers: list[str] = []
     connected_roots = roots or []
-    resolved_lan_connections = lan_connections or {"smb": []}
-    manager = default_storage_manager(lan_connections=resolved_lan_connections)
+    folder_index_lookup = _build_folder_index_lookup(folder_index_report)
+    total_files = 0
 
     for provider in requested:
         config = build_provider_config(integrations.get(provider, {}))
@@ -59,10 +62,16 @@ def scan_provider_cleanup(
             if not raw_path:
                 skipped_items.append({"provider": provider, "id": item.get("id"), "title": item.get("title"), "reason": "missing_path"})
                 continue
-            resolved, status = resolve_provider_directory(raw_path=raw_path, roots=connected_roots, manager=manager)
+            resolved, status = _resolve_provider_directory_from_cache(raw_path=raw_path, roots=connected_roots)
             if resolved is None:
                 skipped_items.append(
                     {"provider": provider, "id": item.get("id"), "title": item.get("title"), "path": raw_path, "reason": status}
+                )
+                continue
+            folder_rows = _lookup_folder_index_rows(folder_index_lookup, resolved=resolved)
+            if not folder_rows:
+                skipped_items.append(
+                    {"provider": provider, "id": item.get("id"), "title": item.get("title"), "path": raw_path, "reason": "folder_index_miss"}
                 )
                 continue
             provider_items.append(
@@ -76,46 +85,53 @@ def scan_provider_cleanup(
                     "storage_uri": resolved.storage_uri,
                 }
             )
-            all_roots.append(
-                RootConfig(
-                    path=resolved.path,
-                    label=str(item.get("title") or resolved.path.name),
-                    priority=100,
-                    kind="movie" if provider == "radarr" else "series",
-                    connection_id=resolved.connection_id,
-                    connection_label=resolved.connection_label,
-                    storage_uri=resolved.storage_uri,
-                    share_name=resolved.share_name,
-                )
+            root = RootConfig(
+                path=resolved.path,
+                label=str(item.get("title") or resolved.path.name),
+                priority=100,
+                kind="movie" if provider == "radarr" else "series",
+                connection_id=resolved.connection_id,
+                connection_label=resolved.connection_label,
+                storage_uri=resolved.storage_uri,
+                share_name=resolved.share_name,
             )
+            cached_files = _media_files_from_index_rows(folder_rows, root=root)
+            files.extend(cached_files)
+            total_files += len(cached_files)
+            if progress_callback:
+                progress_callback(
+                    {
+                        "event": "root_completed",
+                        "index": len(provider_items),
+                        "total_roots": len(provider_items),
+                        "root_label": root.label,
+                        "root_path": str(root.path),
+                        "indexed_files": len(cached_files),
+                        "total_indexed_files": total_files,
+                    }
+                )
 
     if progress_callback:
         progress_callback(
             {
                 "event": "provider_roots_loaded",
                 "providers": active_providers,
-                "roots_scanned": len(all_roots),
+                "roots_scanned": len(provider_items),
                 "skipped": len(skipped_items),
                 "errors": len(errors),
             }
         )
-
-    if not all_roots:
-        return _build_cleanup_report(
-            providers=active_providers,
-            provider_items=provider_items,
-            files=[],
-            skipped_items=skipped_items,
-            errors=errors,
+    if progress_callback:
+        progress_callback(
+            {
+                "event": "scan_completed",
+                "total_roots": len(provider_items),
+                "total_indexed_files": len(files),
+                "exact_duplicate_groups": 0,
+                "media_collision_groups": 0,
+                "folder_media_duplicate_groups": len(build_folder_media_duplicate_groups(files)),
+            }
         )
-
-    files = _scan_provider_roots(
-        all_roots,
-        lan_connections=resolved_lan_connections,
-        progress_callback=progress_callback,
-        should_cancel=should_cancel,
-        start_root_index=start_root_index,
-    )
     return _build_cleanup_report(
         providers=active_providers,
         provider_items=provider_items,
@@ -123,6 +139,74 @@ def scan_provider_cleanup(
         skipped_items=skipped_items,
         errors=errors,
     )
+
+
+def _validate_cleanup_folder_index(report: dict[str, Any] | None) -> str | None:
+    if not isinstance(report, dict):
+        return "Refresh cached folder metadata in Library Finder before running Library Cleanup."
+    if int(report.get("version", 0) or 0) < MIN_CLEANUP_FOLDER_INDEX_VERSION:
+        return "Cached folder metadata is outdated. Refresh Library Finder to rebuild the folder index."
+    items = report.get("items")
+    if not isinstance(items, list) or not items:
+        return "Cached folder metadata is empty. Refresh Library Finder before running Library Cleanup."
+    sample = next((item for item in items if isinstance(item, dict)), None)
+    if sample is None or "video_files" not in sample:
+        return "Cached folder metadata is missing video file details. Refresh Library Finder before running Library Cleanup."
+    return None
+
+
+def _build_folder_index_lookup(report: dict[str, Any] | None) -> dict[str, dict[str, dict[str, Any]]]:
+    by_storage_uri: dict[str, dict[str, Any]] = {}
+    by_path: dict[str, dict[str, Any]] = {}
+    items: list[dict[str, Any]] = []
+    if not isinstance(report, dict):
+        return {"by_storage_uri": by_storage_uri, "by_path": by_path, "items": items}
+    for item in report.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        items.append(item)
+        path = str(item.get("path") or "")
+        storage_uri = str(item.get("storage_uri") or "")
+        if path:
+            by_path[path] = item
+        if storage_uri:
+            by_storage_uri[storage_uri] = item
+    return {"by_storage_uri": by_storage_uri, "by_path": by_path, "items": items}
+
+
+def _resolve_provider_directory_from_cache(*, raw_path: str, roots: list[RootConfig]) -> tuple[Any | None, str]:
+    mapped = map_provider_directory(raw_path=raw_path, roots=roots)
+    if mapped is not None:
+        return mapped, "ok"
+    local_path = Path(str(raw_path or "")).expanduser().resolve()
+    if local_path.exists() and not local_path.is_dir():
+        return None, "path_not_directory"
+    return None, "path_not_found"
+
+
+def _lookup_folder_index_rows(folder_index_lookup: dict[str, Any], *, resolved: Any) -> list[dict[str, Any]]:
+    direct_match: dict[str, Any] | None = None
+    storage_uri = str(resolved.storage_uri or "")
+    if storage_uri:
+        direct_match = folder_index_lookup["by_storage_uri"].get(storage_uri)
+    if direct_match is None:
+        direct_match = folder_index_lookup["by_path"].get(str(resolved.path))
+    if direct_match is None:
+        return []
+
+    resolved_path = Path(str(resolved.path))
+    matched: list[dict[str, Any]] = []
+    for item in folder_index_lookup.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        item_path_text = str(item.get("path") or "").strip()
+        if not item_path_text:
+            continue
+        item_path = Path(item_path_text)
+        if item_path == resolved_path or item_path.is_relative_to(resolved_path):
+            matched.append(item)
+    matched.sort(key=lambda item: (int(item.get("depth") or 0), str(item.get("path") or "").lower()))
+    return matched
 
 
 def rebuild_cleanup_report(existing_report: dict[str, Any], files: list[MediaFile]) -> dict[str, Any]:
@@ -135,104 +219,40 @@ def rebuild_cleanup_report(existing_report: dict[str, Any], files: list[MediaFil
     )
 
 
-def _scan_provider_roots(
-    roots: list[RootConfig],
-    *,
-    lan_connections: dict[str, Any] | None = None,
-    progress_callback: CleanupProgressCallback | None = None,
-    should_cancel: Callable[[], bool] | None = None,
-    start_root_index: int = 1,
-) -> list[MediaFile]:
-    storage = LocalPathScannerStorage()
-    if any(bool(root.storage_uri) for root in roots):
-        manager = default_storage_manager(lan_connections=lan_connections or {"smb": []})
-        storage = StorageManagerScannerStorage(manager)
+def _media_files_from_index_rows(rows: list[dict[str, Any]], *, root: RootConfig) -> list[MediaFile]:
     files: list[MediaFile] = []
-    total_roots = len(roots)
-    total_files = 0
-
-    normalized_start_index = max(1, int(start_root_index or 1))
-    for index, root in enumerate(roots[normalized_start_index - 1 :], start=normalized_start_index):
-        if should_cancel and should_cancel():
-            raise RuntimeError("job cancelled")
-        root_file_count = 0
-        if progress_callback:
-            progress_callback(
-                {
-                    "event": "root_started",
-                    "index": index,
-                    "total_roots": total_roots,
-                    "root_label": root.label,
-                    "root_path": str(root.path),
-                    "total_indexed_files": total_files,
-                }
+    root_path = root.path
+    seen: set[str] = set()
+    for item in rows:
+        for video in item.get("video_files", []):
+            if not isinstance(video, dict):
+                continue
+            path = str(video.get("path") or "").strip()
+            storage_uri = str(video.get("storage_uri") or "").strip()
+            name = str(video.get("name") or Path(path).name or "").strip()
+            if not path or not name:
+                continue
+            dedupe_key = storage_uri or path
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            video_path = Path(path)
+            try:
+                relative_path = str(video_path.relative_to(root_path))
+            except ValueError:
+                continue
+            entry = ScannedFileEntry(
+                path=path,
+                relative_path=relative_path,
+                size=int(video.get("size") or 0),
+                stem=Path(name).stem,
+                suffix=Path(name).suffix.lower(),
+                parent_name=video_path.parent.name,
             )
-        iter_with_progress = getattr(storage, "iter_video_files_with_progress", None)
-        if callable(iter_with_progress):
-            iterator = iter_with_progress(
-                root,
-                allowed_suffixes=VIDEO_EXTENSIONS,
-                progress_callback=(
-                    lambda event, *, root_index=index, current_root=root: progress_callback(
-                        {
-                            "index": root_index,
-                            "total_roots": total_roots,
-                            "root_label": current_root.label,
-                            "root_path": str(current_root.path),
-                            **event,
-                        }
-                    )
-                )
-                if progress_callback
-                else None,
-                should_cancel=should_cancel,
-            )
-        else:
-            iterator = storage.iter_video_files(root, allowed_suffixes=VIDEO_EXTENSIONS)
-        for entry in iterator:
-            if should_cancel and should_cancel():
-                raise RuntimeError("job cancelled")
-            files.append(inspect_media_file(entry, root))
-            root_file_count += 1
-            total_files += 1
-            if progress_callback and (root_file_count == 1 or root_file_count % FILE_PROGRESS_INTERVAL == 0):
-                progress_callback(
-                    {
-                        "event": "file_indexed",
-                        "index": index,
-                        "total_roots": total_roots,
-                        "root_label": root.label,
-                        "root_path": str(root.path),
-                        "file_path": str(files[-1].path),
-                        "relative_path": files[-1].relative_path,
-                        "root_indexed_files": root_file_count,
-                        "total_indexed_files": total_files,
-                    }
-                )
-        if progress_callback:
-            progress_callback(
-                {
-                    "event": "root_completed",
-                    "index": index,
-                    "total_roots": total_roots,
-                    "root_label": root.label,
-                    "root_path": str(root.path),
-                    "indexed_files": root_file_count,
-                    "total_indexed_files": total_files,
-                }
-            )
-
-    if progress_callback:
-        progress_callback(
-            {
-                "event": "scan_completed",
-                "total_roots": total_roots,
-                "total_indexed_files": total_files,
-                "exact_duplicate_groups": 0,
-                "media_collision_groups": 0,
-                "folder_media_duplicate_groups": len(build_folder_media_duplicate_groups(files)),
-            }
-        )
+            media = inspect_media_file(entry, root)
+            media.path = video_path
+            media.storage_uri = storage_uri
+            files.append(media)
     return files
 
 

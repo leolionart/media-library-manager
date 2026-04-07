@@ -31,7 +31,7 @@ Dashboard hiện có 5 màn:
    Màn vận hành chính cho inventory folder, duplicate workflow trên folder được chọn, duplicate folder cleanup trên roots thật, move folder, move vào Radarr/Sonarr, và xem process logs.
 
 3. `Library Cleanup`
-   Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots.
+   Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots. Cleanup hiện ưu tiên đọc `folder index` artifact đã cache từ connected roots, gồm cả metadata video file trực tiếp trong mỗi folder; nếu cache cũ hoặc rỗng thì user phải refresh `Library Finder` trước.
 
 4. `Library Path Repair`
    Màn sửa item của Radarr/Sonarr khi user muốn tìm lại folder đúng cho item mà chính provider đang báo thiếu. Scan hiện không còn tự so sánh connected roots để suy luận `path_not_found`; nó chỉ giữ lại item mà Radarr/Sonarr đang báo `missing`. Search và path mapping vẫn phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
@@ -226,15 +226,16 @@ Luồng:
 1. user chọn provider cần scan
 2. backend lấy item list từ Radarr/Sonarr
 3. backend validate path từng item
-4. backend scan trực tiếp các folder provider path hợp lệ
-   nếu provider path không tồn tại trong runtime local, backend thử resolve qua connected SMB roots trước khi skip
-5. backend build `cleanup_report` với các group có nhiều candidate video file
-6. UI cho user chọn file cần xóa, rồi gọi delete file riêng lẻ
+4. backend map provider path vào connected roots rồi đối chiếu với `folder index` artifact đã cache
+5. backend build `cleanup_report` từ metadata video file đã cache, không live-scan lại toàn bộ storage trong lúc chạy cleanup
+6. UI cho user chọn file cần xóa, rồi gọi background delete job qua `POST /api/cleanup/files/delete`
+7. `Library Cleanup Logs` theo dõi trực tiếp job delete hoặc cleanup scan; màn cleanup tự poll `GET /api/state` nên report/log sẽ tự cập nhật sau khi job đổi trạng thái
 7. sau khi xóa, UI refresh report để thấy trạng thái mới
 
 Điểm quan trọng:
 
-- cleanup ưu tiên provider paths local đang tồn tại, nhưng có SMB fallback nếu path của provider map được về connected roots
+- cleanup dùng `folder index` cache làm nguồn dữ liệu chính; nếu cache chưa có `video_files` hoặc đã cũ version, API sẽ tự refresh index rồi tiếp tục
+- provider path có thể map vào local, SMB, hoặc rclone roots miễn là root đó đã nằm trong `folder index`
 - nó không build action plan
 - group đầu tiên thường được xem là candidate nên giữ lại, còn các file dư là phần user cân nhắc xóa
 

@@ -10,6 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path, PurePosixPath
+from threading import Thread
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -56,6 +57,11 @@ REMOTE_STORAGE_SCHEMES = ("smb://", "rclone://")
 
 class JobCancelledError(RuntimeError):
     pass
+
+
+def _is_cleanup_folder_index_error(error: Exception) -> bool:
+    text = str(error or "").lower()
+    return "folder metadata" in text and "refresh" in text
 
 
 def _root_identity(root: RootConfig) -> str:
@@ -838,6 +844,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._run_empty_folder_cleanup_scan(resume=False)
             return
 
+        if parsed.path == "/api/cleanup/files/delete":
+            self._run_cleanup_file_delete(self._read_json())
+            return
+
         if parsed.path == "/api/operations/folder-cleanup/scan":
             self._run_selected_folder_cleanup_scan(self._read_json(), resume=False)
             return
@@ -1253,6 +1263,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not target:
                 self._send_json({"error": "missing path or storage_uri query parameter"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            if execute:
+                job_details = {
+                    "action": "delete-media-file",
+                    "path": path_value,
+                    "storage_uri": storage_uri or None,
+                    "root_path": root_path,
+                    "root_storage_uri": root_storage_uri or None,
+                }
+                self.store.start_job(
+                    kind="cleanup-scan",
+                    message="Deleting media file.",
+                    summary={"total": 1, "completed": 0},
+                    details=job_details,
+                )
+                self.store.append_job_log(
+                    level="warning",
+                    message="Deleting media file from Library Cleanup.",
+                    details=job_details,
+                )
             result = delete_media_file(
                 path_value or target,
                 storage_uri=storage_uri,
@@ -1263,6 +1292,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 storage_router=self._operation_storage_router(),
             )
             if result.get("status") == "error":
+                if execute:
+                    self.store.finish_job(
+                        status="error",
+                        message="Media file delete failed.",
+                        details={
+                            "path": path_value,
+                            "storage_uri": storage_uri or None,
+                            "root_path": root_path,
+                            "root_storage_uri": root_storage_uri or None,
+                            "error": result.get("message"),
+                        },
+                        summary={"total": 1, "completed": 1, "error": 1},
+                    )
                 self.store.append_activity(
                     kind="folder",
                     status="error",
@@ -1279,6 +1321,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if result.get("status") == "applied":
                 self._prune_deleted_file_from_report(path_value=path_value or "", storage_uri=storage_uri)
+                self.store.append_activity(
+                    kind="folder",
+                    status="success",
+                    message="File deleted.",
+                    details=result,
+                )
+                if execute:
+                    self.store.append_job_log(level="info", message="Media file deleted.", details=result)
+                    self.store.finish_job(
+                        status="success",
+                        message="Media file deleted.",
+                        details=result,
+                        summary={"total": 1, "completed": 1},
+                    )
+                self._send_json(result)
+                return
+            if execute:
+                self.store.finish_job(
+                    status="success" if result.get("status") == "dry-run" else "running",
+                    message="File delete preview created." if result.get("status") == "dry-run" else "File deleted.",
+                    details=result,
+                    summary={"total": 1, "completed": 1 if result.get("status") == "dry-run" else 0},
+                )
             self.store.append_activity(
                 kind="folder",
                 status="success" if result.get("status") == "applied" else "running",
@@ -1514,7 +1579,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 integrations,
                 providers=providers,
                 roots=self.store.list_roots(),
-                lan_connections=self.store.load_lan_connections(),
+                folder_index_report=self.store.load_folder_index_report(),
                 progress_callback=self._scan_progress_callback,
                 should_cancel=self.store.is_current_job_cancel_requested,
             )
@@ -1523,6 +1588,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.store.finish_job(status="cancelled", message="Provider cleanup scan cancelled.", details=cancel_details)
             self.store.append_activity(kind="scan", status="cancelled", message="Provider cleanup scan cancelled.", details=cancel_details)
             self._send_json({"error": "cleanup scan cancelled", "cancelled": True}, status=HTTPStatus.CONFLICT)
+            return
+        except ValueError as exc:
+            error_details = {"error": str(exc), **job_details}
+            self.store.finish_job(status="error", message="Provider cleanup scan failed.", details=error_details)
+            self.store.append_activity(kind="scan", status="error", message="Provider cleanup scan failed.", details=error_details)
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         except Exception as exc:
             error_details = {"error": str(exc), **job_details}
@@ -1786,6 +1857,154 @@ class DashboardHandler(BaseHTTPRequestHandler):
         refreshed_cleanup = rebuild_cleanup_report(cleanup_data, remaining_cleanup_files)
         refreshed_cleanup["generated_at"] = now_iso()
         self.store.save_cleanup_report(refreshed_cleanup)
+
+    def _normalize_cleanup_file_delete_items(self, items: Any) -> list[dict[str, Any]]:
+        normalized_items: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            path_value = str(item.get("path") or "").strip()
+            storage_uri = str(item.get("storage_uri") or "").strip()
+            if not path_value and not storage_uri:
+                continue
+            normalized_items.append(
+                {
+                    "path": path_value or None,
+                    "storage_uri": storage_uri,
+                    "root_path": str(item.get("root_path") or "").strip() or None,
+                    "root_storage_uri": str(item.get("root_storage_uri") or "").strip(),
+                    "prune_empty_dirs": bool(item.get("prune_empty_dirs", True)),
+                }
+            )
+
+        return normalized_items
+
+    def _start_cleanup_file_delete_job(self, normalized_items: list[dict[str, Any]]) -> dict[str, Any]:
+        job_details = {"action": "delete-media-files", "count": len(normalized_items)}
+        self.store.start_job(
+            kind="cleanup-scan",
+            message="Deleting selected media files.",
+            summary={"total": len(normalized_items), "completed": 0, "error": 0},
+            details=job_details,
+        )
+        self.store.append_activity(kind="folder", status="running", message="Started cleanup media file delete.", details=job_details)
+        Thread(target=self._execute_cleanup_file_delete_job, args=(normalized_items, job_details), daemon=True).start()
+        return self.store.load_current_job() or {}
+
+    def _execute_cleanup_file_delete_job(self, normalized_items: list[dict[str, Any]], job_details: dict[str, Any]) -> None:
+        results: list[dict[str, Any]] = []
+        errors = 0
+        deleted = 0
+        try:
+            for index, item in enumerate(normalized_items, start=1):
+                if self.store.is_current_job_cancel_requested():
+                    raise JobCancelledError()
+                target = item.get("storage_uri") or item.get("path")
+                self.store.append_job_log(
+                    level="warning",
+                    message=f"Deleting cleanup file {index}/{len(normalized_items)}.",
+                    details={"path": item.get("path"), "storage_uri": item.get("storage_uri")},
+                )
+                result = delete_media_file(
+                    item.get("path") or target,
+                    storage_uri=str(item.get("storage_uri") or ""),
+                    root_path=item.get("root_path"),
+                    root_storage_uri=str(item.get("root_storage_uri") or ""),
+                    execute=True,
+                    prune_empty_dirs=bool(item.get("prune_empty_dirs", True)),
+                    storage_router=self._operation_storage_router(),
+                )
+                results.append(result)
+                if result.get("status") == "error":
+                    errors += 1
+                    self.store.append_job_log(
+                        level="error",
+                        message=f"Cleanup file delete failed for item {index}/{len(normalized_items)}.",
+                        details={"path": item.get("path"), "storage_uri": item.get("storage_uri"), "error": result.get("message")},
+                    )
+                    self.store.append_activity(
+                        kind="folder",
+                        status="error",
+                        message="File delete failed.",
+                        details={"path": item.get("path"), "storage_uri": item.get("storage_uri"), "error": result.get("message")},
+                    )
+                else:
+                    deleted += 1
+                    self._prune_deleted_file_from_report(path_value=str(item.get("path") or ""), storage_uri=str(item.get("storage_uri") or ""))
+                    self.store.append_job_log(
+                        level="info",
+                        message=f"Cleanup file deleted {index}/{len(normalized_items)}.",
+                        details={"path": item.get("path"), "storage_uri": item.get("storage_uri")},
+                    )
+                    self.store.append_activity(
+                        kind="folder",
+                        status="success",
+                        message="File deleted.",
+                        details=result,
+                    )
+                self.store.update_job_progress({"completed": index, "error": errors})
+        except JobCancelledError:
+            summary = {"total": len(normalized_items), "completed": len(results), "error": errors, "deleted": deleted}
+            self.store.append_job_log(level="warning", message="Cleanup media file delete cancelled.", details=summary)
+            self.store.finish_job(
+                status="cancelled",
+                message="Cleanup media file delete cancelled.",
+                details={**job_details, "results": results},
+                summary=summary,
+            )
+            self.store.append_activity(kind="folder", status="cancelled", message="Cleanup media file delete cancelled.", details=summary)
+            return
+        except Exception as exc:
+            summary = {"total": len(normalized_items), "completed": len(results), "error": max(errors, 1), "deleted": deleted}
+            self.store.append_job_log(level="error", message="Cleanup media file delete failed.", details={"error": str(exc)})
+            self.store.finish_job(
+                status="error",
+                message="Cleanup media file delete failed.",
+                details={**job_details, "results": results, "error": str(exc)},
+                summary=summary,
+            )
+            self.store.append_activity(kind="folder", status="error", message="Cleanup media file delete failed.", details={"error": str(exc), **summary})
+            return
+
+        summary = {"total": len(normalized_items), "completed": len(normalized_items), "error": errors, "deleted": deleted}
+        if errors:
+            self.store.finish_job(
+                status="error",
+                message="Finished cleanup media file delete with errors.",
+                details={**job_details, "results": results},
+                summary=summary,
+            )
+            self.store.append_activity(kind="folder", status="error", message="Finished cleanup media file delete with errors.", details=summary)
+            return
+
+        self.store.finish_job(
+            status="success",
+            message="Selected media files deleted.",
+            details={**job_details, "results": results},
+            summary=summary,
+        )
+        self.store.append_activity(kind="folder", status="success", message="Selected media files deleted.", details=summary)
+
+    def _run_cleanup_file_delete(self, payload: dict[str, Any]) -> None:
+        items = payload.get("items")
+        if not isinstance(items, list) or not items:
+            self._send_json({"error": "at least one cleanup file item is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        normalized_items = self._normalize_cleanup_file_delete_items(items)
+        if not normalized_items:
+            self._send_json({"error": "no valid cleanup file items were provided"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        current_job = self._start_cleanup_file_delete_job(normalized_items)
+        self._send_json(
+            {
+                "status": "started",
+                "message": "Cleanup file delete started in background.",
+                "current_job": current_job,
+            },
+            status=HTTPStatus.ACCEPTED,
+        )
 
     def _prune_path_repair_issue(self, *, provider: str, item_id: int) -> dict[str, Any] | None:
         report = self.store.load_path_repair_report()
@@ -2298,13 +2517,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.append_activity(kind="scan", status="running", message="Started provider library duplicate cleanup scan.", details=job_details)
         try:
             cleanup_report = self._run_job_with_retries(
-                run_attempt=lambda: scan_provider_cleanup(
-                    integrations,
+                run_attempt=lambda: self._scan_provider_cleanup_with_auto_refresh(
+                    integrations=integrations,
                     providers=providers,
                     roots=self.store.list_roots(),
-                    lan_connections=self.store.load_lan_connections(),
-                    progress_callback=self._scan_progress_callback,
-                    should_cancel=self.store.is_current_job_cancel_requested,
                     start_root_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_root_index", 1)),
                 )
             )
@@ -2336,6 +2552,61 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
         self.store.append_activity(kind="scan", status="success", message="Provider cleanup scan completed.", details=success_details)
         self._send_json(cleanup_report)
+
+    def _scan_provider_cleanup_with_auto_refresh(
+        self,
+        *,
+        integrations: dict[str, Any],
+        providers: list[str],
+        roots: list[RootConfig],
+        start_root_index: int,
+    ) -> dict[str, Any]:
+        try:
+            return scan_provider_cleanup(
+                integrations,
+                providers=providers,
+                roots=roots,
+                folder_index_report=self.store.load_folder_index_report(),
+                progress_callback=self._scan_progress_callback,
+                should_cancel=self.store.is_current_job_cancel_requested,
+                start_root_index=start_root_index,
+            )
+        except ValueError as exc:
+            if not _is_cleanup_folder_index_error(exc):
+                raise
+            self.store.append_job_log(
+                level="info",
+                message="Cached folder metadata is unavailable for Library Cleanup. Refreshing automatically.",
+                details={"reason": str(exc)},
+            )
+            refreshed_report = self._refresh_folder_index_for_cleanup()
+            self.store.append_job_log(
+                level="info",
+                message="Folder metadata refresh completed. Continuing Library Cleanup.",
+                details=refreshed_report.get("summary", {}),
+            )
+            return scan_provider_cleanup(
+                integrations,
+                providers=providers,
+                roots=roots,
+                folder_index_report=refreshed_report,
+                progress_callback=self._scan_progress_callback,
+                should_cancel=self.store.is_current_job_cancel_requested,
+                start_root_index=start_root_index,
+            )
+
+    def _refresh_folder_index_for_cleanup(self) -> dict[str, Any]:
+        roots = self.store.list_roots()
+        if not roots:
+            raise ValueError("No connected roots available to refresh cached folder metadata for Library Cleanup.")
+        report = build_folder_metadata_index(
+            roots,
+            self.store.load_lan_connections(),
+            max_depth=DEFAULT_FOLDER_INDEX_MAX_DEPTH,
+            progress_callback=self._folder_index_progress_callback,
+        )
+        self.store.save_folder_index_report(report)
+        return report
 
     def _run_empty_folder_cleanup_scan(self, *, resume: bool) -> None:
         source_roots = self.store.list_roots()

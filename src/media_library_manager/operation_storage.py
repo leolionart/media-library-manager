@@ -55,7 +55,7 @@ class OperationStorageRouter:
         *,
         smb_connection_resolver: SmbConnectionResolver | None = None,
         smb_timeout: int = 20,
-        rclone_timeout: int = 30,
+        rclone_timeout: int = 60,
     ) -> None:
         self.smb_connection_resolver = smb_connection_resolver
         self.smb_timeout = smb_timeout
@@ -412,12 +412,9 @@ class OperationStorageRouter:
         if parent is None:
             return None
         target_name = path.name
-        try:
-            for entry in self._smb_list_entries(parent):
-                if entry.get("name") == target_name:
-                    return entry
-        except ValueError:
-            return None
+        for entry in self._smb_list_entries(parent):
+            if entry.get("name") == target_name:
+                return entry
         return None
 
     def _smb_list_entries(self, path: StoragePath) -> list[dict[str, str]]:
@@ -428,21 +425,15 @@ class OperationStorageRouter:
     def _rclone_entry(self, path: StoragePath) -> dict[str, Any] | None:
         normalized = self._normalize_rclone_path(path.rclone_path)
         if normalized in {"", "/"}:
-            try:
-                self._rclone_list_entries(path)
-            except ValueError:
-                return None
+            self._rclone_list_entries(path)
             return {"Name": path.rclone_remote, "IsDir": True}
         parent = self.parent(path)
         if parent is None:
             return None
         target_name = path.name
-        try:
-            for entry in self._rclone_list_entries(parent):
-                if str(entry.get("Name") or "") == target_name:
-                    return entry
-        except ValueError:
-            return None
+        for entry in self._rclone_list_entries(parent):
+            if str(entry.get("Name") or "") == target_name:
+                return entry
         return None
 
     def _rclone_list_entries(self, path: StoragePath) -> list[dict[str, Any]]:

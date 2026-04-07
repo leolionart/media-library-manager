@@ -43753,7 +43753,7 @@ async function oH(e, t = {}) {
 		if (!t.ok) throw Error(o?.error || `Request failed with status ${t.status}`);
 		return o;
 	} catch (e) {
-		throw e?.name === "AbortError" ? Error(`Request timed out after ${n}ms`) : e;
+		throw e?.name === "AbortError" ? Error(`Request timed out after ${n}ms`) : e instanceof TypeError && String(e.message || "").includes("Failed to fetch") ? Error("Could not reach the dashboard backend. Open the app from the active backend URL and refresh the page.") : e;
 	} finally {
 		a && window.clearTimeout(a);
 	}
@@ -43973,12 +43973,11 @@ function HH({ provider: e, query: t }) {
 		})
 	});
 }
-function UH({ path: e, storageUri: t, rootPath: n, rootStorageUri: r, pruneEmptyDirs: i = !0 }) {
-	let a = new URLSearchParams({
-		execute: "true",
-		prune_empty_dirs: i ? "true" : "false"
+function UH(e) {
+	return oH("/api/cleanup/files/delete", {
+		method: "POST",
+		body: JSON.stringify({ items: e || [] })
 	});
-	return e && a.set("path", e), t && a.set("storage_uri", t), n && a.set("root_path", n), r && a.set("root_storage_uri", r), oH(`/api/files?${a.toString()}`, { method: "DELETE" });
 }
 //#endregion
 //#region node_modules/react/cjs/react-jsx-runtime.production.min.js
@@ -44072,9 +44071,9 @@ function aU(e, t) {
 function oU(e, t) {
 	return t?.kind === "scan" ? "duplicate scan" : t?.kind === "plan" ? "change plan" : t?.kind === "apply" ? "file changes" : t?.kind ? String(t.kind).toLowerCase() : e === "activity" ? "recent activity" : e === "operations" ? "library finder" : e === "cleanup" ? "library-cleanup" : "path-repair";
 }
-function sU(e) {
-	let t = String(e || "").toLowerCase();
-	return t === "scan" ? "Scan" : t === "plan" ? "Change plan" : t === "apply" ? "File changes" : t === "cleanup-scan" ? "Folder cleanup" : t === "folder-index" ? "Folder index" : t === "path-repair" ? "Path Repair" : t === "folder" ? "Folder action" : t === "integration" ? "Provider action" : e || "Process";
+function sU(e, t = null) {
+	let n = String(e || "").toLowerCase(), r = String(t?.details?.action || "").toLowerCase();
+	return n === "scan" ? "Scan" : n === "plan" ? "Change plan" : n === "apply" ? "File changes" : n === "cleanup-scan" ? r === "delete-media-files" || r === "delete-media-file" ? "Cleanup file delete" : "Folder cleanup" : n === "folder-index" ? "Folder index" : n === "path-repair" ? "Path Repair" : n === "folder" ? "Folder action" : n === "integration" ? "Provider action" : e || "Process";
 }
 function cU(e) {
 	let t = Number(e);
@@ -44124,7 +44123,7 @@ function hU(e, t) {
 		"plan",
 		"apply",
 		"folder"
-	].includes(n) : e === "cleanup" ? r.includes("cleanup scan") || r.includes("empty duplicate folder") || r.includes("file deleted") || r.includes("file delete failed") || r.includes("folder deleted") || r.includes("folder delete failed") : e === "repair" ? r.includes("path repair") || r.includes("provider path updated") || r.includes("provider item removed") : !1;
+	].includes(n) : e === "cleanup" ? r.includes("cleanup scan") || r.includes("cleanup media file delete") || r.includes("selected media files deleted") || r.includes("empty duplicate folder") || r.includes("file deleted") || r.includes("file delete failed") || r.includes("folder deleted") || r.includes("folder delete failed") : e === "repair" ? r.includes("path repair") || r.includes("provider path updated") || r.includes("provider item removed") : !1;
 }
 function gU({ scope: e, title: t, extra: n = null, stateData: r, currentJobData: i, loading: a = !1 }) {
 	let o = r !== void 0 || i !== void 0, [s, c] = (0, C.useState)(!o), [l, u] = (0, C.useState)({
@@ -44260,7 +44259,7 @@ function gU({ scope: e, title: t, extra: n = null, stateData: r, currentJobData:
 												color: j.status === "error" ? "error" : ["cancelled", "waiting"].includes(j.status) ? "warning" : "success",
 												children: QH(j.status || "running")
 											}),
-											/* @__PURE__ */ (0, $.jsx)(dB, { children: sU(j.kind) }),
+											/* @__PURE__ */ (0, $.jsx)(dB, { children: sU(j.kind, j) }),
 											j.cancel_requested ? /* @__PURE__ */ (0, $.jsx)(dB, {
 												color: "warning",
 												children: "Stop Requested"
@@ -44472,7 +44471,7 @@ function gU({ scope: e, title: t, extra: n = null, stateData: r, currentJobData:
 									children: oU(e, j)
 								}), /* @__PURE__ */ (0, $.jsx)(KH, {
 									className: "process-log-shell-title-sub",
-									children: j ? `${sU(j.kind)} activity` : `${e} trace`
+									children: j ? `${sU(j.kind, j)} activity` : `${e} trace`
 								})]
 							}),
 							/* @__PURE__ */ (0, $.jsx)(KH, {
@@ -44568,7 +44567,17 @@ function TU(e) {
 	let t = String(e || "").trim();
 	return t ? t.startsWith("[") && t.includes("\"Path\"") && t.includes("\"Name\"") ? "The storage backend returned a raw directory listing instead of a readable error. Re-run the scan after restarting the backend." : t : "Unknown error.";
 }
-function EU({ errors: e }) {
+function EU(e) {
+	let t = [];
+	return e?.resolution && t.push(`${e.resolution}p`), e?.source && t.push(String(e.source).toUpperCase()), e?.codec && t.push(String(e.codec).toUpperCase()), e?.dynamic_range && t.push(String(e.dynamic_range).toUpperCase()), `Quality score used for ranking keep/delete candidates. ${t.length ? t.join(" + ") : "No parsed quality markers"}. Total score: Q${e?.quality_rank || 0}.`;
+}
+function DU(e, t) {
+	return /* @__PURE__ */ (0, $.jsx)(fS, {
+		title: t,
+		children: /* @__PURE__ */ (0, $.jsx)(dB, { children: e })
+	});
+}
+function OU({ errors: e }) {
 	return /* @__PURE__ */ (0, $.jsx)(Zc, {
 		type: "error",
 		showIcon: !0,
@@ -44589,18 +44598,22 @@ function EU({ errors: e }) {
 		})
 	});
 }
-function DU() {
+function kU() {
 	let { message: e, modal: t } = Q_.useApp(), [n, r] = (0, C.useState)(!0), [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(0), [c, l] = (0, C.useState)({}), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)([]), [m, h] = (0, C.useState)([]), [g, _] = (0, C.useState)("");
 	(0, C.useEffect)(() => {
-		let t = !1;
-		return r(!0), oH("/api/state").then((e) => {
+		let t = !1, n = ({ silent: n = !1 } = {}) => (n || r(!0), oH("/api/state").then((e) => {
 			t || l(e || {});
-		}).catch((n) => {
-			t || e.error(n.message);
+		}).catch((r) => {
+			!t && !n && e.error(r.message);
 		}).finally(() => {
-			t || r(!1);
-		}), () => {
-			t = !0;
+			!t && !n && r(!1);
+		}));
+		n();
+		let i = window.setInterval(() => {
+			n({ silent: !0 });
+		}, 3e3);
+		return () => {
+			t = !0, window.clearInterval(i);
 		};
 	}, [e, o]);
 	let v = c.cleanup_report || vU, y = (0, C.useMemo)(() => v.folder_media_duplicates || v.groups || [], [v]), b = v.errors || [], x = (0, C.useMemo)(() => {
@@ -44635,19 +44648,23 @@ function DU() {
 			return wU(t, n) ? t : n;
 		});
 	}, [E]);
-	async function D(e = v.providers || []) {
-		await IH(e), s((e) => e + 1);
+	async function D(e) {
+		e.length && (await UH(e.map((e) => ({
+			path: e.path,
+			storage_uri: e.storage_uri,
+			root_path: e.root_path,
+			root_storage_uri: e.root_storage_uri,
+			prune_empty_dirs: !0
+		}))), h([]), s((e) => e + 1));
 	}
-	async function O(e) {
-		if (e.length) {
-			for (let t of e) await UH({
-				path: t.path,
-				storageUri: t.storage_uri,
-				rootPath: t.root_path,
-				rootStorageUri: t.root_storage_uri
-			});
-			h([]), await D();
-		}
+	function O(t, { successMessage: n, onFinally: r } = {}) {
+		D(t).then(() => {
+			n && e.success(n);
+		}).catch((t) => {
+			e.error(t.message);
+		}).finally(() => {
+			typeof r == "function" && r();
+		});
 	}
 	function k(e) {
 		let t = String(e);
@@ -44659,7 +44676,7 @@ function DU() {
 	}
 	async function j() {
 		let e = E.filter((e) => m.includes(e.rowKey));
-		e.length && await O(e);
+		e.length && await D(e);
 	}
 	async function M() {
 		a("scan-files");
@@ -44732,7 +44749,7 @@ function DU() {
 							}
 						]
 					}),
-					b.length ? /* @__PURE__ */ (0, $.jsx)(EU, { errors: b }) : null,
+					b.length ? /* @__PURE__ */ (0, $.jsx)(OU, { errors: b }) : null,
 					f.length ? /* @__PURE__ */ (0, $.jsxs)(HA, {
 						justify: "space-between",
 						align: "center",
@@ -44762,12 +44779,12 @@ function DU() {
 									title: `Delete ${m.length} selected media file${m.length === 1 ? "" : "s"}?`,
 									okText: "Delete",
 									okButtonProps: { danger: !0 },
-									onOk: async () => {
-										try {
-											await j(), e.success("Selected media files deleted.");
-										} catch (t) {
+									onOk: () => {
+										j().then(() => {
+											e.success("Selected media file delete started in background.");
+										}).catch((t) => {
 											e.error(t.message);
-										}
+										});
 									}
 								}),
 								children: "Delete Selected Files"
@@ -44859,12 +44876,12 @@ function DU() {
 											title: `Delete ${m.length} selected media file${m.length === 1 ? "" : "s"}?`,
 											okText: "Delete",
 											okButtonProps: { danger: !0 },
-											onOk: async () => {
-												try {
-													await j(), e.success("Selected media files deleted.");
-												} catch (t) {
+											onOk: () => {
+												j().then(() => {
+													e.success("Selected media file delete started in background.");
+												}).catch((t) => {
 													e.error(t.message);
-												}
+												});
 											}
 										}),
 										children: "Delete Selected"
@@ -44912,9 +44929,12 @@ function DU() {
 												children: [/* @__PURE__ */ (0, $.jsx)(_U, {
 													strong: !0,
 													children: SU(String(t.path || "").split("/").pop())
-												}), r ? /* @__PURE__ */ (0, $.jsx)(dB, {
-													color: "gold",
-													children: "Suggested keep"
+												}), r ? /* @__PURE__ */ (0, $.jsx)(fS, {
+													title: "Best-ranked file in this duplicate group. Delete is disabled for this candidate by default.",
+													children: /* @__PURE__ */ (0, $.jsx)(dB, {
+														color: "gold",
+														children: "Suggested keep"
+													})
 												}) : null]
 											}), /* @__PURE__ */ (0, $.jsx)(_U, {
 												type: "secondary",
@@ -44931,10 +44951,13 @@ function DU() {
 									render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(wA, {
 										wrap: !0,
 										children: [
-											t.resolution ? /* @__PURE__ */ (0, $.jsxs)(dB, { children: [t.resolution, "p"] }) : null,
-											t.source ? /* @__PURE__ */ (0, $.jsx)(dB, { children: String(t.source).toUpperCase() }) : null,
-											t.codec ? /* @__PURE__ */ (0, $.jsx)(dB, { children: String(t.codec).toUpperCase() }) : null,
-											/* @__PURE__ */ (0, $.jsxs)(dB, { children: ["Q", t.quality_rank || 0] })
+											t.resolution ? DU(`${t.resolution}p`, "Parsed video resolution from the filename.") : null,
+											t.source ? DU(String(t.source).toUpperCase(), "Parsed source/release type from the filename.") : null,
+											t.codec ? DU(String(t.codec).toUpperCase(), "Parsed video codec from the filename.") : null,
+											/* @__PURE__ */ (0, $.jsx)(fS, {
+												title: EU(t),
+												children: /* @__PURE__ */ (0, $.jsxs)(dB, { children: ["Q", t.quality_rank || 0] })
+											})
 										]
 									})
 								},
@@ -44949,27 +44972,23 @@ function DU() {
 									title: "Action",
 									key: "action",
 									width: 140,
-									render: (n, r) => {
-										let i = String(r.storage_uri || r.path || ""), a = T.has(i);
+									render: (e, n) => {
+										let r = String(n.storage_uri || n.path || ""), i = T.has(r);
 										return /* @__PURE__ */ (0, $.jsx)(fp, {
 											danger: !0,
 											icon: /* @__PURE__ */ (0, $.jsx)(CB, {}),
-											disabled: a,
-											loading: g === i,
+											disabled: i,
+											loading: g === r,
 											onClick: () => t.confirm({
 												title: "Delete this media file?",
-												content: r.path,
+												content: n.path,
 												okText: "Delete",
 												okButtonProps: { danger: !0 },
-												onOk: async () => {
-													_(i);
-													try {
-														await O([r]), e.success("Media file deleted.");
-													} catch (t) {
-														e.error(t.message);
-													} finally {
-														_("");
-													}
+												onOk: () => {
+													_(r), O([n], {
+														successMessage: "Media file delete started in background.",
+														onFinally: () => _("")
+													});
 												}
 											}),
 											children: "Delete"
@@ -44992,14 +45011,14 @@ function DU() {
 }
 //#endregion
 //#region src/components/PathRepairView.jsx
-var { Text: OU } = wV, kU = {
+var { Text: AU } = wV, jU = {
 	open: !1,
 	issue: null,
 	query: "",
 	loading: !1,
 	items: []
-}, AU = "media-library-manager.path-repair-report";
-function jU(e) {
+}, MU = "media-library-manager.path-repair-report";
+function NU(e) {
 	if (!e) return "--:--:--";
 	let t = new Date(e);
 	return Number.isNaN(t.getTime()) ? "--:--:--" : t.toLocaleTimeString([], {
@@ -45009,13 +45028,13 @@ function jU(e) {
 		hour12: !1
 	});
 }
-function MU(e) {
+function PU(e) {
 	return Object.entries(e || {}).map(([e, t]) => t == null || t === "" ? null : `${String(e).replaceAll("_", " ")}: ${Array.isArray(t) ? t.join(", ") : String(t)}`).filter(Boolean).join(" | ");
 }
-function NU(e) {
+function FU(e) {
 	return String(e?.kind || "").toLowerCase() === "path-repair" && String(e?.details?.action || "") === "search-path-repair";
 }
-function PU(e) {
+function IU(e) {
 	let t = String(e?.status || "").toLowerCase();
 	return t === "running" ? /* @__PURE__ */ (0, $.jsxs)("span", {
 		className: "path-repair-running-status",
@@ -45040,14 +45059,14 @@ function PU(e) {
 		]
 	}) : t ? t.charAt(0).toUpperCase() + t.slice(1) : "Starting";
 }
-function FU() {
+function LU() {
 	if (typeof window > "u") return {
 		summary: {},
 		issues: [],
 		errors: []
 	};
 	try {
-		let e = window.localStorage.getItem(AU);
+		let e = window.localStorage.getItem(MU);
 		return e ? JSON.parse(e) : {
 			summary: {},
 			issues: [],
@@ -45061,14 +45080,14 @@ function FU() {
 		};
 	}
 }
-function IU(e) {
-	typeof window > "u" || window.localStorage.setItem(AU, JSON.stringify(e || {
+function RU(e) {
+	typeof window > "u" || window.localStorage.setItem(MU, JSON.stringify(e || {
 		summary: {},
 		issues: [],
 		errors: []
 	}));
 }
-function LU(e, t, n) {
+function zU(e, t, n) {
 	let r = (e?.issues || []).filter((e) => !(String(e?.provider || "").toLowerCase() === String(t || "").toLowerCase() && Number(e?.item_id || 0) === Number(n || 0)));
 	return {
 		...e || {
@@ -45085,18 +45104,18 @@ function LU(e, t, n) {
 		generated_at: (/* @__PURE__ */ new Date()).toISOString()
 	};
 }
-function RU(e) {
+function BU(e) {
 	let t = String(e || "").trim().toLowerCase();
 	return t === "path_replacement_available" ? "replacement found" : t === "path_not_found" ? "path not found" : t === "path_not_directory" ? "not a directory" : t === "missing_path" ? "missing path" : t === "item_missing" ? "missing in provider" : t || "unknown";
 }
-function zU() {
-	let { message: e, modal: t } = Q_.useApp(), [n, r] = (0, C.useState)(!0), [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(() => FU()), [u, d] = (0, C.useState)([]), [f, p] = (0, C.useState)(kU), [m, h] = (0, C.useState)(null);
+function VU() {
+	let { message: e, modal: t } = Q_.useApp(), [n, r] = (0, C.useState)(!0), [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(() => LU()), [u, d] = (0, C.useState)([]), [f, p] = (0, C.useState)(jU), [m, h] = (0, C.useState)(null);
 	(0, C.useEffect)(() => {
 		let t = !1;
 		return r(!0), oH("/api/state").then((e) => {
 			if (!t) {
-				let t = e?.path_repair_report || FU();
-				l(t), IU(t);
+				let t = e?.path_repair_report || LU();
+				l(t), RU(t);
 			}
 		}).catch((n) => {
 			t || e.error(n.message);
@@ -45124,7 +45143,7 @@ function zU() {
 			try {
 				let t = await cH();
 				if (e) return;
-				h(NU(t.current_job) ? t.current_job : null);
+				h(FU(t.current_job) ? t.current_job : null);
 			} catch {
 				e || h(null);
 			}
@@ -45174,8 +45193,8 @@ function zU() {
 		d((e) => e.includes(t) ? e.filter((e) => e !== t) : [...e, t]);
 	}
 	async function S() {
-		let e = (await oH("/api/state"))?.path_repair_report || FU();
-		l(e), IU(e);
+		let e = (await oH("/api/state"))?.path_repair_report || LU();
+		l(e), RU(e);
 	}
 	async function w() {
 		r(!0);
@@ -45185,7 +45204,7 @@ function zU() {
 				issues: [],
 				errors: []
 			};
-			l(t), IU(t), e.success("Library path repair scan completed.");
+			l(t), RU(t), e.success("Library path repair scan completed.");
 		} catch (t) {
 			e.error(t.message);
 		} finally {
@@ -45200,8 +45219,8 @@ function zU() {
 				itemId: t.item_id,
 				path: n
 			});
-			let i = (await oH("/api/state"))?.path_repair_report || LU(c, t.provider, t.item_id);
-			l(i), IU(i), e.success(r);
+			let i = (await oH("/api/state"))?.path_repair_report || zU(c, t.provider, t.item_id);
+			l(i), RU(i), e.success(r);
 		} catch (t) {
 			e.error(t.message);
 		} finally {
@@ -45226,7 +45245,7 @@ function zU() {
 				...t,
 				loading: !1,
 				items: e.items || []
-			})), h(NU(r.current_job) ? r.current_job : null);
+			})), h(FU(r.current_job) ? r.current_job : null);
 		} catch (t) {
 			p((e) => ({
 				...e,
@@ -45300,7 +45319,7 @@ function zU() {
 								placeholder: "Filter by title, path, provider, or reason"
 							})]
 						}),
-						c.generated_at ? /* @__PURE__ */ (0, $.jsxs)(OU, {
+						c.generated_at ? /* @__PURE__ */ (0, $.jsxs)(AU, {
 							type: "secondary",
 							children: ["Latest scan: ", new Date(c.generated_at).toLocaleString()]
 						}) : null,
@@ -45331,17 +45350,17 @@ function zU() {
 									children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
 										wrap: !0,
 										children: [
-											/* @__PURE__ */ (0, $.jsx)(OU, {
+											/* @__PURE__ */ (0, $.jsx)(AU, {
 												strong: !0,
 												children: t.title
 											}),
 											/* @__PURE__ */ (0, $.jsx)(dB, { children: t.provider }),
 											/* @__PURE__ */ (0, $.jsx)(dB, {
 												color: "warning",
-												children: RU(t.reason)
+												children: BU(t.reason)
 											})
 										]
-									}), /* @__PURE__ */ (0, $.jsx)(OU, {
+									}), /* @__PURE__ */ (0, $.jsx)(AU, {
 										type: "secondary",
 										className: "cleanup-path-text",
 										children: t.path || "No path from provider"
@@ -45381,8 +45400,8 @@ function zU() {
 																provider: r.provider,
 																itemId: r.item_id
 															});
-															let t = LU(c, r.provider, r.item_id);
-															l(t), IU(t), e.success("Provider item removed.");
+															let t = zU(c, r.provider, r.item_id);
+															l(t), RU(t), e.success("Provider item removed.");
 														} catch (t) {
 															e.error(t.message);
 														} finally {
@@ -45413,8 +45432,8 @@ function zU() {
 																itemId: r.item_id,
 																addImportExclusion: !0
 															});
-															let t = LU(c, r.provider, r.item_id);
-															l(t), IU(t), e.success("Provider item removed and blocked.");
+															let t = zU(c, r.provider, r.item_id);
+															l(t), RU(t), e.success("Provider item removed and blocked.");
 														} catch (t) {
 															e.error(t.message);
 														} finally {
@@ -45445,7 +45464,7 @@ function zU() {
 				footer: null,
 				width: 920,
 				onCancel: () => {
-					p(kU), h(null);
+					p(jU), h(null);
 				},
 				children: /* @__PURE__ */ (0, $.jsxs)(HA, {
 					vertical: !0,
@@ -45476,7 +45495,7 @@ function zU() {
 										...t,
 										loading: !1,
 										items: e.items || []
-									})), h(NU(r.current_job) ? r.current_job : null);
+									})), h(FU(r.current_job) ? r.current_job : null);
 								} catch (t) {
 									p((e) => ({
 										...e,
@@ -45519,17 +45538,17 @@ function zU() {
 									}),
 									/* @__PURE__ */ (0, $.jsxs)("div", {
 										className: "process-log-shell-title",
-										children: [/* @__PURE__ */ (0, $.jsx)(OU, {
+										children: [/* @__PURE__ */ (0, $.jsx)(AU, {
 											className: "process-log-shell-title-main",
 											children: "Folder Search Progress"
-										}), /* @__PURE__ */ (0, $.jsx)(OU, {
+										}), /* @__PURE__ */ (0, $.jsx)(AU, {
 											className: "process-log-shell-title-sub",
 											children: m?.message || "Waiting for backend search logs..."
 										})]
 									}),
-									/* @__PURE__ */ (0, $.jsx)(OU, {
+									/* @__PURE__ */ (0, $.jsx)(AU, {
 										className: "process-log-shell-state",
-										children: PU(m)
+										children: IU(m)
 									})
 								]
 							}), /* @__PURE__ */ (0, $.jsx)("div", {
@@ -45537,24 +45556,24 @@ function zU() {
 								children: /* @__PURE__ */ (0, $.jsx)("div", {
 									className: "process-log-lines",
 									children: (m?.logs || []).length ? m.logs.map((e) => {
-										let t = String(e?.level || "info").toLowerCase(), n = t.includes("error") ? "tone-error" : t.includes("warning") ? "tone-warning" : "tone-info", r = MU(e?.details || {});
+										let t = String(e?.level || "info").toLowerCase(), n = t.includes("error") ? "tone-error" : t.includes("warning") ? "tone-warning" : "tone-info", r = PU(e?.details || {});
 										return /* @__PURE__ */ (0, $.jsxs)("div", {
 											className: `process-log-line ${n}`,
 											children: [/* @__PURE__ */ (0, $.jsxs)("div", {
 												className: "process-log-line-meta",
-												children: [/* @__PURE__ */ (0, $.jsx)(OU, {
+												children: [/* @__PURE__ */ (0, $.jsx)(AU, {
 													className: "process-log-line-time",
-													children: jU(e?.ts)
+													children: NU(e?.ts)
 												}), /* @__PURE__ */ (0, $.jsx)(dB, {
 													className: `process-log-line-level ${n}`,
 													children: e?.level || "info"
 												})]
 											}), /* @__PURE__ */ (0, $.jsxs)("div", {
 												className: "process-log-line-body",
-												children: [/* @__PURE__ */ (0, $.jsx)(OU, {
+												children: [/* @__PURE__ */ (0, $.jsx)(AU, {
 													className: "process-log-line-message",
 													children: e?.message
-												}), r ? /* @__PURE__ */ (0, $.jsx)(OU, {
+												}), r ? /* @__PURE__ */ (0, $.jsx)(AU, {
 													className: "process-log-line-summary",
 													children: r
 												}) : null]
@@ -45580,11 +45599,11 @@ function zU() {
 								gap: 4,
 								children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
 									wrap: !0,
-									children: [/* @__PURE__ */ (0, $.jsx)(OU, {
+									children: [/* @__PURE__ */ (0, $.jsx)(AU, {
 										strong: !0,
 										children: t.label
 									}), /* @__PURE__ */ (0, $.jsx)(dB, { children: t.root_label })]
-								}), /* @__PURE__ */ (0, $.jsx)(OU, {
+								}), /* @__PURE__ */ (0, $.jsx)(AU, {
 									type: "secondary",
 									className: "cleanup-path-text",
 									children: t.path
@@ -45602,7 +45621,7 @@ function zU() {
 									"aria-label": `Use path ${t.path}`,
 									loading: i === `${f.issue?.id}:${t.path}`,
 									onClick: async () => {
-										f.issue && (await T(f.issue, t.path), p(kU));
+										f.issue && (await T(f.issue, t.path), p(jU));
 									}
 								})
 							})
@@ -45615,7 +45634,7 @@ function zU() {
 }
 //#endregion
 //#region src/components/OverviewView.jsx
-var { Text: BU } = wV, VU = {
+var { Text: HU } = wV, UU = {
 	roots: [],
 	integrations: {
 		radarr: { enabled: !1 },
@@ -45639,69 +45658,69 @@ var { Text: BU } = wV, VU = {
 	last_path_repair_at: null,
 	last_folder_index_at: null,
 	folder_index_summary: null
-}, HU = {
+}, WU = {
 	movies: 0,
 	series: 0,
 	movieFiles: 0,
 	episodeFiles: 0
 };
-function UU(e) {
+function GU(e) {
 	return e ? new Date(e).toLocaleString() : "Never";
 }
-function WU(e) {
+function KU(e) {
 	let t = Number(e);
 	return Number.isFinite(t) ? t : 0;
 }
-function GU(e, t) {
+function qU(e, t) {
 	return `${e} ${t}${e === 1 ? "" : "s"}`;
 }
-function KU(e) {
+function JU(e) {
 	let t = String(e || "").toLowerCase();
 	return t === "running" ? "In progress" : t === "success" ? "Done" : t === "error" ? "Error" : t === "cancelled" ? "Stopped" : t === "dry-run" ? "Preview" : t === "review" ? "Check" : t === "applied" ? "Applied" : t === "info" ? "Info" : e || "unknown";
 }
-function qU(e) {
+function YU(e) {
 	let t = String(e || "").toLowerCase();
 	return t === "scan" ? "Scan" : t === "plan" ? "Change plan" : t === "apply" ? "File changes" : t === "cleanup-scan" ? "Cleanup scan" : t === "path-repair" ? "Path repair" : t === "folder-index" ? "Folder index" : e || "Process";
 }
-function JU(e) {
+function XU(e) {
 	return ["apply", "execute"].includes(String(e || "").toLowerCase());
 }
-function YU(e, t, n, r) {
+function ZU(e, t, n, r) {
 	if (!e) return null;
-	if (!t || !JU(t.mode)) return e;
+	if (!t || !XU(t.mode)) return e;
 	let i = String(t.plan_generated_at || "").trim(), a = String(e.generated_at || "").trim();
 	if (i && a) return i === a ? null : e;
 	let o = Date.parse(a || n || "") || 0, s = Date.parse(t.generated_at || r || "") || 0;
 	return o && s && s >= o ? null : e;
 }
-function XU(e, t) {
+function QU(e, t) {
 	let n = new Set(t);
 	return (e || []).filter((e) => String(e?.status || "").toLowerCase() === "success" && n.has(String(e?.message || ""))).length;
 }
-function ZU(e) {
+function $U(e) {
 	return String(e?.created_at || e?.timestamp || "").trim();
 }
-function QU(e, t) {
-	let n = new Set(t), r = (e || []).filter((e) => String(e?.status || "").toLowerCase() === "success" && n.has(String(e?.message || ""))).map((e) => ZU(e)).filter(Boolean);
+function eW(e, t) {
+	let n = new Set(t), r = (e || []).filter((e) => String(e?.status || "").toLowerCase() === "success" && n.has(String(e?.message || ""))).map((e) => $U(e)).filter(Boolean);
 	return r.length ? (r.sort((e, t) => Date.parse(t) - Date.parse(e)), r[0] || null) : null;
 }
-function $U(...e) {
+function tW(...e) {
 	return e.filter(Boolean).reduce((e, t) => e ? Date.parse(t) > Date.parse(e) ? t : e : t, null);
 }
-function eW(e) {
-	let t = e?.summary || {}, n = WU(t["dry-run"] ?? t.dry_run), r = Math.max(WU(t.completed), WU(t.applied) + n + WU(t.skipped) + WU(t.error)), i = Math.max(r, WU(t.total));
+function nW(e) {
+	let t = e?.summary || {}, n = KU(t["dry-run"] ?? t.dry_run), r = Math.max(KU(t.completed), KU(t.applied) + n + KU(t.skipped) + KU(t.error)), i = Math.max(r, KU(t.total));
 	return {
 		completed: r,
 		total: i,
 		percent: i ? Math.min(100, Math.round(r / i * 100)) : 0
 	};
 }
-function tW(e) {
+function rW(e) {
 	let t = String(e || "").toLowerCase();
 	return t === "running" ? "active" : t === "success" ? "success" : t === "error" ? "exception" : "normal";
 }
-function nW(e) {
-	let t = e?.summary || {}, n = [], r = WU(t.applied), i = WU(t.skipped), a = WU(t.error), o = WU(t["dry-run"] ?? t.dry_run);
+function iW(e) {
+	let t = e?.summary || {}, n = [], r = KU(t.applied), i = KU(t.skipped), a = KU(t.error), o = KU(t["dry-run"] ?? t.dry_run);
 	return r > 0 && n.push({
 		key: "applied",
 		color: "success",
@@ -45724,7 +45743,7 @@ function nW(e) {
 		label: "Stop requested"
 	}), n;
 }
-function rW({ value: e }) {
+function aW({ value: e }) {
 	let t = String(e || "").toLowerCase(), n = "default";
 	return [
 		"success",
@@ -45733,10 +45752,10 @@ function rW({ value: e }) {
 		"info"
 	].includes(t) && (n = "success"), ["error", "failed"].includes(t) && (n = "error"), ["dry-run", "review"].includes(t) && (n = "processing"), ["cancelled"].includes(t) && (n = "warning"), /* @__PURE__ */ (0, $.jsx)(dB, {
 		color: n,
-		children: KU(e)
+		children: JU(e)
 	});
 }
-function iW({ title: e, value: t, prefix: n, note: r, extra: i, tags: a = [] }) {
+function oW({ title: e, value: t, prefix: n, note: r, extra: i, tags: a = [] }) {
 	return /* @__PURE__ */ (0, $.jsxs)(RD, {
 		className: "overview-metric-card",
 		extra: i,
@@ -45746,7 +45765,7 @@ function iW({ title: e, value: t, prefix: n, note: r, extra: i, tags: a = [] }) 
 				value: t,
 				prefix: n
 			}),
-			/* @__PURE__ */ (0, $.jsx)(BU, {
+			/* @__PURE__ */ (0, $.jsx)(HU, {
 				className: "overview-metric-note",
 				children: r
 			}),
@@ -45761,14 +45780,14 @@ function iW({ title: e, value: t, prefix: n, note: r, extra: i, tags: a = [] }) 
 		]
 	});
 }
-function aW() {
-	let { message: e } = Q_.useApp(), [t, n] = (0, C.useState)(!0), [r, i] = (0, C.useState)(VU), [a, o] = (0, C.useState)(null), [s, c] = (0, C.useState)(HU);
+function sW() {
+	let { message: e } = Q_.useApp(), [t, n] = (0, C.useState)(!0), [r, i] = (0, C.useState)(UU), [a, o] = (0, C.useState)(null), [s, c] = (0, C.useState)(WU);
 	(0, C.useEffect)(() => {
 		let t = !1, r = async () => {
 			try {
 				let [e, n] = await Promise.all([oH("/api/state"), oH("/api/process")]);
 				if (t) return;
-				i(e || VU), o(n.current_job || e?.current_job || null);
+				i(e || UU), o(n.current_job || e?.current_job || null);
 			} catch (n) {
 				t || e.error(n.message);
 			} finally {
@@ -45788,20 +45807,20 @@ function aW() {
 		let e = !1, t = async () => {
 			let t = r.integrations || {}, n = ["radarr", "sonarr"].filter((e) => t?.[e]?.enabled);
 			if (!n.length) {
-				e || c(HU);
+				e || c(WU);
 				return;
 			}
 			try {
 				let t = await Promise.all(n.map((e) => oH(`/api/integrations/${e}/items`)));
 				if (e) return;
-				let r = { ...HU };
+				let r = { ...WU };
 				n.forEach((e, n) => {
 					let i = Array.isArray(t[n]) ? t[n] : [];
 					if (e === "radarr") {
 						r.movies = i.length, r.movieFiles = i.filter((e) => !!e?.hasFile).length;
 						return;
 					}
-					r.series = i.length, r.episodeFiles = i.reduce((e, t) => e + WU(t?.statistics?.episodeFileCount), 0);
+					r.series = i.length, r.episodeFiles = i.reduce((e, t) => e + KU(t?.statistics?.episodeFileCount), 0);
 				}), c(r);
 			} catch (t) {
 				e || console.error(t);
@@ -45813,14 +45832,14 @@ function aW() {
 			e = !0, window.clearInterval(n);
 		};
 	}, [r.integrations]);
-	let l = r.report?.summary || {}, u = r.cleanup_report?.summary || {}, d = r.empty_folder_cleanup_report?.summary || {}, f = r.path_repair_report?.summary || {}, p = r.folder_index_summary || {}, m = r.sync_result?.summary || {}, h = (0, C.useMemo)(() => YU(r.plan, r.apply_result, r.last_plan_at, r.last_apply_at), [
+	let l = r.report?.summary || {}, u = r.cleanup_report?.summary || {}, d = r.empty_folder_cleanup_report?.summary || {}, f = r.path_repair_report?.summary || {}, p = r.folder_index_summary || {}, m = r.sync_result?.summary || {}, h = (0, C.useMemo)(() => ZU(r.plan, r.apply_result, r.last_plan_at, r.last_apply_at), [
 		r.plan,
 		r.apply_result,
 		r.last_plan_at,
 		r.last_apply_at
 	])?.summary || {}, g = (0, C.useMemo)(() => ["radarr", "sonarr"].filter((e) => r.integrations?.[e]?.enabled), [r.integrations]);
-	WU(l.exact_duplicate_groups) + WU(l.media_collision_groups) + WU(u.folder_media_duplicate_groups) + WU(d.duplicate_groups), WU(h.move) + WU(h.delete) + WU(h.review);
-	let _ = XU(r.activity_log, ["File deleted.", "Folder deleted."]), v = XU(r.activity_log, ["Provider path updated."]), y = XU(r.activity_log, ["Provider item removed."]), b = v + y, x = WU(r.apply_result?.summary?.applied), S = WU(m.updated), w = x + _ + b, T = WU(h.review) + WU(u.folder_media_duplicate_groups) + WU(d.duplicate_groups) + WU(f.issues), E = $U(r.last_cleanup_at, r.last_empty_folder_cleanup_at), D = $U(QU(r.activity_log, ["File deleted.", "Folder deleted."]), QU(r.activity_log, ["Provider path updated.", "Provider item removed."])), O = $U(r.last_apply_at, r.last_empty_folder_cleanup_at, D), k = (0, C.useMemo)(() => eW(a), [a]), A = (0, C.useMemo)(() => nW(a), [a]), j = (0, C.useMemo)(() => {
+	KU(l.exact_duplicate_groups) + KU(l.media_collision_groups) + KU(u.folder_media_duplicate_groups) + KU(d.duplicate_groups), KU(h.move) + KU(h.delete) + KU(h.review);
+	let _ = QU(r.activity_log, ["File deleted.", "Folder deleted."]), v = QU(r.activity_log, ["Provider path updated."]), y = QU(r.activity_log, ["Provider item removed."]), b = v + y, x = KU(r.apply_result?.summary?.applied), S = KU(m.updated), w = x + _ + b, T = KU(h.review) + KU(u.folder_media_duplicate_groups) + KU(d.duplicate_groups) + KU(f.issues), E = tW(r.last_cleanup_at, r.last_empty_folder_cleanup_at), D = tW(eW(r.activity_log, ["File deleted.", "Folder deleted."]), eW(r.activity_log, ["Provider path updated.", "Provider item removed."])), O = tW(r.last_apply_at, r.last_empty_folder_cleanup_at, D), k = (0, C.useMemo)(() => nW(a), [a]), A = (0, C.useMemo)(() => iW(a), [a]), j = (0, C.useMemo)(() => {
 		let e = {
 			movie: 0,
 			series: 0,
@@ -45871,29 +45890,29 @@ function aW() {
 			key: "review",
 			label: "Manual review items",
 			description: "Planned cases the app could not resolve automatically.",
-			value: WU(h.review),
-			status: WU(h.review) ? "warning" : "default"
+			value: KU(h.review),
+			status: KU(h.review) ? "warning" : "default"
 		},
 		{
 			key: "cleanup-groups",
 			label: "Cleanup duplicate groups",
 			description: "Provider duplicate-file groups and root-folder duplicate groups still waiting for cleanup.",
-			value: WU(u.folder_media_duplicate_groups) + WU(d.duplicate_groups),
-			status: WU(u.folder_media_duplicate_groups) + WU(d.duplicate_groups) ? "warning" : "default"
+			value: KU(u.folder_media_duplicate_groups) + KU(d.duplicate_groups),
+			status: KU(u.folder_media_duplicate_groups) + KU(d.duplicate_groups) ? "warning" : "default"
 		},
 		{
 			key: "repair-issues",
 			label: "Path repair issues",
 			description: "Provider items whose saved folder path needs manual search and relink.",
-			value: WU(f.issues),
-			status: WU(f.issues) ? "warning" : "default"
+			value: KU(f.issues),
+			status: KU(f.issues) ? "warning" : "default"
 		},
 		{
 			key: "sync-errors",
 			label: "Sync errors",
 			description: "Provider sync tasks that need another look.",
-			value: WU(m.error),
-			status: WU(m.error) ? "error" : "default"
+			value: KU(m.error),
+			status: KU(m.error) ? "error" : "default"
 		}
 	];
 	return t ? /* @__PURE__ */ (0, $.jsx)("div", {
@@ -45910,7 +45929,7 @@ function aW() {
 						xs: 24,
 						md: 12,
 						xl: 6,
-						children: /* @__PURE__ */ (0, $.jsx)(iW, {
+						children: /* @__PURE__ */ (0, $.jsx)(oW, {
 							title: "Connected Roots",
 							value: r.roots.length || 0,
 							prefix: /* @__PURE__ */ (0, $.jsx)(pR, {}),
@@ -45943,11 +45962,11 @@ function aW() {
 						xs: 24,
 						md: 12,
 						xl: 6,
-						children: /* @__PURE__ */ (0, $.jsx)(iW, {
+						children: /* @__PURE__ */ (0, $.jsx)(oW, {
 							title: "Indexed Folders",
-							value: WU(p.folders),
+							value: KU(p.folders),
 							prefix: /* @__PURE__ */ (0, $.jsx)(BV, {}),
-							note: `Cached folder metadata from connected roots. Last refresh: ${UU(r.last_folder_index_at)}`,
+							note: `Cached folder metadata from connected roots. Last refresh: ${GU(r.last_folder_index_at)}`,
 							extra: /* @__PURE__ */ (0, $.jsx)(dB, {
 								color: r.last_folder_index_at ? "success" : "warning",
 								children: r.last_folder_index_at ? "cached" : "not built"
@@ -45956,17 +45975,17 @@ function aW() {
 								{
 									key: "cache-roots",
 									color: "default",
-									label: `${WU(p.roots)} roots`
+									label: `${KU(p.roots)} roots`
 								},
 								{
 									key: "cache-depth",
 									color: "processing",
-									label: `depth ${WU(p.max_depth)}`
+									label: `depth ${KU(p.max_depth)}`
 								},
 								{
 									key: "cache-errors",
-									color: WU(p.errors) ? "error" : "success",
-									label: `${WU(p.errors)} errors`
+									color: KU(p.errors) ? "error" : "success",
+									label: `${KU(p.errors)} errors`
 								}
 							]
 						})
@@ -45975,7 +45994,7 @@ function aW() {
 						xs: 24,
 						md: 12,
 						xl: 6,
-						children: /* @__PURE__ */ (0, $.jsx)(iW, {
+						children: /* @__PURE__ */ (0, $.jsx)(oW, {
 							title: "Provider Library",
 							value: M,
 							prefix: /* @__PURE__ */ (0, $.jsx)(IV, {}),
@@ -45999,14 +46018,14 @@ function aW() {
 						xs: 24,
 						md: 12,
 						xl: 6,
-						children: /* @__PURE__ */ (0, $.jsx)(iW, {
+						children: /* @__PURE__ */ (0, $.jsx)(oW, {
 							title: "Tracked Media Files",
 							value: N,
 							prefix: /* @__PURE__ */ (0, $.jsx)(MV, {}),
 							note: `${s.movieFiles} movie folders with files and ${s.episodeFiles} Sonarr episode files currently recognized.`,
 							extra: /* @__PURE__ */ (0, $.jsxs)(dB, {
-								color: WU(f.issues) ? "warning" : "success",
-								children: [WU(f.issues), " repair issues"]
+								color: KU(f.issues) ? "warning" : "success",
+								children: [KU(f.issues), " repair issues"]
 							}),
 							tags: [
 								{
@@ -46040,7 +46059,7 @@ function aW() {
 						title: "Resolution Breakdown",
 						extra: /* @__PURE__ */ (0, $.jsxs)(dB, {
 							color: w ? "success" : "default",
-							children: [GU(w, "case"), " resolved"]
+							children: [qU(w, "case"), " resolved"]
 						}),
 						className: "overview-panel-card",
 						children: /* @__PURE__ */ (0, $.jsx)(PN, {
@@ -46052,13 +46071,13 @@ function aW() {
 									title: /* @__PURE__ */ (0, $.jsxs)(wA, {
 										size: 10,
 										wrap: !0,
-										children: [/* @__PURE__ */ (0, $.jsx)(VS, { status: e.status }), /* @__PURE__ */ (0, $.jsx)(BU, {
+										children: [/* @__PURE__ */ (0, $.jsx)(VS, { status: e.status }), /* @__PURE__ */ (0, $.jsx)(HU, {
 											strong: !0,
 											children: e.label
 										})]
 									}),
 									description: e.description
-								}), /* @__PURE__ */ (0, $.jsx)(BU, {
+								}), /* @__PURE__ */ (0, $.jsx)(HU, {
 									strong: !0,
 									className: "overview-stat-value",
 									children: e.value
@@ -46075,14 +46094,14 @@ function aW() {
 						extra: a ? /* @__PURE__ */ (0, $.jsxs)(wA, {
 							wrap: !0,
 							size: [8, 8],
-							children: [/* @__PURE__ */ (0, $.jsx)(rW, { value: a.status || "running" }), /* @__PURE__ */ (0, $.jsx)(dB, { children: qU(a.kind) })]
+							children: [/* @__PURE__ */ (0, $.jsx)(aW, { value: a.status || "running" }), /* @__PURE__ */ (0, $.jsx)(dB, { children: YU(a.kind) })]
 						}) : /* @__PURE__ */ (0, $.jsx)(dB, { children: "Idle" }),
 						className: "overview-panel-card",
 						children: a ? /* @__PURE__ */ (0, $.jsxs)(HA, {
 							vertical: !0,
 							gap: 16,
 							children: [
-								/* @__PURE__ */ (0, $.jsx)(BU, {
+								/* @__PURE__ */ (0, $.jsx)(HU, {
 									strong: !0,
 									className: "overview-process-message",
 									children: a.message
@@ -46090,9 +46109,9 @@ function aW() {
 								k.total ? /* @__PURE__ */ (0, $.jsx)(UP, {
 									className: "overview-process-progress",
 									percent: k.percent,
-									status: tW(a.status),
+									status: rW(a.status),
 									format: () => `${k.completed}/${k.total}`
-								}) : /* @__PURE__ */ (0, $.jsx)(BU, {
+								}) : /* @__PURE__ */ (0, $.jsx)(HU, {
 									type: "secondary",
 									children: "This process does not report step counts yet."
 								}),
@@ -46112,12 +46131,12 @@ function aW() {
 										{
 											key: "started-at",
 											label: "Started",
-											children: UU(a.started_at)
+											children: GU(a.started_at)
 										},
 										{
 											key: "updated-at",
 											label: a.finished_at ? "Finished" : "Updated",
-											children: UU(a.finished_at || a.updated_at)
+											children: GU(a.finished_at || a.updated_at)
 										},
 										{
 											key: "progress",
@@ -46147,11 +46166,11 @@ function aW() {
 							bordered: !0,
 							className: "overview-descriptions",
 							items: [
-								["Latest Scan", UU(r.last_scan_at)],
-								["Latest Cleanup Scan", UU(E)],
-								["Latest Path Repair", UU(r.last_path_repair_at)],
-								["Latest Changes", UU(O)],
-								["Latest Sync", UU(r.last_sync_at)],
+								["Latest Scan", GU(r.last_scan_at)],
+								["Latest Cleanup Scan", GU(E)],
+								["Latest Path Repair", GU(r.last_path_repair_at)],
+								["Latest Changes", GU(O)],
+								["Latest Sync", GU(r.last_sync_at)],
 								["Enabled Integrations", g.length ? g.join(" + ") : "No provider enabled"]
 							].map(([e, t]) => ({
 								key: String(e).toLowerCase().replaceAll(" ", "-"),
@@ -46180,13 +46199,13 @@ function aW() {
 									title: /* @__PURE__ */ (0, $.jsxs)(wA, {
 										size: 10,
 										wrap: !0,
-										children: [/* @__PURE__ */ (0, $.jsx)(VS, { status: e.status }), /* @__PURE__ */ (0, $.jsx)(BU, {
+										children: [/* @__PURE__ */ (0, $.jsx)(VS, { status: e.status }), /* @__PURE__ */ (0, $.jsx)(HU, {
 											strong: !0,
 											children: e.label
 										})]
 									}),
 									description: e.description
-								}), /* @__PURE__ */ (0, $.jsx)(BU, {
+								}), /* @__PURE__ */ (0, $.jsx)(HU, {
 									strong: !0,
 									className: "overview-stat-value",
 									children: e.value
@@ -46208,7 +46227,7 @@ function aW() {
 }
 //#endregion
 //#region src/components/OperationsView.jsx
-var { Text: oW } = wV, sW = {}, cW = {
+var { Text: cW } = wV, lW = {}, uW = {
 	roots: [],
 	integrations: {
 		radarr: { enabled: !1 },
@@ -46224,7 +46243,7 @@ var { Text: oW } = wV, sW = {}, cW = {
 	last_plan_at: null,
 	last_apply_at: null,
 	last_empty_folder_cleanup_at: null
-}, lW = {
+}, dW = {
 	open: !1,
 	provider: "radarr",
 	source: "",
@@ -46235,29 +46254,29 @@ var { Text: oW } = wV, sW = {}, cW = {
 	preview: null,
 	loading: !1
 };
-function uW(e) {
+function fW(e) {
 	return e ? new Date(e).toLocaleString() : "Never";
 }
-function dW(e) {
+function pW(e) {
 	let t = String(e || "").trim();
 	return t ? t.startsWith("[") && t.includes("\"Path\"") && t.includes("\"Name\"") ? "The storage backend returned a raw directory listing instead of a readable error. Re-run the scan after restarting the backend." : t : "Unknown error.";
 }
-function fW(e) {
+function mW(e) {
 	let t = String(e || "").toLowerCase();
 	return t.includes("rate_limit_exceeded") || t.includes("ratelimitexceeded") || t.includes("quota exceeded");
 }
-function pW(e) {
+function hW(e) {
 	return String(e || "").toLowerCase().replaceAll(/[\._()-]+/g, " ").replaceAll(/\s+/g, " ").trim();
 }
-function mW(e) {
+function gW(e) {
 	return String(e || "").replace(/\s+P\d+$/, "").trim();
 }
-function hW(e) {
-	if (e.is_root) return mW(e.path);
-	let t = mW(e.display_path || e.path || ""), n = mW(e.root_label || "");
+function _W(e) {
+	if (e.is_root) return gW(e.path);
+	let t = gW(e.display_path || e.path || ""), n = gW(e.root_label || "");
 	return t ? t === e.label ? n ? `${n} / ${e.label}` : e.label : t : "-";
 }
-function gW(e) {
+function vW(e) {
 	let t = String(e?.root_storage_uri || e?.storage_uri || "").toLowerCase();
 	return t.startsWith("smb://") ? {
 		label: "SMB",
@@ -46270,17 +46289,17 @@ function gW(e) {
 		color: "default"
 	};
 }
-function _W(e, t = 3) {
-	let n = e.map((e) => mW(e?.folder_name || e?.canonical_name || e?.label || e?.path || "")).filter(Boolean);
+function yW(e, t = 3) {
+	let n = e.map((e) => gW(e?.folder_name || e?.canonical_name || e?.label || e?.path || "")).filter(Boolean);
 	return n.length ? n.length <= t ? n.join(", ") : `${n.slice(0, t).join(", ")} +${n.length - t} more` : "None";
 }
-function vW(e, t) {
+function bW(e, t) {
 	if (e === t) return !0;
 	if (e.length !== t.length) return !1;
 	for (let n = 0; n < e.length; n += 1) if (String(e[n]) !== String(t[n])) return !1;
 	return !0;
 }
-function yW(e) {
+function xW(e) {
 	return e?.empty_reason === "inferior-video-set" ? {
 		color: "volcano",
 		label: "Inferior Episode Set"
@@ -46298,21 +46317,21 @@ function yW(e) {
 		label: "No Video"
 	};
 }
-function bW(e, t = [], n = []) {
+function SW(e, t = [], n = []) {
 	let r = new Set((n || []).map((e) => String(e?.id || "").trim()).filter(Boolean)), i = new Set((t || []).map((e) => String(e?.path || "").trim()).filter(Boolean));
 	return (e || []).reduce((e, t) => {
 		let n = String(t?.root_path || t?.root_label || "").trim();
 		if (!n) return e;
-		let a = dW(t?.message), o = String(t?.connection_id || "").trim();
+		let a = pW(t?.message), o = String(t?.connection_id || "").trim();
 		return a.startsWith("connection not found:") && (o && r.has(o) || i.has(n)) || e.set(n, {
 			rootLabel: t?.root_label || t?.root_path || "Unknown root",
 			message: a,
-			isRateLimited: fW(t?.message)
+			isRateLimited: mW(t?.message)
 		}), e;
 	}, /* @__PURE__ */ new Map());
 }
-function xW(e, t) {
-	let n = pW(t), r = pW(e.title);
+function CW(e, t) {
+	let n = hW(t), r = hW(e.title);
 	if (!n) return 0;
 	if (r === n) return 100;
 	if (r.startsWith(n)) return 80;
@@ -46320,14 +46339,14 @@ function xW(e, t) {
 	let i = n.split(" ").filter(Boolean), a = new Set(r.split(" ").filter(Boolean));
 	return i.filter((e) => a.has(e)).length * 10;
 }
-function SW(e) {
+function wW(e) {
 	let t = String(e || "").toLowerCase();
 	return t === "move" ? "Move" : t === "delete" ? "Delete" : t === "review" ? "Check" : e || "Action";
 }
-function CW(e) {
+function TW(e) {
 	return String(e || "unknown_action").replaceAll("_", " ");
 }
-function wW(e) {
+function EW(e) {
 	let t = String(e || "");
 	if (!t) return "";
 	try {
@@ -46336,46 +46355,46 @@ function wW(e) {
 		return t;
 	}
 }
-function TW(e) {
+function DW(e) {
 	let t = String(e?.details?.canonical_name || "").trim();
 	if (t) return t;
-	let n = wW(e?.keep_path || e?.destination || e?.source || ""), r = n.split("?")[0].split("/").filter(Boolean);
+	let n = EW(e?.keep_path || e?.destination || e?.source || ""), r = n.split("?")[0].split("/").filter(Boolean);
 	return r[r.length - 1] || n || "Upcoming change";
 }
-function EW(e) {
+function OW(e) {
 	let t = [];
 	return e.source && t.push({
 		key: `source-${e.source}`,
 		tone: "remove",
 		sign: "-",
 		label: e.type === "move" ? "from" : e.type === "delete" ? "remove" : "check",
-		path: wW(e.source)
+		path: EW(e.source)
 	}), e.destination && t.push({
 		key: `destination-${e.destination}`,
 		tone: "add",
 		sign: "+",
 		label: e.type === "review" ? "suggested folder" : "to",
-		path: wW(e.destination)
+		path: EW(e.destination)
 	}), e.keep_path && e.keep_path !== e.destination && t.push({
 		key: `keep-${e.keep_path}`,
 		tone: "keep",
 		sign: "+",
 		label: "keep",
-		path: wW(e.keep_path)
+		path: EW(e.keep_path)
 	}), t;
 }
-function DW(e) {
+function kW(e) {
 	return ["apply", "execute"].includes(String(e || "").toLowerCase());
 }
-function OW(e, t, n, r) {
+function AW(e, t, n, r) {
 	if (!e) return null;
-	if (!t || !DW(t.mode)) return e;
+	if (!t || !kW(t.mode)) return e;
 	let i = String(t.plan_generated_at || "").trim(), a = String(e.generated_at || "").trim();
 	if (i && a) return i === a ? null : e;
 	let o = Date.parse(a || n || "") || 0, s = Date.parse(t.generated_at || r || "") || 0;
 	return o && s && s >= o ? null : e;
 }
-function kW(e, t) {
+function jW(e, t) {
 	let n = (e || []).map((e) => ({
 		key: e.storage_uri || e.path,
 		label: e.label,
@@ -46417,7 +46436,7 @@ function kW(e, t) {
 		};
 	});
 }
-function AW(e) {
+function MW(e) {
 	return (e || []).filter((e) => e && !e.is_file).map((e) => ({
 		label: e.label,
 		path: e.path,
@@ -46431,7 +46450,7 @@ function AW(e) {
 		root_storage_uri: String(e.root_storage_uri || "").includes("://") ? e.root_storage_uri : ""
 	}));
 }
-function jW(e, t, n) {
+function NW(e, t, n) {
 	return e.map((e) => e.key === t ? {
 		...e,
 		children: n.length ? n : void 0,
@@ -46440,16 +46459,16 @@ function jW(e, t, n) {
 		is_loading: !1
 	} : e.children?.length ? {
 		...e,
-		children: jW(e.children, t, n)
+		children: NW(e.children, t, n)
 	} : e);
 }
-function MW(e, t, n) {
+function PW(e, t, n) {
 	return e.map((e) => e.key === t ? n(e) : e.children?.length ? {
 		...e,
-		children: MW(e.children, t, n)
+		children: PW(e.children, t, n)
 	} : e);
 }
-function NW(e, t) {
+function FW(e, t) {
 	return t ? e.map((e) => {
 		if ([
 			e.label,
@@ -46458,7 +46477,7 @@ function NW(e, t) {
 			e.root_label,
 			e.connection_label,
 			e.kind
-		].filter(Boolean).some((e) => pW(e).includes(t))) return e;
+		].filter(Boolean).some((e) => hW(e).includes(t))) return e;
 		let n = (e.children || []).filter((e) => [
 			e.label,
 			e.path,
@@ -46466,14 +46485,14 @@ function NW(e, t) {
 			e.root_label,
 			e.connection_label,
 			e.kind
-		].filter(Boolean).some((e) => pW(e).includes(t)));
+		].filter(Boolean).some((e) => hW(e).includes(t)));
 		return n.length ? {
 			...e,
 			children: n
 		} : null;
 	}).filter(Boolean) : e;
 }
-function PW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, actionLoading: i, onCancel: a, onQueryChange: o, onSelectItem: s, onPreview: c, onConfirm: l }) {
+function IW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, actionLoading: i, onCancel: a, onQueryChange: o, onSelectItem: s, onPreview: c, onConfirm: l }) {
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e.open,
 		title: e.provider === "radarr" ? "Move Folder To Radarr Movie" : "Move Folder To Sonarr Series",
@@ -46499,10 +46518,10 @@ function PW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, 
 						children: /* @__PURE__ */ (0, $.jsxs)(HA, {
 							vertical: !0,
 							gap: 4,
-							children: [/* @__PURE__ */ (0, $.jsx)(oW, {
+							children: [/* @__PURE__ */ (0, $.jsx)(cW, {
 								strong: !0,
 								children: e.sourceLabel || "-"
-							}), /* @__PURE__ */ (0, $.jsx)(oW, {
+							}), /* @__PURE__ */ (0, $.jsx)(cW, {
 								type: "secondary",
 								className: "mono",
 								children: e.source || "-"
@@ -46536,7 +46555,7 @@ function PW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, 
 						align: "center",
 						gap: 12,
 						wrap: !0,
-						children: [/* @__PURE__ */ (0, $.jsx)(oW, {
+						children: [/* @__PURE__ */ (0, $.jsx)(cW, {
 							type: "secondary",
 							className: "mono",
 							children: r.item.path
@@ -46558,7 +46577,7 @@ function PW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, 
 					}, {
 						key: "destination-path",
 						label: "Destination path",
-						children: /* @__PURE__ */ (0, $.jsx)(oW, {
+						children: /* @__PURE__ */ (0, $.jsx)(cW, {
 							className: "mono",
 							children: n.path
 						})
@@ -46583,7 +46602,7 @@ function PW({ modalState: e, rankedItems: t, selectedItem: n, suggestedItem: r, 
 		})
 	});
 }
-function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, actionLoading: i, onClose: a, onDeleteLowerQualityChange: o, onPruneEmptyDirsChange: s, onDryRun: c, onExecute: l }) {
+function LW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, actionLoading: i, onClose: a, onDeleteLowerQualityChange: o, onPruneEmptyDirsChange: s, onDryRun: c, onExecute: l }) {
 	let u = t?.summary || {}, d = t?.actions || [];
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e,
@@ -46627,7 +46646,7 @@ function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 						{
 							key: "generated",
 							label: "Created",
-							children: uW(t?.generated_at)
+							children: fW(t?.generated_at)
 						}
 					]
 				}),
@@ -46660,7 +46679,7 @@ function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 						gap: 12,
 						wrap: !0,
 						className: "plan-review-list-head",
-						children: [/* @__PURE__ */ (0, $.jsx)(oW, {
+						children: [/* @__PURE__ */ (0, $.jsx)(cW, {
 							strong: !0,
 							children: "Upcoming changes"
 						}), /* @__PURE__ */ (0, $.jsxs)(dB, { children: [d.length, " items"] })]
@@ -46679,11 +46698,11 @@ function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 										children: [
 											/* @__PURE__ */ (0, $.jsx)(dB, {
 												color: e.type === "delete" ? "error" : e.type === "review" ? "warning" : "processing",
-												children: SW(e.type)
+												children: wW(e.type)
 											}),
-											/* @__PURE__ */ (0, $.jsx)(oW, {
+											/* @__PURE__ */ (0, $.jsx)(cW, {
 												strong: !0,
-												children: CW(e.reason)
+												children: TW(e.reason)
 											}),
 											e.details?.kind ? /* @__PURE__ */ (0, $.jsx)(dB, { children: String(e.details.kind).toUpperCase() }) : null,
 											Number.isFinite(Number(e.details?.candidate_quality_rank)) ? /* @__PURE__ */ (0, $.jsxs)(dB, { children: ["Candidate Q", Number(e.details?.candidate_quality_rank)] }) : null,
@@ -46692,24 +46711,24 @@ function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 												children: ["Keep Q", Number(e.details?.keeper_quality_rank)]
 											}) : null
 										]
-									}), /* @__PURE__ */ (0, $.jsx)(oW, {
+									}), /* @__PURE__ */ (0, $.jsx)(cW, {
 										className: "plan-review-entry-title",
-										children: TW(e)
+										children: DW(e)
 									})]
 								}), /* @__PURE__ */ (0, $.jsx)("div", {
 									className: "plan-review-diff",
-									children: EW(e).map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
+									children: OW(e).map((e) => /* @__PURE__ */ (0, $.jsxs)("div", {
 										className: `plan-review-diff-line tone-${e.tone}`,
 										children: [
-											/* @__PURE__ */ (0, $.jsx)(oW, {
+											/* @__PURE__ */ (0, $.jsx)(cW, {
 												className: `plan-review-diff-sign tone-${e.tone}`,
 												children: e.sign
 											}),
-											/* @__PURE__ */ (0, $.jsx)(oW, {
+											/* @__PURE__ */ (0, $.jsx)(cW, {
 												className: "plan-review-diff-label",
 												children: e.label
 											}),
-											/* @__PURE__ */ (0, $.jsx)(oW, {
+											/* @__PURE__ */ (0, $.jsx)(cW, {
 												className: "plan-review-diff-path",
 												children: e.path
 											})
@@ -46725,7 +46744,7 @@ function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 					align: "center",
 					gap: 12,
 					wrap: !0,
-					children: [/* @__PURE__ */ (0, $.jsx)(oW, {
+					children: [/* @__PURE__ */ (0, $.jsx)(cW, {
 						type: "secondary",
 						children: "After you start, progress continues in Process Logs."
 					}), /* @__PURE__ */ (0, $.jsxs)(wA, {
@@ -46753,7 +46772,7 @@ function FW({ open: e, plan: t, deleteLowerQuality: n, pruneEmptyDirs: r, action
 		})
 	});
 }
-function IW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selectedGroupIds: i, selectedGroupSummary: a, cleanupFolderRows: o, cleanupDeleteRows: s, cleanupGroupColumns: c, cleanupFolderColumns: l, selectedCleanupFolderKeys: u, actionLoading: d, onClose: f, onSelectGroups: p, onSelectFolders: m, onToggleGroup: h, onToggleFolder: g, onClearSelection: _, onDelete: v }) {
+function RW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selectedGroupIds: i, selectedGroupSummary: a, cleanupFolderRows: o, cleanupDeleteRows: s, cleanupGroupColumns: c, cleanupFolderColumns: l, selectedCleanupFolderKeys: u, actionLoading: d, onClose: f, onSelectGroups: p, onSelectFolders: m, onToggleGroup: h, onToggleFolder: g, onClearSelection: _, onDelete: v }) {
 	let y = t?.summary || {}, b = t?.groups || [];
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e,
@@ -46782,7 +46801,7 @@ function IW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selec
 						{
 							key: "generated",
 							label: "Latest Scan",
-							children: uW(t?.generated_at)
+							children: fW(t?.generated_at)
 						},
 						{
 							key: "selected-roots",
@@ -46811,7 +46830,7 @@ function IW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selec
 						className: "plan-review-list-head",
 						children: /* @__PURE__ */ (0, $.jsxs)(wA, {
 							wrap: !0,
-							children: [/* @__PURE__ */ (0, $.jsx)(oW, {
+							children: [/* @__PURE__ */ (0, $.jsx)(cW, {
 								strong: !0,
 								children: "Duplicate groups"
 							}), /* @__PURE__ */ (0, $.jsxs)(dB, { children: [b.length, " items"] })]
@@ -46843,7 +46862,7 @@ function IW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selec
 						children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
 							wrap: !0,
 							children: [
-								/* @__PURE__ */ (0, $.jsx)(oW, {
+								/* @__PURE__ */ (0, $.jsx)(cW, {
 									strong: !0,
 									children: "Selected duplicate copies"
 								}),
@@ -46880,7 +46899,7 @@ function IW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selec
 					align: "center",
 					gap: 12,
 					wrap: !0,
-					children: [/* @__PURE__ */ (0, $.jsx)(oW, {
+					children: [/* @__PURE__ */ (0, $.jsx)(cW, {
 						type: "secondary",
 						children: "Progress continues in Process Logs after deletion starts."
 					}), /* @__PURE__ */ (0, $.jsxs)(wA, {
@@ -46901,17 +46920,17 @@ function IW({ open: e, report: t, selectedRootCount: n, selectedGroups: r, selec
 		})
 	});
 }
-function LW() {
-	let { message: e, modal: t } = Q_.useApp(), [n, r] = (0, C.useState)(!0), [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(cW), [c, l] = (0, C.useState)(null), [u, d] = (0, C.useState)([]), [f, p] = (0, C.useState)([]), [m, h] = (0, C.useState)({
+function zW() {
+	let { message: e, modal: t } = Q_.useApp(), [n, r] = (0, C.useState)(!0), [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(uW), [c, l] = (0, C.useState)(null), [u, d] = (0, C.useState)([]), [f, p] = (0, C.useState)([]), [m, h] = (0, C.useState)({
 		items: 0,
 		roots: 0
-	}), [g, _] = (0, C.useState)([]), [v, y] = (0, C.useState)([]), [b, x] = (0, C.useState)(""), [S, w] = (0, C.useState)([]), [T, E] = (0, C.useState)(!1), [D, O] = (0, C.useState)(!0), [k, A] = (0, C.useState)(lW), [j, M] = (0, C.useState)(!1), [N, P] = (0, C.useState)(!1), [F, I] = (0, C.useState)(!1), [L, R] = (0, C.useState)([]), [z, B] = (0, C.useState)([]), V = async () => {
+	}), [g, _] = (0, C.useState)([]), [v, y] = (0, C.useState)([]), [b, x] = (0, C.useState)(""), [S, w] = (0, C.useState)([]), [T, E] = (0, C.useState)(!1), [D, O] = (0, C.useState)(!0), [k, A] = (0, C.useState)(dW), [j, M] = (0, C.useState)(!1), [N, P] = (0, C.useState)(!1), [F, I] = (0, C.useState)(!1), [L, R] = (0, C.useState)([]), [z, B] = (0, C.useState)([]), V = async () => {
 		let e = await sH();
-		s(e.state || cW), l(e.process || e.state?.current_job || null), d(e.operationsFolders || []), h(e.operationsSummary || {
+		s(e.state || uW), l(e.process || e.state?.current_job || null), d(e.operationsFolders || []), h(e.operationsSummary || {
 			items: 0,
 			roots: 0
 		});
-		let t = kW(e.state?.roots || [], e.operationsFolders || []);
+		let t = jW(e.state?.roots || [], e.operationsFolders || []);
 		p(t), _(t.filter((e) => e.children?.length).map((e) => e.key));
 		let n = /* @__PURE__ */ new Set(), r = (e) => e.forEach((e) => {
 			n.add(e.key), e.children?.length && r(e.children);
@@ -46949,23 +46968,23 @@ function LW() {
 			});
 		};
 		return t(H), e;
-	}, [H]), W = (0, C.useMemo)(() => NW(H, pW(b)), [b, H]), ee = (0, C.useMemo)(() => S.map((e) => U.get(e)).filter(Boolean), [U, S]), G = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && !e.is_file), [ee]), K = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && e.is_file), [ee]), te = (0, C.useMemo)(() => ee.filter((e) => e.is_root), [ee]), q = G.length === 1 && te.length === 0 && K.length === 0 ? G[0] : null, ne = !!(o.integrations?.radarr?.enabled && q), re = !!(o.integrations?.sonarr?.enabled && q), ie = G.map((e) => e.path), ae = te.map((e) => e.path), oe = (0, C.useMemo)(() => AW(ee), [ee]), se = {
+	}, [H]), W = (0, C.useMemo)(() => FW(H, hW(b)), [b, H]), ee = (0, C.useMemo)(() => S.map((e) => U.get(e)).filter(Boolean), [U, S]), G = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && !e.is_file), [ee]), K = (0, C.useMemo)(() => ee.filter((e) => !e.is_root && e.is_file), [ee]), te = (0, C.useMemo)(() => ee.filter((e) => e.is_root), [ee]), q = G.length === 1 && te.length === 0 && K.length === 0 ? G[0] : null, ne = !!(o.integrations?.radarr?.enabled && q), re = !!(o.integrations?.sonarr?.enabled && q), ie = G.map((e) => e.path), ae = te.map((e) => e.path), oe = (0, C.useMemo)(() => MW(ee), [ee]), se = {
 		roots: m.roots || o.roots?.length || 0,
 		nodes: u.length || 0,
 		max_depth: "Unlimited"
 	}, ce = (0, C.useMemo)(() => [...k.items].map((e) => ({
 		item: e,
-		score: xW(e, k.query)
-	})).filter(({ item: e, score: t }) => k.query.trim() ? t > 0 || pW(e.title).includes(pW(k.query)) : !0).sort((e, t) => t.score - e.score || String(e.item.title).localeCompare(String(t.item.title))), [k.items, k.query]), le = (0, C.useMemo)(() => k.items.find((e) => String(e.id) === String(k.selectedItemId)) || null, [k.items, k.selectedItemId]), ue = ce[0] || null, de = (0, C.useMemo)(() => OW(o.plan, o.apply_result, o.last_plan_at, o.last_apply_at), [
+		score: CW(e, k.query)
+	})).filter(({ item: e, score: t }) => k.query.trim() ? t > 0 || hW(e.title).includes(hW(k.query)) : !0).sort((e, t) => t.score - e.score || String(e.item.title).localeCompare(String(t.item.title))), [k.items, k.query]), le = (0, C.useMemo)(() => k.items.find((e) => String(e.id) === String(k.selectedItemId)) || null, [k.items, k.selectedItemId]), ue = ce[0] || null, de = (0, C.useMemo)(() => AW(o.plan, o.apply_result, o.last_plan_at, o.last_apply_at), [
 		o.plan,
 		o.apply_result,
 		o.last_plan_at,
 		o.last_apply_at
-	]), fe = de?.actions || [], pe = o.empty_folder_cleanup_report || sW, me = (0, C.useMemo)(() => pe.groups || [], [pe]), he = pe.errors || [], ge = (0, C.useMemo)(() => bW(he, o.roots || [], o.lan_connections?.smb || []), [
+	]), fe = de?.actions || [], pe = o.empty_folder_cleanup_report || lW, me = (0, C.useMemo)(() => pe.groups || [], [pe]), he = pe.errors || [], ge = (0, C.useMemo)(() => SW(he, o.roots || [], o.lan_connections?.smb || []), [
 		he,
 		o.roots,
 		o.lan_connections
-	]), _e = (0, C.useMemo)(() => [...ge.values()].filter((e) => e.isRateLimited), [ge]), ve = (0, C.useMemo)(() => me.filter((e) => L.includes(String(e.id))), [me, L]), ye = (0, C.useMemo)(() => _W(ve), [ve]), be = (0, C.useMemo)(() => ve.flatMap((e) => (e.items || []).map((t) => ({
+	]), _e = (0, C.useMemo)(() => [...ge.values()].filter((e) => e.isRateLimited), [ge]), ve = (0, C.useMemo)(() => me.filter((e) => L.includes(String(e.id))), [me, L]), ye = (0, C.useMemo)(() => yW(ve), [ve]), be = (0, C.useMemo)(() => ve.flatMap((e) => (e.items || []).map((t) => ({
 		...t,
 		groupId: String(e.id),
 		groupFolderName: e.folder_name || e.relative_path || e.canonical_name,
@@ -46975,20 +46994,20 @@ function LW() {
 		let e = new Set(me.map((e) => String(e.id)));
 		R((t) => {
 			let n = t.filter((t) => e.has(String(t)));
-			return vW(t, n) ? t : n;
+			return bW(t, n) ? t : n;
 		});
 	}, [me]), (0, C.useEffect)(() => {
 		let e = new Set(be.map((e) => e.rowKey));
 		B((t) => {
 			let n = t.filter((t) => e.has(String(t)));
-			return vW(t, n) ? t : n;
+			return bW(t, n) ? t : n;
 		});
 	}, [be]), (0, C.useEffect)(() => {
 		if (!L.length) return;
 		let e = be.filter((e) => e.is_deletion_candidate).map((e) => e.rowKey);
 		B((t) => {
 			let n = [...new Set([...t, ...e])];
-			return vW(t, n) ? t : n;
+			return bW(t, n) ? t : n;
 		});
 	}, [be, L.length]);
 	let Se = async (t, n, r, i = {}) => {
@@ -47011,7 +47030,7 @@ function LW() {
 		await Se("refresh-folders", () => mH(), "Folder list and cached folder metadata refreshed.", { trackProcess: !0 });
 	}, we = async (t) => {
 		if (!(!t?.storage_uri || !t?.root_storage_uri || t.children_loaded || t.has_children === !1 || t.is_file)) {
-			y((e) => e.includes(t.key) ? e : [...e, t.key]), p((e) => MW(e, t.key, (e) => ({
+			y((e) => e.includes(t.key) ? e : [...e, t.key]), p((e) => PW(e, t.key, (e) => ({
 				...e,
 				is_loading: !0
 			})));
@@ -47027,9 +47046,9 @@ function LW() {
 					is_loading: !1,
 					children: e.has_children ? [] : void 0
 				}));
-				p((n) => jW(n, t.key, e));
+				p((n) => NW(n, t.key, e));
 			} catch (n) {
-				p((e) => MW(e, t.key, (e) => ({
+				p((e) => PW(e, t.key, (e) => ({
 					...e,
 					is_loading: !1
 				}))), e.error(n.message);
@@ -47038,7 +47057,7 @@ function LW() {
 			}
 		}
 	}, Te = () => {
-		A(lW);
+		A(dW);
 	}, Ee = async (t, n = q) => {
 		if (n) {
 			A({
@@ -47055,7 +47074,7 @@ function LW() {
 			try {
 				let e = (await hH(t)).items || [], r = [...e].map((e) => ({
 					item: e,
-					score: xW(e, n.label)
+					score: CW(e, n.label)
 				})).sort((e, t) => t.score - e.score || String(e.item.title).localeCompare(String(t.item.title)))[0];
 				A((t) => ({
 					...t,
@@ -47181,7 +47200,71 @@ function LW() {
 			"aria-label": `More actions for ${e.label}`,
 			onClick: (e) => e.stopPropagation()
 		})
-	});
+	}), Re = [
+		Qz.SELECTION_COLUMN,
+		Qz.EXPAND_COLUMN,
+		{
+			title: "Folder",
+			dataIndex: "label",
+			key: "folder",
+			render: (e, t) => /* @__PURE__ */ (0, $.jsxs)("div", {
+				className: "operations-folder-cell",
+				children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
+					size: [4, 4],
+					wrap: !0,
+					className: "operations-folder-title",
+					children: [
+						t.is_loading ? /* @__PURE__ */ (0, $.jsx)(Dl, {
+							spin: !0,
+							className: "operations-folder-leading-icon"
+						}) : null,
+						t.is_file ? /* @__PURE__ */ (0, $.jsx)(dR, { className: "operations-folder-leading-icon" }) : null,
+						/* @__PURE__ */ (0, $.jsx)(cW, {
+							strong: !0,
+							className: "operations-folder-name",
+							children: gW(t.label)
+						}),
+						t.kind ? /* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }) : null,
+						t.is_root ? /* @__PURE__ */ (0, $.jsx)(dB, {
+							color: vW(t).color,
+							children: vW(t).label
+						}) : null,
+						t.is_file ? /* @__PURE__ */ (0, $.jsx)(dB, { children: "File" }) : null,
+						t.is_root && ge.get(t.path)?.isRateLimited ? /* @__PURE__ */ (0, $.jsx)(dB, {
+							color: "error",
+							children: "Rate Limited"
+						}) : null,
+						t.is_root && ge.get(t.path) && !ge.get(t.path)?.isRateLimited ? /* @__PURE__ */ (0, $.jsx)(dB, {
+							color: "warning",
+							children: "Scan Issue"
+						}) : null
+					]
+				}), t.is_root && ge.get(t.path)?.message ? /* @__PURE__ */ (0, $.jsx)(cW, {
+					type: "secondary",
+					className: "operations-folder-note",
+					children: ge.get(t.path).message
+				}) : null]
+			})
+		},
+		{
+			title: "Path",
+			dataIndex: "display_path",
+			key: "path",
+			width: "45%",
+			render: (e, t) => /* @__PURE__ */ (0, $.jsx)(cW, {
+				type: "secondary",
+				className: "mono",
+				children: _W(t)
+			})
+		},
+		{
+			title: "",
+			key: "actions",
+			width: 48,
+			align: "right",
+			render: (e, t) => Le(t)
+		}
+	];
 	return n ? /* @__PURE__ */ (0, $.jsx)("div", {
 		className: "app-loading",
 		children: /* @__PURE__ */ (0, $.jsx)(CN, { size: "large" })
@@ -47340,74 +47423,11 @@ function LW() {
 						rowKey: "key",
 						size: "small",
 						pagination: !1,
-						columns: [
-							{
-								title: "Folder",
-								dataIndex: "label",
-								key: "folder",
-								render: (e, t) => /* @__PURE__ */ (0, $.jsxs)("div", {
-									className: "operations-folder-cell",
-									children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
-										size: [4, 4],
-										wrap: !0,
-										className: "operations-folder-title",
-										children: [
-											t.is_loading ? /* @__PURE__ */ (0, $.jsx)(Dl, {
-												spin: !0,
-												className: "operations-folder-leading-icon"
-											}) : null,
-											t.is_file ? /* @__PURE__ */ (0, $.jsx)(dR, { className: "operations-folder-leading-icon" }) : null,
-											/* @__PURE__ */ (0, $.jsx)(oW, {
-												strong: !0,
-												className: "operations-folder-name",
-												children: mW(t.label)
-											}),
-											t.kind ? /* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }) : null,
-											t.is_root ? /* @__PURE__ */ (0, $.jsx)(dB, {
-												color: gW(t).color,
-												children: gW(t).label
-											}) : null,
-											t.is_file ? /* @__PURE__ */ (0, $.jsx)(dB, { children: "File" }) : null,
-											t.is_root && ge.get(t.path)?.isRateLimited ? /* @__PURE__ */ (0, $.jsx)(dB, {
-												color: "error",
-												children: "Rate Limited"
-											}) : null,
-											t.is_root && ge.get(t.path) && !ge.get(t.path)?.isRateLimited ? /* @__PURE__ */ (0, $.jsx)(dB, {
-												color: "warning",
-												children: "Scan Issue"
-											}) : null
-										]
-									}), t.is_root && ge.get(t.path)?.message ? /* @__PURE__ */ (0, $.jsx)(oW, {
-										type: "secondary",
-										className: "operations-folder-note",
-										children: ge.get(t.path).message
-									}) : null]
-								})
-							},
-							{
-								title: "Path",
-								dataIndex: "display_path",
-								key: "path",
-								width: "45%",
-								render: (e, t) => /* @__PURE__ */ (0, $.jsx)(oW, {
-									type: "secondary",
-									className: "mono",
-									children: hW(t)
-								})
-							},
-							{
-								title: "",
-								key: "actions",
-								width: 48,
-								align: "right",
-								render: (e, t) => Le(t)
-							}
-						],
+						columns: Re,
 						dataSource: W,
 						expandable: {
 							childrenColumnName: "children",
 							expandedRowKeys: g,
-							expandIconColumnIndex: 1,
 							columnWidth: 40,
 							onExpand: async (e, t) => {
 								_((n) => e ? [...new Set([...n, t.key])] : n.filter((e) => e !== t.key)), e && await we(t);
@@ -47444,7 +47464,7 @@ function LW() {
 					}) : null]
 				})
 			}),
-			/* @__PURE__ */ (0, $.jsx)(PW, {
+			/* @__PURE__ */ (0, $.jsx)(IW, {
 				modalState: k,
 				rankedItems: ce,
 				selectedItem: le,
@@ -47483,7 +47503,7 @@ function LW() {
 					}), "Folder moved into provider path.") && Te();
 				}
 			}),
-			/* @__PURE__ */ (0, $.jsx)(FW, {
+			/* @__PURE__ */ (0, $.jsx)(LW, {
 				open: j,
 				plan: de,
 				deleteLowerQuality: T,
@@ -47495,7 +47515,7 @@ function LW() {
 				onDryRun: Fe,
 				onExecute: Ie
 			}),
-			/* @__PURE__ */ (0, $.jsx)(IW, {
+			/* @__PURE__ */ (0, $.jsx)(RW, {
 				open: N,
 				report: pe,
 				selectedRootCount: oe.length,
@@ -47515,9 +47535,9 @@ function LW() {
 								/* @__PURE__ */ (0, $.jsxs)(wA, {
 									wrap: !0,
 									children: [
-										/* @__PURE__ */ (0, $.jsx)(oW, {
+										/* @__PURE__ */ (0, $.jsx)(cW, {
 											strong: !0,
-											children: mW(t.folder_name || t.relative_path)
+											children: gW(t.folder_name || t.relative_path)
 										}),
 										/* @__PURE__ */ (0, $.jsxs)(dB, { children: [(t.items || []).length, " copies"] }),
 										Number(t.deletion_candidate_count || 0) ? /* @__PURE__ */ (0, $.jsxs)(dB, {
@@ -47526,13 +47546,13 @@ function LW() {
 										}) : null
 									]
 								}),
-								t.relative_path ? /* @__PURE__ */ (0, $.jsx)(oW, {
+								t.relative_path ? /* @__PURE__ */ (0, $.jsx)(cW, {
 									type: "secondary",
-									children: mW(t.relative_path)
+									children: gW(t.relative_path)
 								}) : null,
-								/* @__PURE__ */ (0, $.jsx)(oW, {
+								/* @__PURE__ */ (0, $.jsx)(cW, {
 									type: "secondary",
-									children: _W(t.items || [])
+									children: yW(t.items || [])
 								})
 							]
 						})
@@ -47543,7 +47563,7 @@ function LW() {
 						width: 240,
 						render: (e, t) => /* @__PURE__ */ (0, $.jsx)(wA, {
 							wrap: !0,
-							children: [...new Set((t.items || []).map((e) => mW(e.root_label)).filter(Boolean))].map((e) => /* @__PURE__ */ (0, $.jsx)(dB, { children: e }, e))
+							children: [...new Set((t.items || []).map((e) => gW(e.root_label)).filter(Boolean))].map((e) => /* @__PURE__ */ (0, $.jsx)(dB, { children: e }, e))
 						})
 					},
 					{
@@ -47566,13 +47586,13 @@ function LW() {
 						children: [/* @__PURE__ */ (0, $.jsxs)(wA, {
 							wrap: !0,
 							children: [
-								/* @__PURE__ */ (0, $.jsx)(oW, {
+								/* @__PURE__ */ (0, $.jsx)(cW, {
 									strong: !0,
-									children: mW(String(t.path || "").split("/").pop() || t.groupFolderName)
+									children: gW(String(t.path || "").split("/").pop() || t.groupFolderName)
 								}),
 								/* @__PURE__ */ (0, $.jsx)(dB, {
-									color: yW(t).color,
-									children: yW(t).label
+									color: xW(t).color,
+									children: xW(t).label
 								}),
 								t.is_deletion_candidate ? /* @__PURE__ */ (0, $.jsx)(dB, {
 									color: "warning",
@@ -47582,10 +47602,10 @@ function LW() {
 									children: "Keep"
 								})
 							]
-						}), /* @__PURE__ */ (0, $.jsx)(oW, {
+						}), /* @__PURE__ */ (0, $.jsx)(cW, {
 							type: "secondary",
 							className: "mono",
-							children: mW(t.path)
+							children: gW(t.path)
 						})]
 					})
 				}, {
@@ -47627,7 +47647,7 @@ function LW() {
 }
 //#endregion
 //#region src/components/SettingsView.jsx
-var { Text: RW } = wV, zW = [
+var { Text: BW } = wV, VW = [
 	{
 		label: "Mixed",
 		value: "mixed"
@@ -47644,7 +47664,7 @@ var { Text: RW } = wV, zW = [
 		label: "Review",
 		value: "review"
 	}
-], BW = [
+], HW = [
 	"3.0",
 	"2.1",
 	"2.0",
@@ -47652,7 +47672,7 @@ var { Text: RW } = wV, zW = [
 ].map((e) => ({
 	label: `SMB ${e}`,
 	value: e
-})), VW = {
+})), UW = {
 	roots: [],
 	integrations: {
 		radarr: {
@@ -47677,27 +47697,27 @@ var { Text: RW } = wV, zW = [
 	sync_result: null,
 	activity_log: []
 };
-function HW(e) {
+function WW(e) {
 	return e ? new Date(e).toLocaleString() : "Never";
 }
-function UW(e) {
+function GW(e) {
 	return String(e || "").replace(/\s+P\d+$/, "").trim();
 }
-function WW(e) {
+function KW(e) {
 	let t = String(e || "").trim();
 	return !t || t === "/" ? "/" : `/${t.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 }
-function GW(e) {
-	let t = WW(e);
+function qW(e) {
+	let t = KW(e);
 	return t === "/" ? "/" : `/${t.slice(1).split("/").filter(Boolean).map((e) => encodeURIComponent(e)).join("/")}`;
 }
-function KW(e, t) {
+function JW(e, t) {
 	return String(e || "").trim().replaceAll("/", "_") || t;
 }
-function qW(e, t) {
+function YW(e, t) {
 	let n = String(e.share_name || t?.share_name || "").trim().replace(/^\/+|\/+$/g, ""), r = String(t?.id || e.connection_id || "").trim();
 	if (!n || !r) return null;
-	let i = WW(e.share_path), a = `smb://${encodeURIComponent(n)}${GW(i)}?connection_id=${encodeURIComponent(r)}`, o = `/smb/${KW(r, "connection")}/${KW(n, "share")}`;
+	let i = KW(e.share_path), a = `smb://${encodeURIComponent(n)}${qW(i)}?connection_id=${encodeURIComponent(r)}`, o = `/smb/${JW(r, "connection")}/${JW(n, "share")}`;
 	return {
 		path: i === "/" ? o : `${o}${i}`,
 		storage_uri: a,
@@ -47709,18 +47729,18 @@ function qW(e, t) {
 		connection_label: t?.label || ""
 	};
 }
-function JW(e) {
+function XW(e) {
 	let t = String(e || "").trim();
 	return !t || t === "/" ? "/" : `/${t.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 }
-function YW(e) {
-	let t = JW(e);
+function ZW(e) {
+	let t = XW(e);
 	return t === "/" ? "/" : `/${t.slice(1).split("/").filter(Boolean).map((e) => encodeURIComponent(e)).join("/")}`;
 }
-function XW(e) {
+function QW(e) {
 	let t = String(e.rclone_remote || "").trim().replace(/^\/+|\/+$/g, "");
 	if (!t) return null;
-	let n = JW(e.rclone_path), r = `rclone://${encodeURIComponent(t)}${YW(n)}`, i = String(e.rclone_mount_path || "").trim(), a = i ? JW(i) : `/rclone/${KW(t, "remote")}`;
+	let n = XW(e.rclone_path), r = `rclone://${encodeURIComponent(t)}${ZW(n)}`, i = String(e.rclone_mount_path || "").trim(), a = i ? XW(i) : `/rclone/${JW(t, "remote")}`;
 	return {
 		path: n === "/" ? a : `${a}${n}`,
 		storage_uri: r,
@@ -47732,7 +47752,7 @@ function XW(e) {
 		connection_label: `rclone:${t}`
 	};
 }
-function ZW(e) {
+function $W(e) {
 	if (!e) return {
 		mode: "local",
 		priority: 50,
@@ -47787,11 +47807,11 @@ function ZW(e) {
 		rclone_mount_path: ""
 	};
 }
-function QW(e) {
+function eG(e) {
 	let t = String(e?.storage_uri || "");
 	return t.startsWith("rclone://") ? "Rclone" : t.startsWith("smb://") ? "SMB" : "Local";
 }
-function $W(e) {
+function tG(e) {
 	let t = String(e || "").split("/").filter(Boolean);
 	return t.length < 3 || t[0] !== "smb" ? null : {
 		connectionId: t[1],
@@ -47799,7 +47819,7 @@ function $W(e) {
 		path: t.length > 3 ? `/${t.slice(3).join("/")}` : "/"
 	};
 }
-function eG({ provider: e, testResult: t, onSave: n, onTest: r, saving: i, testing: a }) {
+function nG({ provider: e, testResult: t, onSave: n, onTest: r, saving: i, testing: a }) {
 	let o = e === "radarr" ? "Radarr" : "Sonarr";
 	return /* @__PURE__ */ (0, $.jsx)(RD, {
 		className: "integration-provider-card-react",
@@ -47853,7 +47873,7 @@ function eG({ provider: e, testResult: t, onSave: n, onTest: r, saving: i, testi
 		})
 	});
 }
-function tG({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
+function rG({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
 	return /* @__PURE__ */ (0, $.jsx)($N, {
 		open: e.open,
 		title: e.mode === "smb" ? "Choose SMB Folder" : "Choose Folder",
@@ -47876,7 +47896,7 @@ function tG({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
 					align: "center",
 					gap: 12,
 					wrap: !0,
-					children: [/* @__PURE__ */ (0, $.jsx)(RW, {
+					children: [/* @__PURE__ */ (0, $.jsx)(BW, {
 						type: "secondary",
 						className: "mono",
 						children: e.mode === "smb" ? `${e.shareName ? `${e.shareName}:` : ""}${e.path || "/"}` : e.path || "/"
@@ -47933,8 +47953,8 @@ function tG({ state: e, onCancel: t, onBrowse: n, onUseCurrent: r }) {
 		})
 	});
 }
-function nG() {
-	let { message: e } = Q_.useApp(), [t, n] = (0, C.useState)(!0), [r, i] = (0, C.useState)(VW), [a, o] = (0, C.useState)(!1), [s, c] = (0, C.useState)([]), [l, u] = (0, C.useState)(null), [d, f] = (0, C.useState)(!1), [p, m] = (0, C.useState)(!1), [h, g] = (0, C.useState)(null), [_, v] = (0, C.useState)(!1), [y, b] = (0, C.useState)(null), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(""), [E, D] = (0, C.useState)(""), [O, k] = (0, C.useState)(!1), [A, j] = (0, C.useState)(""), [M, N] = (0, C.useState)(""), [P, F] = (0, C.useState)({
+function iG() {
+	let { message: e } = Q_.useApp(), [t, n] = (0, C.useState)(!0), [r, i] = (0, C.useState)(UW), [a, o] = (0, C.useState)(!1), [s, c] = (0, C.useState)([]), [l, u] = (0, C.useState)(null), [d, f] = (0, C.useState)(!1), [p, m] = (0, C.useState)(!1), [h, g] = (0, C.useState)(null), [_, v] = (0, C.useState)(!1), [y, b] = (0, C.useState)(null), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(""), [E, D] = (0, C.useState)(""), [O, k] = (0, C.useState)(!1), [A, j] = (0, C.useState)(""), [M, N] = (0, C.useState)(""), [P, F] = (0, C.useState)({
 		open: !1,
 		mode: "local",
 		loading: !1,
@@ -47948,7 +47968,7 @@ function nG() {
 		shareName: ""
 	}), [I] = Fj.useForm(), [L] = Fj.useForm(), [R] = Fj.useForm(), [z, B] = (0, C.useState)({}), V = r.lan_connections?.smb || [], H = Fj.useWatch("connection_id", I), U = (0, C.useMemo)(() => V.find((e) => e.id === H) || null, [V, H]), W = async () => {
 		let e = await gH();
-		i(e || VW), R.setFieldsValue(e?.integrations || VW.integrations);
+		i(e || UW), R.setFieldsValue(e?.integrations || UW.integrations);
 	};
 	(0, C.useEffect)(() => {
 		W().catch((t) => e.error(t.message)).finally(() => n(!1));
@@ -47957,7 +47977,7 @@ function nG() {
 		provider: e,
 		testResult: l?.[e] || null
 	})), G = async (e) => {
-		let t = $W(e);
+		let t = tG(e);
 		if (t) return K(t);
 		F((e) => ({
 			...e,
@@ -48050,7 +48070,7 @@ function nG() {
 								type: "primary",
 								icon: /* @__PURE__ */ (0, $.jsx)(xE, {}),
 								onClick: () => {
-									g(null), I.setFieldsValue(ZW(null)), m(!0);
+									g(null), I.setFieldsValue($W(null)), m(!0);
 								},
 								children: "Add Root"
 							}),
@@ -48064,16 +48084,16 @@ function nG() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(wA, {
 											direction: "vertical",
 											size: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(RW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(BW, {
 												strong: !0,
-												children: UW(e)
+												children: GW(e)
 											}), /* @__PURE__ */ (0, $.jsxs)(wA, {
 												size: [4, 4],
 												wrap: !0,
-												children: [/* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }), QW(t) === "SMB" ? /* @__PURE__ */ (0, $.jsx)(dB, {
+												children: [/* @__PURE__ */ (0, $.jsx)(dB, { children: t.kind }), eG(t) === "SMB" ? /* @__PURE__ */ (0, $.jsx)(dB, {
 													color: "processing",
 													children: "SMB"
-												}) : QW(t) === "Rclone" ? /* @__PURE__ */ (0, $.jsx)(dB, {
+												}) : eG(t) === "Rclone" ? /* @__PURE__ */ (0, $.jsx)(dB, {
 													color: "geekblue",
 													children: "Rclone"
 												}) : /* @__PURE__ */ (0, $.jsx)(dB, { children: "Local" })]
@@ -48086,10 +48106,10 @@ function nG() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(HA, {
 											vertical: !0,
 											gap: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(RW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(BW, {
 												className: "mono",
 												children: t.path
-											}), t.storage_uri ? /* @__PURE__ */ (0, $.jsx)(RW, {
+											}), t.storage_uri ? /* @__PURE__ */ (0, $.jsx)(BW, {
 												type: "secondary",
 												className: "mono",
 												children: t.storage_uri
@@ -48100,9 +48120,9 @@ function nG() {
 										title: "Source",
 										key: "source",
 										width: 220,
-										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(RW, {
+										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(BW, {
 											type: "secondary",
-											children: QW(t) === "Rclone" ? t.connection_label || "Rclone remote" : t.connection_label || t.share_name || "Direct filesystem path"
+											children: eG(t) === "Rclone" ? t.connection_label || "Rclone remote" : t.connection_label || t.share_name || "Direct filesystem path"
 										})
 									},
 									{
@@ -48114,7 +48134,7 @@ function nG() {
 											children: [/* @__PURE__ */ (0, $.jsx)(fp, {
 												icon: /* @__PURE__ */ (0, $.jsx)(TB, {}),
 												onClick: () => {
-													g(n), I.setFieldsValue(ZW(n)), m(!0);
+													g(n), I.setFieldsValue($W(n)), m(!0);
 												},
 												children: "Edit"
 											}), /* @__PURE__ */ (0, $.jsx)(oP, {
@@ -48185,7 +48205,7 @@ function nG() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(wA, {
 											direction: "vertical",
 											size: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(RW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(BW, {
 												strong: !0,
 												children: t.label
 											}), /* @__PURE__ */ (0, $.jsxs)(wA, {
@@ -48211,10 +48231,10 @@ function nG() {
 										render: (e, t) => /* @__PURE__ */ (0, $.jsxs)(HA, {
 											vertical: !0,
 											gap: 4,
-											children: [/* @__PURE__ */ (0, $.jsx)(RW, {
+											children: [/* @__PURE__ */ (0, $.jsx)(BW, {
 												className: "mono",
 												children: `//${t.host}${t.share_name ? `/${t.share_name}` : ""}`
-											}), /* @__PURE__ */ (0, $.jsx)(RW, {
+											}), /* @__PURE__ */ (0, $.jsx)(BW, {
 												type: "secondary",
 												className: "mono",
 												children: t.base_path || "/"
@@ -48225,7 +48245,7 @@ function nG() {
 										title: "Account",
 										key: "account",
 										width: 220,
-										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(RW, {
+										render: (e, t) => /* @__PURE__ */ (0, $.jsx)(BW, {
 											type: "secondary",
 											children: t.username || "Anonymous"
 										})
@@ -48305,7 +48325,7 @@ function nG() {
 										showIcon: !0,
 										message: t.status === "error" ? "Connection test failed" : "Connection test passed",
 										description: t.message || t.target || "Connection is ready"
-									}) : /* @__PURE__ */ (0, $.jsx)(RW, {
+									}) : /* @__PURE__ */ (0, $.jsx)(BW, {
 										type: "secondary",
 										children: "Run Test to validate this connection from the current runtime."
 									});
@@ -48355,7 +48375,7 @@ function nG() {
 										description: /* @__PURE__ */ (0, $.jsxs)(wA, {
 											size: [8, 8],
 											wrap: !0,
-											children: [e.address ? /* @__PURE__ */ (0, $.jsx)(RW, {
+											children: [e.address ? /* @__PURE__ */ (0, $.jsx)(BW, {
 												className: "mono",
 												children: e.address
 											}) : null, (e.connect_urls || []).map((e) => /* @__PURE__ */ (0, $.jsx)(dB, { children: e }, e))]
@@ -48381,7 +48401,7 @@ function nG() {
 								children: ee.map(({ provider: t, testResult: n }) => /* @__PURE__ */ (0, $.jsx)(SO, {
 									xs: 24,
 									xl: 12,
-									children: /* @__PURE__ */ (0, $.jsx)(eG, {
+									children: /* @__PURE__ */ (0, $.jsx)(nG, {
 										provider: t,
 										testResult: n,
 										saving: x,
@@ -48466,11 +48486,11 @@ function nG() {
 														})
 													}),
 													/* @__PURE__ */ (0, $.jsx)(OO, {}),
-													/* @__PURE__ */ (0, $.jsx)(RW, {
+													/* @__PURE__ */ (0, $.jsx)(BW, {
 														strong: !0,
 														children: "Sync after apply"
 													}),
-													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(RW, {
+													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(BW, {
 														type: "secondary",
 														children: "Run provider update after an apply result is executed."
 													}) })
@@ -48494,11 +48514,11 @@ function nG() {
 														})
 													}),
 													/* @__PURE__ */ (0, $.jsx)(OO, {}),
-													/* @__PURE__ */ (0, $.jsx)(RW, {
+													/* @__PURE__ */ (0, $.jsx)(BW, {
 														strong: !0,
 														children: "Rescan after update"
 													}),
-													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(RW, {
+													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(BW, {
 														type: "secondary",
 														children: "Trigger Radarr or Sonarr rescan after the path changes."
 													}) })
@@ -48522,11 +48542,11 @@ function nG() {
 														})
 													}),
 													/* @__PURE__ */ (0, $.jsx)(OO, {}),
-													/* @__PURE__ */ (0, $.jsx)(RW, {
+													/* @__PURE__ */ (0, $.jsx)(BW, {
 														strong: !0,
 														children: "Create missing provider roots"
 													}),
-													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(RW, {
+													/* @__PURE__ */ (0, $.jsx)("div", { children: /* @__PURE__ */ (0, $.jsx)(BW, {
 														type: "secondary",
 														children: "Ensure configured root folders exist before provider updates."
 													}) })
@@ -48539,7 +48559,7 @@ function nG() {
 									type: r.sync_result.status === "error" ? "error" : "info",
 									showIcon: !0,
 									message: `Last sync: ${r.sync_result.status || "unknown"}`,
-									description: HW(r.sync_result.generated_at)
+									description: WW(r.sync_result.generated_at)
 								}) : null]
 							})]
 						})
@@ -48568,7 +48588,7 @@ function nG() {
 					onFinish: async (t) => {
 						try {
 							let n = String(t.original_path || h?.path || "").trim(), r = null;
-							if (r = t.mode === "smb" ? qW(t, U) : t.mode === "rclone" ? XW(t) : {
+							if (r = t.mode === "smb" ? YW(t, U) : t.mode === "rclone" ? QW(t) : {
 								path: String(t.path || "").trim(),
 								label: String(t.label || "").trim(),
 								priority: Number(t.priority || 50),
@@ -48711,7 +48731,7 @@ function nG() {
 								children: /* @__PURE__ */ (0, $.jsx)(Fj.Item, {
 									name: "kind",
 									label: "Kind",
-									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: zW })
+									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: VW })
 								})
 							})]
 						})
@@ -48786,7 +48806,7 @@ function nG() {
 								children: /* @__PURE__ */ (0, $.jsx)(Fj.Item, {
 									name: "version",
 									label: "SMB Version",
-									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: BW })
+									children: /* @__PURE__ */ (0, $.jsx)(Ox, { options: HW })
 								})
 							})]
 						}),
@@ -48845,7 +48865,7 @@ function nG() {
 					]
 				})
 			}),
-			/* @__PURE__ */ (0, $.jsx)(tG, {
+			/* @__PURE__ */ (0, $.jsx)(rG, {
 				state: P,
 				onCancel: () => F({
 					open: !1,
@@ -48891,7 +48911,7 @@ function nG() {
 }
 //#endregion
 //#region src/App.jsx
-var rG = "media-library-manager.active-view", { Header: iG, Sider: aG, Content: oG } = kM, { Title: sG, Text: cG } = wV, lG = {
+var aG = "media-library-manager.active-view", { Header: oG, Sider: sG, Content: cG } = kM, { Title: lG, Text: uG } = wV, dG = {
 	overview: {
 		title: "Overview",
 		description: "Monitor library health, provider status, current processing, and recent activity from a single dashboard."
@@ -48913,17 +48933,17 @@ var rG = "media-library-manager.active-view", { Header: iG, Sider: aG, Content: 
 		description: "Manage connected roots, SMB profiles, provider integrations, and sync behavior from the same control surface."
 	}
 };
-function uG() {
+function fG() {
 	let [e, t] = (0, C.useState)(() => {
 		if (typeof window > "u") return "overview";
-		let e = window.localStorage.getItem(rG);
-		return e && lG[e] ? e : "overview";
-	}), n = (0, C.useMemo)(() => lG[e] || lG.operations, [e]), r = (e) => {
-		t(e), typeof window < "u" && window.localStorage.setItem(rG, e);
+		let e = window.localStorage.getItem(aG);
+		return e && dG[e] ? e : "overview";
+	}), n = (0, C.useMemo)(() => dG[e] || dG.operations, [e]), r = (e) => {
+		t(e), typeof window < "u" && window.localStorage.setItem(aG, e);
 	};
 	return /* @__PURE__ */ (0, $.jsxs)(kM, {
 		className: "app-shell-react",
-		children: [/* @__PURE__ */ (0, $.jsxs)(aG, {
+		children: [/* @__PURE__ */ (0, $.jsxs)(sG, {
 			width: 248,
 			breakpoint: "lg",
 			collapsedWidth: 0,
@@ -48974,33 +48994,33 @@ function uG() {
 				],
 				onClick: ({ key: e }) => r(e)
 			})]
-		}), /* @__PURE__ */ (0, $.jsxs)(kM, { children: [/* @__PURE__ */ (0, $.jsx)(iG, {
+		}), /* @__PURE__ */ (0, $.jsxs)(kM, { children: [/* @__PURE__ */ (0, $.jsx)(oG, {
 			className: "topbar-react",
 			children: /* @__PURE__ */ (0, $.jsxs)("div", { children: [
 				/* @__PURE__ */ (0, $.jsx)("div", {
 					className: "eyebrow-react",
 					children: "Control Surface"
 				}),
-				/* @__PURE__ */ (0, $.jsx)(sG, {
+				/* @__PURE__ */ (0, $.jsx)(lG, {
 					level: 2,
 					className: "topbar-title-react",
 					children: n.title
 				}),
-				/* @__PURE__ */ (0, $.jsx)(cG, {
+				/* @__PURE__ */ (0, $.jsx)(uG, {
 					type: "secondary",
 					className: "topbar-subtitle-react",
 					children: n.description
 				})
 			] })
-		}), /* @__PURE__ */ (0, $.jsx)(oG, {
+		}), /* @__PURE__ */ (0, $.jsx)(cG, {
 			className: "content-react",
-			children: e === "overview" ? /* @__PURE__ */ (0, $.jsx)(aW, {}) : e === "operations" ? /* @__PURE__ */ (0, $.jsx)(LW, {}) : e === "cleanup" ? /* @__PURE__ */ (0, $.jsx)(DU, {}) : e === "repair" ? /* @__PURE__ */ (0, $.jsx)(zU, {}) : /* @__PURE__ */ (0, $.jsx)(nG, {})
+			children: e === "overview" ? /* @__PURE__ */ (0, $.jsx)(sW, {}) : e === "operations" ? /* @__PURE__ */ (0, $.jsx)(zW, {}) : e === "cleanup" ? /* @__PURE__ */ (0, $.jsx)(kU, {}) : e === "repair" ? /* @__PURE__ */ (0, $.jsx)(VU, {}) : /* @__PURE__ */ (0, $.jsx)(iG, {})
 		})] })]
 	});
 }
 //#endregion
 //#region src/main.jsx
-var dG = class extends C.Component {
+var pG = class extends C.Component {
 	constructor(e) {
 		super(e), this.state = { error: null };
 	}
@@ -49027,8 +49047,8 @@ var dG = class extends C.Component {
 		}) : this.props.children;
 	}
 };
-TV.createRoot(document.getElementById("root")).render(/* @__PURE__ */ (0, $.jsx)(C.StrictMode, { children: /* @__PURE__ */ (0, $.jsx)(dG, { children: /* @__PURE__ */ (0, $.jsx)($s, {
+TV.createRoot(document.getElementById("root")).render(/* @__PURE__ */ (0, $.jsx)(C.StrictMode, { children: /* @__PURE__ */ (0, $.jsx)(pG, { children: /* @__PURE__ */ (0, $.jsx)($s, {
 	theme: EV,
-	children: /* @__PURE__ */ (0, $.jsx)(Q_, { children: /* @__PURE__ */ (0, $.jsx)(uG, {}) })
+	children: /* @__PURE__ */ (0, $.jsx)(Q_, { children: /* @__PURE__ */ (0, $.jsx)(fG, {}) })
 }) }) }));
 //#endregion

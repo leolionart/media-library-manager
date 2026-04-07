@@ -5,7 +5,7 @@ Thư mục `docs/` mô tả trạng thái hiện tại của dự án sau khi:
 - frontend được viết lại bằng React + Ant Design
 - backend chuyển mạnh sang SMB-native
 - folder inventory có cả list và tree
-- cleanup có thể resolve provider path qua connected roots trước khi báo thiếu media
+- cleanup hiện đọc duplicate-file candidates từ `last-folder-index.json`; nếu cache này cũ hoặc rỗng thì phải refresh folder metadata trước khi scan cleanup
 - path repair scan hiện chỉ lấy item mà Radarr/Sonarr đang báo `missing`; việc tìm folder đúng là bước search thủ công riêng
 - current job có log chi tiết, cancel request, và persist qua refresh
 - dashboard có 5 màn chính và dùng chung log component cho các flow dài

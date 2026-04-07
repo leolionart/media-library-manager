@@ -40,6 +40,7 @@ Hiện có:
 - folder tree từ `GET /api/operations/folders/tree`
 - lazy child loading từ `GET /api/operations/folders/children`
 - manual refresh của `Library Finder` hiện rebuild thêm `folder index` artifact cho connected roots để tái dùng ở các workflow search nặng
+- `folder index` hiện cache cả metadata video file trực tiếp trong từng folder đã index để `Library Cleanup` có thể dùng lại mà không phải live-scan storage mỗi lần
 - duplicate folder cleanup scan từ selection hiện tại trong `Library Finder` cho local, SMB, và rclone roots
 - xóa duplicate folder candidates ngay trong `Library Finder` với shared process logs và retry/resume
 - duplicate workflow `scan -> plan -> preview/apply`
@@ -55,10 +56,14 @@ Hiện có:
 Hiện có:
 
 - một mode `Provider Duplicate Files` để scan folder từ các path mà Radarr/Sonarr đang quản lý
-- nếu provider path không tồn tại trong runtime local, backend thử resolve qua connected SMB roots
+- cleanup scan đọc từ `folder index` cache thay vì live-scan trực tiếp filesystem hoặc rclone từng lần chạy
+- provider path được map qua connected roots rồi match vào `folder index`; điều này áp dụng cho cả local, SMB, và rclone roots nếu đã được index
+- nếu `folder index` cũ, rỗng, hoặc chưa có `video_files`, backend sẽ tự refresh cache rồi mới tiếp tục cleanup scan
 - build group có nhiều candidate video file trong cùng folder
 - chọn file cần xóa
-- refresh report sau khi delete
+- xóa file đơn hoặc hàng loạt qua background job riêng, không giữ modal chờ tới lúc rclone/SMB xong
+- cleanup report và log panel tự refresh định kỳ từ `GET /api/state` để dữ liệu không bị stale sau khi delete hoặc scan
+- log delete hiện giữ nguyên trong `Library Cleanup Logs` thay vì bị che ngay bởi một cleanup scan mới
 - saved cleanup reports vẫn còn sau khi refresh trình duyệt
 - shared cleanup logs
 

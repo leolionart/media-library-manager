@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, App as AntApp, Button, Card, Descriptions, Empty, Flex, Input, Space, Spin, Table, Tag, Typography } from "antd";
+import { Alert, App as AntApp, Button, Card, Descriptions, Empty, Flex, Input, Space, Spin, Table, Tag, Tooltip, Typography } from "antd";
 import { DeleteOutlined, FileSearchOutlined } from "@ant-design/icons";
-import { deleteMovieFile, request, runCleanupScan } from "../api";
+import { deleteCleanupFiles, request, runCleanupScan } from "../api";
 import { MediaLibraryLogPanel } from "./MediaLibraryLogPanel";
 
 const { Text } = Typography;
@@ -54,6 +54,24 @@ function normalizeCleanupErrorMessage(value) {
   return message;
 }
 
+function qualityBreakdown(item) {
+  const parts = [];
+  if (item?.resolution) parts.push(`${item.resolution}p`);
+  if (item?.source) parts.push(String(item.source).toUpperCase());
+  if (item?.codec) parts.push(String(item.codec).toUpperCase());
+  if (item?.dynamic_range) parts.push(String(item.dynamic_range).toUpperCase());
+  const summary = parts.length ? parts.join(" + ") : "No parsed quality markers";
+  return `Quality score used for ranking keep/delete candidates. ${summary}. Total score: Q${item?.quality_rank || 0}.`;
+}
+
+function qualityTagDescription(label, description) {
+  return (
+    <Tooltip title={description}>
+      <Tag>{label}</Tag>
+    </Tooltip>
+  );
+}
+
 function CleanupErrorAlert({ errors }) {
   return (
     <Alert
@@ -89,25 +107,36 @@ export function FileCleanupView() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    request("/api/state")
-      .then((data) => {
-        if (!cancelled) {
-          setPayload(data || {});
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          message.error(error.message);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
+    const load = ({ silent = false } = {}) => {
+      if (!silent) {
+        setLoading(true);
+      }
+      return request("/api/state")
+        .then((data) => {
+          if (!cancelled) {
+            setPayload(data || {});
+          }
+        })
+        .catch((error) => {
+          if (!cancelled && !silent) {
+            message.error(error.message);
+          }
+        })
+        .finally(() => {
+          if (!cancelled && !silent) {
+            setLoading(false);
+          }
+        });
+    };
+
+    void load();
+    const timerId = window.setInterval(() => {
+      void load({ silent: true });
+    }, 3000);
+
     return () => {
       cancelled = true;
+      window.clearInterval(timerId);
     };
   }, [message, refreshToken]);
 
@@ -174,16 +203,34 @@ export function FileCleanupView() {
 
   async function handleDeleteRows(rows) {
     if (!rows.length) return;
-    for (const item of rows) {
-      await deleteMovieFile({
+    await deleteCleanupFiles(
+      rows.map((item) => ({
         path: item.path,
-        storageUri: item.storage_uri,
-        rootPath: item.root_path,
-        rootStorageUri: item.root_storage_uri,
-      });
-    }
+        storage_uri: item.storage_uri,
+        root_path: item.root_path,
+        root_storage_uri: item.root_storage_uri,
+        prune_empty_dirs: true,
+      }))
+    );
     setSelectedFileKeys([]);
-    await refreshCleanup();
+    setRefreshToken((value) => value + 1);
+  }
+
+  function runDeleteInBackground(rows, { successMessage, onFinally } = {}) {
+    void handleDeleteRows(rows)
+      .then(() => {
+        if (successMessage) {
+          message.success(successMessage);
+        }
+      })
+      .catch((error) => {
+        message.error(error.message);
+      })
+      .finally(() => {
+        if (typeof onFinally === "function") {
+          onFinally();
+        }
+      });
   }
 
   function toggleGroupSelection(groupId) {
@@ -280,7 +327,11 @@ export function FileCleanupView() {
           <Flex vertical gap={4}>
             <Space wrap>
               <Text strong>{stripPriorityLabel(String(item.path || "").split("/").pop())}</Text>
-              {isKeepCandidate ? <Tag color="gold">Suggested keep</Tag> : null}
+              {isKeepCandidate ? (
+                <Tooltip title="Best-ranked file in this duplicate group. Delete is disabled for this candidate by default.">
+                  <Tag color="gold">Suggested keep</Tag>
+                </Tooltip>
+              ) : null}
             </Space>
             <Text type="secondary" className="cleanup-path-text">
               {item.path}
@@ -295,10 +346,12 @@ export function FileCleanupView() {
       width: 220,
       render: (_value, item) => (
         <Space wrap>
-          {item.resolution ? <Tag>{item.resolution}p</Tag> : null}
-          {item.source ? <Tag>{String(item.source).toUpperCase()}</Tag> : null}
-          {item.codec ? <Tag>{String(item.codec).toUpperCase()}</Tag> : null}
-          <Tag>Q{item.quality_rank || 0}</Tag>
+          {item.resolution ? qualityTagDescription(`${item.resolution}p`, `Parsed video resolution from the filename.`) : null}
+          {item.source ? qualityTagDescription(String(item.source).toUpperCase(), `Parsed source/release type from the filename.`) : null}
+          {item.codec ? qualityTagDescription(String(item.codec).toUpperCase(), `Parsed video codec from the filename.`) : null}
+          <Tooltip title={qualityBreakdown(item)}>
+            <Tag>Q{item.quality_rank || 0}</Tag>
+          </Tooltip>
         </Space>
       ),
     },
@@ -322,25 +375,21 @@ export function FileCleanupView() {
             icon={<DeleteOutlined />}
             disabled={disabled}
             loading={deletingKey === itemKey}
-            onClick={() =>
-              modal.confirm({
-                title: "Delete this media file?",
-                content: item.path,
-                okText: "Delete",
-                okButtonProps: { danger: true },
-                onOk: async () => {
-                  setDeletingKey(itemKey);
-                  try {
-                    await handleDeleteRows([item]);
-                    message.success("Media file deleted.");
-                  } catch (error) {
-                    message.error(error.message);
-                  } finally {
-                    setDeletingKey("");
-                  }
-                },
-              })
-            }
+                onClick={() =>
+                  modal.confirm({
+                    title: "Delete this media file?",
+                    content: item.path,
+                    okText: "Delete",
+                    okButtonProps: { danger: true },
+                    onOk: () => {
+                      setDeletingKey(itemKey);
+                      runDeleteInBackground([item], {
+                        successMessage: "Media file delete started in background.",
+                        onFinally: () => setDeletingKey(""),
+                      });
+                    },
+                  })
+                }
           >
             Delete
           </Button>
@@ -417,13 +466,14 @@ export function FileCleanupView() {
                       title: `Delete ${selectedFileKeys.length} selected media file${selectedFileKeys.length === 1 ? "" : "s"}?`,
                       okText: "Delete",
                       okButtonProps: { danger: true },
-                      onOk: async () => {
-                        try {
-                          await handleDeleteSelectedFiles();
-                          message.success("Selected media files deleted.");
-                        } catch (error) {
-                          message.error(error.message);
-                        }
+                      onOk: () => {
+                        void handleDeleteSelectedFiles()
+                          .then(() => {
+                            message.success("Selected media file delete started in background.");
+                          })
+                          .catch((error) => {
+                            message.error(error.message);
+                          });
                       },
                     })
                   }
@@ -479,13 +529,14 @@ export function FileCleanupView() {
                         title: `Delete ${selectedFileKeys.length} selected media file${selectedFileKeys.length === 1 ? "" : "s"}?`,
                         okText: "Delete",
                         okButtonProps: { danger: true },
-                        onOk: async () => {
-                          try {
-                            await handleDeleteSelectedFiles();
-                            message.success("Selected media files deleted.");
-                          } catch (error) {
-                            message.error(error.message);
-                          }
+                        onOk: () => {
+                          void handleDeleteSelectedFiles()
+                            .then(() => {
+                              message.success("Selected media file delete started in background.");
+                            })
+                            .catch((error) => {
+                              message.error(error.message);
+                            });
                         },
                       })
                     }

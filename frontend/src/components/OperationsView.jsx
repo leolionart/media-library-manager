@@ -1303,6 +1303,8 @@ export function OperationsView() {
   );
 
   const tableColumns = [
+    Table.SELECTION_COLUMN,
+    Table.EXPAND_COLUMN,
     {
       title: "Folder",
       dataIndex: "label",
@@ -1563,7 +1565,6 @@ export function OperationsView() {
             expandable={{
               childrenColumnName: "children",
               expandedRowKeys,
-              expandIconColumnIndex: 1,
               columnWidth: 40,
               onExpand: async (expanded, record) => {
                 setExpandedRowKeys((current) =>

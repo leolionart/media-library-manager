@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .models import RootConfig
 from .rclone_cli import list_entries_recursive
+from .scanner import VIDEO_EXTENSIONS
 from .storage import StoragePath, default_storage_manager
 from .sync_integrations import normalize_title
 
@@ -81,11 +82,12 @@ def build_folder_metadata_index(
         )
 
     return {
-        "version": 1,
+        "version": 2,
         "generated_at": datetime.now(UTC).isoformat(),
         "summary": {
             "roots": len(roots),
             "folders": len(items),
+            "video_files": sum(int(item.get("video_file_count", 0)) for item in items),
             "errors": len(errors),
             "max_depth": bounded_depth,
         },
@@ -142,38 +144,106 @@ def _index_rclone_root(root: RootConfig, root_storage_path: StoragePath, *, max_
     rows = list_entries_recursive(
         root_storage_path.rclone_remote,
         root_storage_path.normalized_path(),
-        dirs_only=True,
         fast_list=True,
     )
-    items: list[dict[str, Any]] = []
+    items_by_uri: dict[str, dict[str, Any]] = {}
     for row in rows:
-        if not bool(row.get("IsDir", True)):
-            continue
         raw_relative_path = str(row.get("Path") or row.get("Name") or "").strip().strip("/")
         if not raw_relative_path:
             continue
         relative_parts = [segment for segment in raw_relative_path.split("/") if segment and segment != "."]
-        if not relative_parts or len(relative_parts) > max_depth:
+        if not relative_parts:
             continue
-        entry_path = root_storage_path.join(*relative_parts)
-        items.append(_folder_index_item(root=root, root_storage_path=root_storage_path, entry_path=entry_path, depth=len(relative_parts)))
+        is_dir = bool(row.get("IsDir", False))
+        if is_dir:
+            if len(relative_parts) > max_depth:
+                continue
+            entry_path = root_storage_path.join(*relative_parts)
+            items_by_uri[entry_path.to_uri()] = _folder_index_item(
+                root=root,
+                root_storage_path=root_storage_path,
+                entry_path=entry_path,
+                depth=len(relative_parts),
+            )
+            continue
+        if len(relative_parts) < 2:
+            continue
+        parent_parts = relative_parts[:-1]
+        if len(parent_parts) > max_depth:
+            continue
+        parent_path = root_storage_path.join(*parent_parts)
+        parent_uri = parent_path.to_uri()
+        item = items_by_uri.setdefault(
+            parent_uri,
+            _folder_index_item(
+                root=root,
+                root_storage_path=root_storage_path,
+                entry_path=parent_path,
+                depth=len(parent_parts),
+            ),
+        )
+        file_row = _video_file_index_item(
+            root=root,
+            root_storage_path=root_storage_path,
+            entry_path=root_storage_path.join(*relative_parts),
+            size=_coerce_size(row.get("Size")),
+        )
+        if file_row is None:
+            continue
+        item["video_files"] = _dedupe_video_file_rows([*item["video_files"], file_row])
+        item["video_file_count"] = len(item["video_files"])
+    items = list(items_by_uri.values())
     items.sort(key=lambda item: (str(item.get("path") or "").lower(), str(item.get("label") or "").lower()))
     return items
 
 
 def _index_storage_root(manager: Any, root: RootConfig, root_storage_path: StoragePath, *, max_depth: int) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+    items_by_uri: dict[str, dict[str, Any]] = {}
     pending: list[tuple[StoragePath, int]] = [(root_storage_path, 0)]
     while pending:
         current_path, depth = pending.pop()
+        entries = manager.list_dir(current_path)
+        current_depth = depth
+        if current_depth > 0:
+            current_uri = current_path.to_uri()
+            current_item = items_by_uri.setdefault(
+                current_uri,
+                _folder_index_item(
+                    root=root,
+                    root_storage_path=root_storage_path,
+                    entry_path=current_path,
+                    depth=current_depth,
+                ),
+            )
+            current_item["video_files"] = [
+                file_row
+                for entry in entries
+                for file_row in [
+                    _video_file_index_item(
+                        root=root,
+                        root_storage_path=root_storage_path,
+                        entry_path=entry.path,
+                        size=entry.size,
+                    )
+                ]
+                if not entry.is_dir and file_row is not None
+            ]
+            current_item["video_files"] = _dedupe_video_file_rows(current_item["video_files"])
+            current_item["video_file_count"] = len(current_item["video_files"])
         if depth >= max_depth:
             continue
-        for entry in manager.list_dir(current_path):
+        for entry in entries:
             if not entry.is_dir:
                 continue
             next_depth = depth + 1
-            items.append(_folder_index_item(root=root, root_storage_path=root_storage_path, entry_path=entry.path, depth=next_depth))
+            items_by_uri[entry.path.to_uri()] = _folder_index_item(
+                root=root,
+                root_storage_path=root_storage_path,
+                entry_path=entry.path,
+                depth=next_depth,
+            )
             pending.append((entry.path, next_depth))
+    items = list(items_by_uri.values())
     items.sort(key=lambda item: (str(item.get("path") or "").lower(), str(item.get("label") or "").lower()))
     return items
 
@@ -189,7 +259,50 @@ def _folder_index_item(*, root: RootConfig, root_storage_path: StoragePath, entr
         "root_storage_uri": _root_storage_identity(root),
         "kind": root.kind,
         "depth": depth,
+        "video_file_count": 0,
+        "video_files": [],
     }
+
+
+def _video_file_index_item(
+    *,
+    root: RootConfig,
+    root_storage_path: StoragePath,
+    entry_path: StoragePath,
+    size: int | None,
+) -> dict[str, Any] | None:
+    suffix = entry_path.suffix().lower()
+    if suffix not in VIDEO_EXTENSIONS:
+        return None
+    path_text = storage_entry_display_path(root=root, root_storage_path=root_storage_path, entry_path=entry_path)
+    return {
+        "name": entry_path.name(),
+        "path": path_text,
+        "storage_uri": entry_path.to_uri() if entry_path.backend != "local" else "",
+        "relative_path": entry_path.relative_to(root_storage_path),
+        "size": int(size or 0),
+    }
+
+
+def _coerce_size(value: Any) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value or "").strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _dedupe_video_file_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("storage_uri") or row.get("path") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
 
 
 def storage_entry_display_path(*, root: RootConfig, root_storage_path: StoragePath, entry_path: StoragePath) -> str:

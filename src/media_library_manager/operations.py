@@ -563,10 +563,16 @@ def delete_media_file(
 
     target_value = router.stringify(target_ref)
     try:
-        if not router.exists(target_ref):
-            return {"status": "error", "message": f"path does not exist: {target_value}"}
-        if not router.is_file(target_ref):
-            return {"status": "error", "message": f"path is not a file: {target_value}"}
+        if getattr(target_ref, "backend", "") == "local":
+            if not router.exists(target_ref):
+                return {"status": "error", "message": f"path does not exist: {target_value}"}
+            if not router.is_file(target_ref):
+                return {"status": "error", "message": f"path is not a file: {target_value}"}
+        else:
+            if not router.is_file(target_ref):
+                if router.exists(target_ref):
+                    return {"status": "error", "message": f"path is not a file: {target_value}"}
+                return {"status": "error", "message": f"path does not exist: {target_value}"}
         bundle = _collect_media_file_bundle(router, target_ref)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
@@ -598,10 +604,16 @@ def delete_file(path: str | Path, *, execute: bool = False, storage_router: Oper
 
     target_value = router.stringify(target_ref)
     try:
-        if not router.exists(target_ref):
-            return {"status": "error", "message": f"path does not exist: {target_value}"}
-        if not router.is_file(target_ref):
-            return {"status": "error", "message": f"path is not a file: {target_value}"}
+        if getattr(target_ref, "backend", "") == "local":
+            if not router.exists(target_ref):
+                return {"status": "error", "message": f"path does not exist: {target_value}"}
+            if not router.is_file(target_ref):
+                return {"status": "error", "message": f"path is not a file: {target_value}"}
+        else:
+            if not router.is_file(target_ref):
+                if router.exists(target_ref):
+                    return {"status": "error", "message": f"path is not a file: {target_value}"}
+                return {"status": "error", "message": f"path does not exist: {target_value}"}
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 

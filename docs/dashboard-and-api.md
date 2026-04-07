@@ -187,11 +187,35 @@ Cleanup UI hiện tập trung vào:
 
 ### `POST /api/cleanup/scan`
 
-Scan trực tiếp provider-managed folders để build cleanup report.
+Build cleanup report từ `last-folder-index.json` đã cache, dùng metadata video file của các provider-managed folders thay vì live-scan storage ngay lúc request.
 
 Payload:
 
 - `providers`
+
+Lưu ý:
+
+- nếu `folder index` chưa được refresh hoặc artifact cũ chưa có `video_files`, endpoint trả lỗi yêu cầu refresh folder metadata trước
+- nếu `folder index` chưa usable, endpoint sẽ tự refresh cache trước rồi mới tiếp tục cleanup scan
+
+### `POST /api/cleanup/files/delete`
+
+Khởi động background job để xóa một hoặc nhiều media file đã chọn trong `Library Cleanup`.
+
+Payload:
+
+- `items`
+- mỗi item có thể mang `path`
+- `storage_uri`
+- `root_path`
+- `root_storage_uri`
+- `prune_empty_dirs`
+
+Lưu ý:
+
+- endpoint trả `202 Accepted` ngay khi job được tạo, không chờ tới lúc rclone/SMB xóa xong
+- tiến độ, timeout, lỗi delete, và kết quả từng file đi vào `current_job.logs` với `kind = cleanup-scan`
+- frontend không auto-run cleanup scan ngay sau khi bấm delete; thay vào đó nó poll `GET /api/state` để report và logs tự cập nhật khi job chạy nền
 
 ### `POST /api/cleanup/empty-folders/scan`
 

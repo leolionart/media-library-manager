@@ -147,5 +147,7 @@ Lưu ý cho `path_repair_report`:
 Lưu ý cho `last-folder-index.json`:
 
 - đây là metadata cache của thư mục con dưới các connected roots
+- từ version mới, mỗi folder row còn có `video_file_count` và `video_files` cho các video nằm trực tiếp trong folder đó
 - artifact này được rebuild từ `Library Finder` refresh
 - `Path Repair Search` có thể dùng artifact này để trả candidate nhanh hơn trước khi fallback sang live traversal
+- `Library Cleanup` dùng artifact này làm nguồn dữ liệu chính để build duplicate-file groups cho provider folders; nếu artifact cũ hoặc thiếu `video_files`, cleanup sẽ yêu cầu refresh index trước
