@@ -284,10 +284,52 @@ def delete_provider_item(
     try:
         if provider == "radarr":
             client = RadarrClient(config)
+            # For Radarr, manually handle exclusion if requested
+            movie_details = None
+            if add_import_exclusion:
+                try:
+                    movie_details = client.get_movie(item_id)
+                except Exception:
+                    pass
+
             result = client.delete_movie(item_id, delete_files=False, add_import_exclusion=add_import_exclusion)
+
+            if add_import_exclusion and movie_details and movie_details.get("tmdbId"):
+                try:
+                    client.post(
+                        "/api/v3/importlistexclusion",
+                        {
+                            "tmdbId": movie_details["tmdbId"],
+                            "title": movie_details.get("title") or "Unknown Movie",
+                            "year": movie_details.get("year") or 0,
+                        },
+                    )
+                except Exception:
+                    pass
         elif provider == "sonarr":
             client = SonarrClient(config)
+            # For Sonarr, manually handle exclusion if requested because the DELETE parameter is unreliable
+            series_details = None
+            if add_import_exclusion:
+                try:
+                    series_details = client.get_series(item_id)
+                except Exception:
+                    pass
+
             result = client.delete_series(item_id, delete_files=False, add_import_exclusion=add_import_exclusion)
+
+            if add_import_exclusion and series_details and series_details.get("tvdbId"):
+                try:
+                    client.post(
+                        "/api/v3/importlistexclusion",
+                        {
+                            "tvdbId": series_details["tvdbId"],
+                            "title": series_details.get("title") or "Unknown Series",
+                        },
+                    )
+                except Exception:
+                    # Ignore errors adding to exclusion list after successful delete
+                    pass
         else:
             return {"status": "error", "message": f"unsupported provider: {provider}"}
     except ProviderError as exc:
