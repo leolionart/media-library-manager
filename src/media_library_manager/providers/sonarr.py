@@ -50,7 +50,7 @@ class SonarrClient(JsonApiClient):
         return self.delete(
             f"/api/v3/series/{series_id}",
             query={
-                "deleteFiles": str(delete_files).lower(),
-                "addImportExclusion": str(add_import_exclusion).lower(),
+                "deleteFiles": "true" if delete_files else "false",
+                "addImportExclusion": "true" if add_import_exclusion else "false",
             },
         )
