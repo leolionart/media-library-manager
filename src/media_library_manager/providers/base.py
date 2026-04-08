@@ -81,4 +81,9 @@ class JsonApiClient:
         url = f"{self.config.base_url.rstrip('/')}/{path.lstrip('/')}"
         if not query:
             return url
-        return f"{url}?{parse.urlencode(query)}"
+        # Convert Python booleans to 'true'/'false' for API compatibility
+        processed_query = {
+            k: ("true" if v is True else "false" if v is False else v)
+            for k, v in query.items()
+        }
+        return f"{url}?{parse.urlencode(processed_query)}"

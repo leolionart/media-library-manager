@@ -47,7 +47,7 @@ class RadarrClient(JsonApiClient):
         return self.delete(
             f"/api/v3/movie/{movie_id}",
             query={
-                "deleteFiles": "true" if delete_files else "false",
-                "addImportExclusion": "true" if add_import_exclusion else "false",
+                "deleteFiles": delete_files,
+                "addImportExclusion": add_import_exclusion,
             },
         )
