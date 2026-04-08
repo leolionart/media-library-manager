@@ -2596,6 +2596,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         roots: list[RootConfig],
         start_root_index: int,
     ) -> dict[str, Any]:
+        router = self._operation_storage_router()
         try:
             return scan_provider_cleanup(
                 integrations,
@@ -2605,6 +2606,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 progress_callback=self._scan_progress_callback,
                 should_cancel=self.store.is_current_job_cancel_requested,
                 start_root_index=start_root_index,
+                storage_router=router,
             )
         except ValueError as exc:
             if not _is_cleanup_folder_index_error(exc):

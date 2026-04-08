@@ -62,6 +62,9 @@ class OperationStorageRouter:
         self.rclone_timeout = rclone_timeout
         self._rclone_entry_cache: dict[str, dict[str, Any] | None] = {}
 
+    def clear_cache(self) -> None:
+        self._rclone_entry_cache.clear()
+
     def parse_storage_path(self, value: str | Path | StoragePath) -> StoragePath:
         if isinstance(value, StoragePath):
             return value
@@ -444,17 +447,19 @@ class OperationStorageRouter:
             return entry
 
         # Probe the path directly to avoid expensive parent listing or missing entries
-        payload = self._run_rclone_command(
+        result = self._run_rclone_command(
             [
                 "lsjson",
                 build_rclone_target(path.rclone_remote, path.rclone_path),
             ],
             expect_json=True,
-        ).get("payload")
-
+        )
+        
         entry = None
-        if isinstance(payload, list) and len(payload) > 0:
-            entry = payload[0]
+        if result.get("status") == "success":
+            payload = result.get("payload")
+            if isinstance(payload, list) and len(payload) > 0:
+                entry = payload[0]
         
         self._rclone_entry_cache[cache_key] = entry
         return entry

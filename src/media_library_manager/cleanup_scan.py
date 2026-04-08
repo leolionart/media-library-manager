@@ -17,6 +17,9 @@ CleanupProgressCallback = Callable[[dict[str, object]], None]
 MIN_CLEANUP_FOLDER_INDEX_VERSION = 2
 
 
+from .operation_storage import OperationStorageRouter
+
+
 def scan_provider_cleanup(
     integrations: dict[str, Any],
     *,
@@ -26,7 +29,10 @@ def scan_provider_cleanup(
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
     start_root_index: int = 1,
+    storage_router: OperationStorageRouter | None = None,
 ) -> dict[str, Any]:
+    if storage_router:
+        storage_router.clear_cache()
     requested = [provider for provider in (providers or ["radarr", "sonarr"]) if provider in {"radarr", "sonarr"}]
     if not requested:
         return _build_cleanup_report(providers=[], provider_items=[], files=[], skipped_items=[], errors=[])
