@@ -51,6 +51,6 @@ class SonarrClient(JsonApiClient):
             f"/api/v3/series/{series_id}",
             query={
                 "deleteFiles": delete_files,
-                "addImportExclusion": add_import_exclusion,
+                "addImportListExclusion": add_import_exclusion,
             },
         )
