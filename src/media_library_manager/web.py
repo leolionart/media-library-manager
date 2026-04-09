@@ -922,7 +922,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             provider = str(payload.get("provider") or "").strip().lower()
             item_id = int(payload.get("item_id") or 0)
-            add_import_exclusion = bool(payload.get("add_import_exclusion"))
+            # Accept both snake_case (standard API) and camelCase (from frontend JS)
+            add_import_exclusion = bool(payload.get("add_import_exclusion") or payload.get("addImportExclusion"))
             if provider not in {"radarr", "sonarr"} or item_id <= 0:
                 self._send_json({"error": "provider and item_id are required"}, status=HTTPStatus.BAD_REQUEST)
                 return
