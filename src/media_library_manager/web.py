@@ -26,10 +26,13 @@ from .lan_connections import (
     normalize_stored_smb_connection,
     parent_share_path,
     remove_smb_connection,
+    remove_rclone_connection,
     resolve_smb_connection,
+    resolve_rclone_connection,
     resolve_smb_connection_for_test,
     test_smb_connection,
     upsert_smb_connection,
+    upsert_rclone_connection,
 )
 from .models import LibraryTargets, RootConfig
 from .network import discover_lan_devices
@@ -38,6 +41,13 @@ from .operations import apply_plan, delete_folder, delete_media_file, move_folde
 from .operation_storage import OperationStorageRouter
 from .planner import load_report, media_from_dict, plan_actions
 from .provider_path_resolution import ResolvedProviderDirectory, find_provider_path_replacement, resolve_provider_directory
+from .rclone_cli import (
+    create_remote as create_rclone_remote,
+    delete_remote as delete_rclone_remote,
+    list_remotes as list_rclone_remotes,
+    mount_remote as mount_rclone_remote,
+    unmount_path as unmount_rclone_path,
+)
 from .scanner import rebuild_scan_report, scan_roots
 from .scanner_storage import StorageManagerScannerStorage
 from .state import StateStore
@@ -271,7 +281,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _operation_storage_router(self) -> OperationStorageRouter:
         lan_connections = self.store.load_lan_connections()
         return OperationStorageRouter(
-            smb_connection_resolver=lambda connection_id: resolve_smb_connection(lan_connections, connection_id)
+            smb_connection_resolver=lambda connection_id: resolve_smb_connection(lan_connections, connection_id),
+            rclone_connection_resolver=lambda connection_id: resolve_rclone_connection(lan_connections, connection_id),
         )
 
     def _sleep_with_cancel(self, seconds: int) -> None:
@@ -400,6 +411,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/lan/discover":
             self._send_json(discover_lan_devices())
+            return
+        if parsed.path == "/api/rclone/remotes":
+            try:
+                self._send_json({"remotes": list_rclone_remotes()})
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         if parsed.path == "/api/lan/connections":
             self._send_json(self.store.api_payload()["lan_connections"])
@@ -636,6 +653,85 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 },
             )
             self._send_json(self.store.api_payload()["lan_connections"], status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/rclone/connections":
+            payload = self._read_json()
+            connections, saved = upsert_rclone_connection(self.store.load_lan_connections(), payload)
+            self.store.save_lan_connections(connections)
+            self.store.append_activity(
+                kind="lan",
+                status="success",
+                message="Saved Rclone connection profile.",
+                details={
+                    "id": saved["id"],
+                    "label": saved["label"],
+                    "rclone_name": saved["rclone_name"],
+                    "enabled": saved["enabled"],
+                },
+            )
+            self._send_json(self.store.api_payload()["lan_connections"], status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/rclone/sync":
+            connections = self.store.load_lan_connections()
+            rclone_connections = [c for c in connections.get("rclone", []) if c.get("enabled", True) and c.get("rclone_name") and c.get("config")]
+            if not rclone_connections:
+                self._send_json({"message": "No rclone connections to sync."}, status=HTTPStatus.OK)
+                return
+            
+            results = []
+            for conn in rclone_connections:
+                try:
+                    create_rclone_remote(conn["rclone_name"], conn["config"].get("type", "drive"), conn["config"])
+                    results.append({"name": conn["rclone_name"], "status": "success"})
+                except Exception as exc:
+                    results.append({"name": conn["rclone_name"], "status": "error", "message": str(exc)})
+            
+            self.store.append_activity(
+                kind="rclone",
+                status="success" if all(r["status"] == "success" for r in results) else "warning",
+                message="Rclone config sync finished.",
+                details={"results": results},
+            )
+            self._send_json({"results": results})
+            return
+
+        if parsed.path == "/api/rclone/mount":
+            payload = self._read_json()
+            remote_name = str(payload.get("remote_name") or "").strip()
+            mount_point = str(payload.get("mount_point") or "").strip()
+            if not remote_name or not mount_point:
+                self._send_json({"error": "remote_name and mount_point are required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                mount_rclone_remote(remote_name, mount_point, vfs_cache_mode=payload.get("vfs_cache_mode", "writes"))
+                self.store.append_activity(
+                    kind="rclone",
+                    status="success",
+                    message=f"Mounted Rclone remote {remote_name} to {mount_point}.",
+                )
+                self._send_json({"status": "success", "message": f"Mount command issued for {remote_name}"})
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if parsed.path == "/api/rclone/unmount":
+            payload = self._read_json()
+            mount_point = str(payload.get("mount_point") or "").strip()
+            if not mount_point:
+                self._send_json({"error": "mount_point is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                unmount_rclone_path(mount_point)
+                self.store.append_activity(
+                    kind="rclone",
+                    status="success",
+                    message=f"Unmounted {mount_point}.",
+                )
+                self._send_json({"status": "success", "message": f"Unmounted {mount_point}"})
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
         if parsed.path == "/api/lan/connections/test":
@@ -1431,7 +1527,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not connection_id:
                 self._send_json({"error": "missing id query parameter"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            connections, removed = remove_smb_connection(self.store.load_lan_connections(), connection_id)
+            
+            if connection_id.startswith("rclone-"):
+                connections, removed = remove_rclone_connection(self.store.load_lan_connections(), connection_id)
+                kind_label = "Rclone"
+            else:
+                connections, removed = remove_smb_connection(self.store.load_lan_connections(), connection_id)
+                kind_label = "SMB"
+
             if removed is None:
                 self._send_json({"error": f"connection not found: {connection_id}"}, status=HTTPStatus.NOT_FOUND)
                 return
@@ -1439,8 +1542,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.store.append_activity(
                 kind="lan",
                 status="success",
-                message="Removed SMB connection profile.",
-                details={"id": removed["id"], "label": removed["label"], "host": removed["host"]},
+                message=f"Removed {kind_label} connection profile.",
+                details={"id": removed["id"], "label": removed["label"]},
             )
             self._send_json(self.store.api_payload()["lan_connections"])
             return

@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from ..lan_connections import build_cd_command, browse_smb_path, parse_smbclient_entries, resolve_smb_connection, run_smbclient_command
 from .paths import StoragePath
-from .rclone_cli import build_rclone_target, is_rclone_not_found_error, run_rclone, run_rclone_json
+from .rclone_cli import DEFAULT_RCLONE_TIMEOUT, build_rclone_target, is_rclone_not_found_error, run_rclone, run_rclone_json
 
 
 class StorageError(RuntimeError):
@@ -200,7 +200,7 @@ def escape_smb_command_value(value: str) -> str:
 
 
 class RcloneStorageBackend:
-    def __init__(self, *, timeout: int = 30, hash_timeout: int = 180):
+    def __init__(self, *, timeout: int = DEFAULT_RCLONE_TIMEOUT, hash_timeout: int = 180):
         self.timeout = timeout
         self.hash_timeout = hash_timeout
 

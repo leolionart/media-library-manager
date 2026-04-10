@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const devApiTarget = process.env.MLM_DEV_API_TARGET || "http://127.0.0.1:8766";
+const devApiTarget = process.env.MLM_DEV_API_TARGET || "http://127.0.0.1:9988";
 
 export default defineConfig({
   plugins: [react()],

@@ -20,6 +20,7 @@ from .rclone_cli import RcloneCommandResult, RcloneError, build_rclone_target, r
 
 
 SmbConnectionResolver = Callable[[str], dict[str, Any] | None]
+RcloneConnectionResolver = Callable[[str], dict[str, Any] | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +55,12 @@ class OperationStorageRouter:
         self,
         *,
         smb_connection_resolver: SmbConnectionResolver | None = None,
+        rclone_connection_resolver: RcloneConnectionResolver | None = None,
         smb_timeout: int = 20,
         rclone_timeout: int = 60,
     ) -> None:
         self.smb_connection_resolver = smb_connection_resolver
+        self.rclone_connection_resolver = rclone_connection_resolver
         self.smb_timeout = smb_timeout
         self.rclone_timeout = rclone_timeout
         self._rclone_entry_cache: dict[str, dict[str, Any] | None] = {}

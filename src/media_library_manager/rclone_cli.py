@@ -10,6 +10,7 @@ from typing import Any
 DEFAULT_RCLONE_TIMEOUT = 120
 
 
+
 class RcloneError(RuntimeError):
     pass
 
@@ -138,6 +139,100 @@ def list_entries_recursive(
     if not isinstance(payload, list):
         raise RcloneError("rclone lsjson --recursive returned invalid payload")
     return payload
+
+
+def list_remotes(*, timeout: int = 30) -> list[dict[str, str]]:
+    """List all remotes using rclone listremotes --json."""
+    payload = run_rclone_json(["listremotes", "--json"], timeout=timeout)
+    if payload is None:
+        return []
+    if not isinstance(payload, list):
+        raise RcloneError("rclone listremotes returned invalid payload")
+    return payload
+
+
+def create_remote(name: str, rclone_type: str, config: dict[str, str], *, timeout: int = 60) -> Any:
+    """Create a new remote using rclone config create."""
+    args = ["config", "create", name, rclone_type]
+    for key, value in config.items():
+        args.append(f"{key}={value}")
+    return run_rclone_command(args, timeout=timeout)
+
+
+def delete_remote(name: str, *, timeout: int = 30) -> Any:
+    """Delete a remote using rclone config delete."""
+    return run_rclone_command(["config", "delete", name], timeout=timeout)
+
+
+def mount_remote(
+    remote: str,
+    mount_point: str | Path,
+    *,
+    vfs_cache_mode: str = "writes",
+    allow_other: bool = True,
+    read_only: bool = False,
+    args: list[str] | None = None,
+) -> Any:
+    """
+    Mount a remote to a local path.
+    On non-Windows, uses --daemon.
+    """
+    import platform
+    
+    mount_path = Path(mount_point)
+    if not mount_path.exists():
+        mount_path.mkdir(parents=True, exist_ok=True)
+    
+    cmd_args = ["mount", f"{remote}:", str(mount_path), "--vfs-cache-mode", vfs_cache_mode]
+    if read_only:
+        cmd_args.append("--read-only")
+    
+    is_windows = platform.system().lower() == "windows"
+    if not is_windows:
+        cmd_args.append("--daemon")
+        if allow_other:
+            cmd_args.append("--allow-other")
+            
+    if args:
+        cmd_args.extend(args)
+        
+    return run_rclone_command(cmd_args)
+
+
+def unmount_path(mount_point: str | Path) -> Any:
+    """Unmount a path using system-specific command."""
+    import platform
+    import subprocess
+    
+    mount_path = str(mount_point)
+    is_windows = platform.system().lower() == "windows"
+    
+    if is_windows:
+        # On Windows, rclone mount usually needs to be killed if not using --daemon (which is not supported)
+        # However, rclone unmount is not a thing. We might need to find the process.
+        # For now, let's assume we can't easily unmount via CLI without PID.
+        raise NotImplementedError("Unmount on Windows is not implemented yet")
+        
+    # On Linux/macOS
+    system = platform.system().lower()
+    if system == "darwin":
+        cmd = ["umount", mount_path]
+    else:
+        # Try fusermount3 then fusermount then umount
+        try:
+            subprocess.run(["fusermount3", "-u", mount_path], check=True, capture_output=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            try:
+                subprocess.run(["fusermount", "-u", mount_path], check=True, capture_output=True)
+                return True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                cmd = ["umount", mount_path]
+                
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RcloneError(f"unmount failed: {result.stderr or result.stdout}")
+    return True
 
 
 def is_rclone_not_found_error(error: Exception) -> bool:

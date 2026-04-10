@@ -19,7 +19,13 @@ export async function request(url, options = {}) {
     const data = text ? (contentType.includes("application/json") ? JSON.parse(text) : text) : {};
 
     if (!response.ok) {
-      throw new Error(data?.error || `Request failed with status ${response.status}`);
+      if (response.status === 502) {
+        throw new Error("Backend is not available (HTTP 502 Bad Gateway). Please ensure the backend server is running.");
+      }
+      if (response.status === 504) {
+        throw new Error("Backend request timed out (HTTP 504 Gateway Timeout).");
+      }
+      throw new Error(data?.error || `Request failed with status ${response.status}: ${response.statusText}`);
     }
 
     return data;
@@ -163,6 +169,38 @@ export function testLanConnection(payload) {
 
 export function deleteLanConnection(id) {
   return request(`/api/lan/connections?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function saveRcloneConnection(payload) {
+  return request("/api/rclone/connections", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function syncRcloneConfig() {
+  return request("/api/rclone/sync", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
+export function fetchRcloneRemotes() {
+  return request("/api/rclone/remotes");
+}
+
+export function mountRclone(payload) {
+  return request("/api/rclone/mount", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function unmountRclone(payload) {
+  return request("/api/rclone/unmount", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export function saveIntegrations(payload) {

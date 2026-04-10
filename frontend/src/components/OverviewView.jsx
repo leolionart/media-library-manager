@@ -22,6 +22,8 @@ import {
   FolderOpenOutlined,
   DatabaseOutlined,
   SyncOutlined,
+  LinkOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { request } from "../api";
 import { MediaLibraryLogPanel } from "./MediaLibraryLogPanel";
@@ -278,7 +280,9 @@ export function OverviewView() {
 
         const nextStats = { ...emptyProviderStats };
         enabledProviders.forEach((provider, index) => {
-          const items = Array.isArray(results[index]) ? results[index] : [];
+          const response = results[index];
+          const items = Array.isArray(response) ? response : (Array.isArray(response?.items) ? response.items : []);
+          
           if (provider === "radarr") {
             nextStats.movies = items.length;
             nextStats.movieFiles = items.filter((item) => Boolean(item?.hasFile)).length;
@@ -298,12 +302,10 @@ export function OverviewView() {
       }
     };
 
-    void loadProviderStats();
-    const timerId = window.setInterval(loadProviderStats, 60000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timerId);
-    };
+    // Only load once on mount or when integrations change
+    loadProviderStats();
+    // Periodic reload removed to prevent unnecessary rclone/provider scans.
+    // Stats will refresh when the global state refreshes after operations.
   }, [state.integrations]);
 
   const reportSummary = state.report?.summary || {};
@@ -360,7 +362,8 @@ export function OverviewView() {
     return counts;
   }, [state.roots]);
   const totalProviderItems = providerStats.movies + providerStats.series;
-  const totalTrackedMediaFiles = providerStats.movieFiles + providerStats.episodeFiles;
+  // Use indexed video files from cache for tracked media files count
+  const totalTrackedMediaFiles = toSafeNumber(folderIndexSummary.video_files);
 
   const resolutionItems = [
     {
@@ -454,7 +457,6 @@ export function OverviewView() {
             value={state.roots.length || 0}
             prefix={<FolderOpenOutlined />}
             note={`${state.managed_folders?.length || 0} managed SMB folder${state.managed_folders?.length === 1 ? "" : "s"} tracked. ${enabledIntegrations.length} provider${enabledIntegrations.length === 1 ? "" : "s"} enabled.`}
-            extra={<Tag>{enabledIntegrations.length} provider{enabledIntegrations.length === 1 ? "" : "s"}</Tag>}
             tags={[
               { key: "movie-roots", color: "default", label: `${rootKinds.movie} movie` },
               { key: "series-roots", color: "processing", label: `${rootKinds.series} series` },
@@ -468,7 +470,6 @@ export function OverviewView() {
             value={toSafeNumber(folderIndexSummary.folders)}
             prefix={<DatabaseOutlined />}
             note={`Cached folder metadata from connected roots. Last refresh: ${formatDate(state.last_folder_index_at)}`}
-            extra={<Tag color={state.last_folder_index_at ? "success" : "warning"}>{state.last_folder_index_at ? "cached" : "not built"}</Tag>}
             tags={[
               { key: "cache-roots", color: "default", label: `${toSafeNumber(folderIndexSummary.roots)} roots` },
               { key: "cache-depth", color: "processing", label: `depth ${toSafeNumber(folderIndexSummary.max_depth)}` },
@@ -482,7 +483,6 @@ export function OverviewView() {
             value={totalProviderItems}
             prefix={<CloudServerOutlined />}
             note={`${providerStats.movies} movies and ${providerStats.series} series currently tracked by enabled providers.`}
-            extra={<Tag color={enabledIntegrations.length ? "processing" : "default"}>{enabledIntegrations.length ? "provider inventory" : "no provider"}</Tag>}
             tags={[
               { key: "provider-movies", color: "default", label: `${providerStats.movies} movies` },
               { key: "provider-series", color: "processing", label: `${providerStats.series} series` },
@@ -494,11 +494,10 @@ export function OverviewView() {
             title="Tracked Media Files"
             value={totalTrackedMediaFiles}
             prefix={<CheckCircleOutlined />}
-            note={`${providerStats.movieFiles} movie folders with files and ${providerStats.episodeFiles} Sonarr episode files currently recognized.`}
-            extra={<Tag color={toSafeNumber(pathRepairSummary.issues) ? "warning" : "success"}>{toSafeNumber(pathRepairSummary.issues)} repair issues</Tag>}
+            note={`Total video files found across all roots in the latest metadata index refresh.`}
             tags={[
-              { key: "movie-files", color: "success", label: `${providerStats.movieFiles} movie titles` },
-              { key: "episode-files", color: "processing", label: `${providerStats.episodeFiles} episodes` },
+              { key: "movie-titles", color: "success", label: `${rootKinds.movie ? 'Indexed' : 'Video files'}` },
+              { key: "cache-status", color: "processing", label: state.last_folder_index_at ? 'Metadata cached' : 'No index' },
               { key: "sync-updated", color: "default", label: `${syncUpdatedCount} synced` },
             ]}
           />

@@ -23,6 +23,15 @@ SMB_CONNECTION_KEYS = [
     "enabled",
 ]
 
+RCLONE_CONNECTION_KEYS = [
+    "id",
+    "label",
+    "protocol",
+    "rclone_name",
+    "config",
+    "enabled",
+]
+
 
 SMBCLIENT_MISSING_MESSAGE = (
     "smbclient is not installed in the runtime. "
@@ -31,7 +40,7 @@ SMBCLIENT_MISSING_MESSAGE = (
 
 
 def default_lan_connections() -> dict[str, Any]:
-    return {"smb": []}
+    return {"smb": [], "rclone": []}
 
 
 def default_smb_connection() -> dict[str, Any]:
@@ -51,10 +60,22 @@ def default_smb_connection() -> dict[str, Any]:
     }
 
 
+def default_rclone_connection() -> dict[str, Any]:
+    return {
+        "id": "",
+        "label": "",
+        "protocol": "rclone",
+        "rclone_name": "",
+        "config": {},
+        "enabled": True,
+    }
+
+
 def normalize_lan_connections(raw: dict[str, Any] | None) -> dict[str, Any]:
     normalized = default_lan_connections()
     raw = raw or {}
     normalized["smb"] = [normalize_stored_smb_connection(item) for item in raw.get("smb", [])]
+    normalized["rclone"] = [normalize_stored_rclone_connection(item) for item in raw.get("rclone", [])]
     return normalized
 
 
@@ -76,6 +97,20 @@ def normalize_stored_smb_connection(connection: dict[str, Any]) -> dict[str, Any
     if not normalized["label"]:
         target = normalized["share_name"] or normalized["host"] or normalized["id"]
         normalized["label"] = f"SMB {target}"
+    return normalized
+
+
+def normalize_stored_rclone_connection(connection: dict[str, Any]) -> dict[str, Any]:
+    normalized = default_rclone_connection()
+    normalized.update({key: connection.get(key, normalized.get(key)) for key in RCLONE_CONNECTION_KEYS})
+    normalized["id"] = str(normalized.get("id") or f"rclone-{time.time_ns()}")
+    normalized["label"] = str(normalized.get("label") or "").strip()
+    normalized["protocol"] = "rclone"
+    normalized["rclone_name"] = str(normalized.get("rclone_name") or "").strip()
+    normalized["config"] = dict(normalized.get("config") or {})
+    normalized["enabled"] = bool(normalized.get("enabled", True))
+    if not normalized["label"]:
+        normalized["label"] = f"Rclone {normalized['rclone_name'] or normalized['id']}"
     return normalized
 
 
@@ -101,6 +136,19 @@ def upsert_smb_connection(connections: dict[str, Any], payload: dict[str, Any]) 
     return normalized, merged
 
 
+def upsert_rclone_connection(connections: dict[str, Any], payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = normalize_lan_connections(connections)
+    existing_index = next((index for index, item in enumerate(normalized["rclone"]) if item["id"] == payload.get("id")), None)
+    existing = normalized["rclone"][existing_index] if existing_index is not None else None
+    merged = normalize_stored_rclone_connection({**(existing or {}), **payload})
+    if existing_index is None:
+        normalized["rclone"].append(merged)
+    else:
+        normalized["rclone"][existing_index] = merged
+    normalized["rclone"].sort(key=lambda item: (not item.get("enabled", True), item["label"].lower(), item["rclone_name"].lower()))
+    return normalized, merged
+
+
 def remove_smb_connection(connections: dict[str, Any], connection_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     normalized = normalize_lan_connections(connections)
     removed = next((item for item in normalized["smb"] if item["id"] == connection_id), None)
@@ -108,10 +156,18 @@ def remove_smb_connection(connections: dict[str, Any], connection_id: str) -> tu
     return normalized, removed
 
 
+def remove_rclone_connection(connections: dict[str, Any], connection_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    normalized = normalize_lan_connections(connections)
+    removed = next((item for item in normalized["rclone"] if item["id"] == connection_id), None)
+    normalized["rclone"] = [item for item in normalized["rclone"] if item["id"] != connection_id]
+    return normalized, removed
+
+
 def redact_lan_connections(connections: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_lan_connections(connections)
     return {
         "smb": [redact_smb_connection(connection) for connection in normalized["smb"]],
+        "rclone": [redact_rclone_connection(connection) for connection in normalized["rclone"]],
     }
 
 
@@ -119,6 +175,17 @@ def redact_smb_connection(connection: dict[str, Any]) -> dict[str, Any]:
     redacted = {**connection}
     redacted["has_password"] = bool(redacted.get("password"))
     redacted["password"] = ""
+    return redacted
+
+
+def redact_rclone_connection(connection: dict[str, Any]) -> dict[str, Any]:
+    redacted = {**connection}
+    # Rclone config can contain secrets, we should probably redact the whole config
+    # or at least known secret keys. For now, let's just mark it as having config.
+    redacted["has_config"] = bool(redacted.get("config"))
+    # redacted["config"] = {} # Keeping config for now as it might be needed for UI display (non-secret parts)
+    # Actually, rclone config often has tokens. Let's redact it for the API payload.
+    redacted["config"] = {k: "********" if "token" in k or "secret" in k or "password" in k else v for k, v in redacted.get("config", {}).items()}
     return redacted
 
 
@@ -134,6 +201,11 @@ def resolve_smb_connection_for_test(connections: dict[str, Any], payload: dict[s
 def resolve_smb_connection(connections: dict[str, Any], connection_id: str) -> dict[str, Any] | None:
     normalized = normalize_lan_connections(connections)
     return next((item for item in normalized["smb"] if item["id"] == connection_id), None)
+
+
+def resolve_rclone_connection(connections: dict[str, Any], connection_id: str) -> dict[str, Any] | None:
+    normalized = normalize_lan_connections(connections)
+    return next((item for item in normalized["rclone"] if item["id"] == connection_id), None)
 
 
 def test_smb_connection(connection: dict[str, Any], *, timeout: int = 8) -> dict[str, Any]:

@@ -64,13 +64,25 @@ def list_provider_items(integrations: dict[str, Any], provider: str) -> dict[str
         if provider == "radarr":
             client = RadarrClient(config)
             items = [
-                {"id": item.get("id"), "title": item.get("title"), "year": item.get("year"), "path": item.get("path")}
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "year": item.get("year"),
+                    "path": item.get("path"),
+                    "hasFile": item.get("hasFile"),
+                }
                 for item in client.list_movies()
             ]
         else:
             client = SonarrClient(config)
             items = [
-                {"id": item.get("id"), "title": item.get("title"), "year": item.get("year"), "path": item.get("path")}
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "year": item.get("year"),
+                    "path": item.get("path"),
+                    "statistics": item.get("statistics"),
+                }
                 for item in client.list_series()
             ]
     except ProviderError as exc:

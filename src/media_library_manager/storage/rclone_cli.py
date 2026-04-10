@@ -25,7 +25,7 @@ def build_rclone_target(*, remote: str, path: str) -> str:
     return f"{clean_remote}:{rel}" if rel else f"{clean_remote}:"
 
 
-def run_rclone(args: list[str], *, timeout: int = 30) -> RcloneCommandResult:
+def run_rclone(args: list[str], *, timeout: int = 120) -> RcloneCommandResult:
     command = ["rclone", *args]
     try:
         completed = subprocess.run(
@@ -46,7 +46,7 @@ def run_rclone(args: list[str], *, timeout: int = 30) -> RcloneCommandResult:
     return RcloneCommandResult(stdout=completed.stdout or "", stderr=completed.stderr or "")
 
 
-def run_rclone_json(args: list[str], *, timeout: int = 30) -> Any:
+def run_rclone_json(args: list[str], *, timeout: int = 120) -> Any:
     result = run_rclone(args, timeout=timeout)
     text = (result.stdout or "").strip()
     if not text:

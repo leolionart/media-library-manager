@@ -492,13 +492,23 @@ def _search_cached_index_matches(
     cached_candidates = filter_index_candidates_for_provider(provider=provider, roots=roots, report=folder_index_report)
     if not cached_candidates:
         return []
+
+    # Try exact or close match first with full alias list
     ranked = _rank_candidates(cached_candidates, aliases=aliases, year=None, max_suggestions=max_results)
     if ranked:
         return ranked
+
+    # If no close match, try normalized query search as a fallback but with a higher minimum score requirement
     normalized_query = normalize_title(query)
     if not normalized_query:
         return []
-    return _rank_candidates(cached_candidates, aliases=[normalized_query], year=None, max_suggestions=max_results, min_score=80)
+
+    fallback_ranked = _rank_candidates(cached_candidates, aliases=[normalized_query], year=None, max_suggestions=max_results, min_score=80)
+    if fallback_ranked:
+        return fallback_ranked
+
+    # No matches found in cache
+    return []
 
 
 def _index_provider_candidates(
