@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+DEFAULT_RCLONE_TIMEOUT = 120
+
+
 class RcloneError(RuntimeError):
     pass
 
