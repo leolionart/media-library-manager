@@ -4,9 +4,11 @@ services:
     image: ghcr.io/leolionart/media-library-manager:latest
     restart: unless-stopped
     network_mode: host
+    ports:
+      - 8581:8581
     environment:
       - HOST=0.0.0.0
-      - PORT=9988
+      - PORT=8581
       - STATE_FILE=/app/data/app-state.json
     volumes:
       - ./data:/app/data
