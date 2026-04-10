@@ -318,10 +318,10 @@ export function deletePathRepairProviderItem({ provider, itemId, addImportExclus
   });
 }
 
-export function searchPathRepairFolders({ provider, query }) {
+export function searchPathRepairFolders({ provider, query, currentPath = "", year = null }) {
   return request("/api/path-repair/search", {
     method: "POST",
-    body: JSON.stringify({ provider, query }),
+    body: JSON.stringify({ provider, query, current_path: currentPath, year }),
   });
 }
 

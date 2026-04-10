@@ -34,8 +34,8 @@ Dashboard hiện có 5 màn:
    Màn cleanup riêng cho duplicate files trong provider-managed folders của Radarr/Sonarr. Đây không dùng plan/apply và không còn là nơi chính để thao tác folder roots. Cleanup hiện ưu tiên đọc `folder index` artifact đã cache từ connected roots, gồm cả metadata video file trực tiếp trong mỗi folder; nếu cache cũ hoặc rỗng thì user phải refresh `Library Finder` trước.
 
 4. `Library Path Repair`
-   Màn sửa item của Radarr/Sonarr khi user muốn tìm lại folder đúng cho item mà chính provider đang báo thiếu. Scan hiện không còn tự so sánh connected roots để suy luận `path_not_found`; nó chỉ giữ lại item mà Radarr/Sonarr đang báo `missing`. Search và path mapping vẫn phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
-   Search hiện ưu tiên dùng `folder index` artifact đã cache từ connected roots; chỉ fallback sang live traversal khi cache chưa có hit hoặc chưa đủ sâu.
+   Màn sửa item của Radarr/Sonarr khi user muốn tìm lại folder đúng cho item mà chính provider đang báo thiếu. Scan hiện không còn tự so sánh connected roots để suy luận `path_not_found`; nó ưu tiên trạng thái `missing` từ provider, nhưng sẽ thử refresh ngắn item trước khi giữ nó trong report để giảm false positive do provider cache stale. Search và path mapping vẫn phải xét cả SMB series roots như `TV Series` hoặc `usbshare1/Series`, không chỉ rclone roots.
+   Search hiện ưu tiên dùng `folder index` artifact đã cache từ connected roots; chỉ fallback sang live traversal khi cache chưa có hit hoặc chưa đủ sâu. Với rclone roots dùng pseudo path như `/rclone/<remote>`, search/apply cũng cố giữ provider namespace hiện tại như `/volume2/DATA/rclone/gdrive/...` thay vì rewrite sang pseudo path local.
 
 5. `Settings`
    Màn cấu hình roots, SMB profiles, LAN discovery, Radarr/Sonarr, sync options, và manual sync.

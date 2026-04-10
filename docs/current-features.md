@@ -77,10 +77,12 @@ Hiện có:
 
 - scan item Radarr/Sonarr có path lỗi
 - scan report hiện chỉ lấy theo trạng thái `missing` mà chính Radarr/Sonarr báo, không còn tự so sánh connected roots để suy luận `path_not_found`
+- trước khi giữ item trong report, scan sẽ thử refresh item đó ở Radarr/Sonarr rồi đọc lại metadata ngắn gọn; nếu provider tự thấy lại file sau refresh thì item sẽ bị loại khỏi report
 - với Radarr, scan chỉ đưa vào report các movie đã available/released và đang bị `missing` trong provider
 - với Sonarr, scan chỉ đưa vào report các series mà provider đang báo thiếu episode files theo thống kê của Sonarr
 - với Sonarr, search và path-mapping hiện kiểm tra cả rclone lẫn SMB series roots, kể cả alias Synology-style như `usbshare/Series`
 - search hiện ưu tiên đọc `folder index` artifact đã cache từ `Library Finder` refresh, rồi mới fallback sang live traversal nếu cache không có candidate phù hợp
+- với rclone roots dùng pseudo path nội bộ như `/rclone/<remote>`, search path repair sẽ cố giữ namespace path kiểu provider/server từ item hiện tại, ví dụ `/volume2/DATA/rclone/gdrive/...`, thay vì trả về pseudo path của máy đang chạy app
 - search folder phù hợp trong connected roots khi user chủ động bấm tìm
 - update path trong provider
 - remove item khỏi provider mà không xóa media files

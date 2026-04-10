@@ -51,7 +51,30 @@ class PathRepairTests(unittest.TestCase):
             )
 
             self.assertEqual(result["status"], "success")
-            self.assertEqual(result["path"], str(new_path.resolve()))
+            self.assertEqual(result["path"], str(new_path))
+
+    @patch("media_library_manager.path_repair.RadarrClient.refresh_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.update_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.get_movie")
+    def test_update_provider_item_path_preserves_provider_namespace_string(
+        self,
+        get_movie_mock,
+        update_movie_mock,
+        refresh_movie_mock,
+    ) -> None:
+        get_movie_mock.return_value = {"id": 11, "title": "The Thing", "year": 1982, "path": "/old/path"}
+        update_movie_mock.side_effect = lambda movie: movie
+        refresh_movie_mock.return_value = {"status": "queued"}
+
+        result = update_provider_item_path(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}},
+            provider="radarr",
+            item_id=11,
+            new_path="/volume2/DATA/rclone/gdrive/Movies/The Thing (1982)",
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["path"], "/volume2/DATA/rclone/gdrive/Movies/The Thing (1982)")
 
     def test_search_library_paths_returns_matching_connected_folder(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -94,6 +117,44 @@ class PathRepairTests(unittest.TestCase):
         )
 
         self.assertEqual(result[0]["path"], "/library/series/BEEF")
+        default_storage_manager_mock.assert_not_called()
+
+    @patch("media_library_manager.path_repair.default_storage_manager")
+    def test_search_library_paths_rewrites_cached_rclone_result_to_current_provider_namespace(self, default_storage_manager_mock) -> None:
+        result = search_library_paths(
+            provider="radarr",
+            query="The Thing",
+            roots=[RootConfig(path=Path("/rclone/aitran"), label="DATA gdrive", kind="movie", storage_uri="rclone://aitran/")],
+            lan_connections={"smb": []},
+            current_path="/volume2/DATA/rclone/gdrive/Movies/Old Folder",
+            year=1982,
+            folder_index_report={
+                "version": 3,
+                "capabilities": ["normalized_name", "video_files"],
+                "items": [
+                    {
+                        "label": "The Thing (1982)",
+                        "normalized_name": "the thing (1982)",
+                        "path": "/rclone/aitran/Movies/The Thing (1982)",
+                        "storage_uri": "rclone://aitran/Movies/The%20Thing%20%281982%29",
+                        "root_label": "DATA gdrive",
+                        "root_path": "/rclone/aitran",
+                        "root_storage_uri": "rclone://aitran/",
+                        "kind": "movie",
+                        "depth": 2,
+                        "video_files": [
+                            {
+                                "name": "The Thing (1982) Bluray-1080p.mp4",
+                                "path": "/rclone/aitran/Movies/The Thing (1982)/The Thing (1982) Bluray-1080p.mp4",
+                                "storage_uri": "rclone://aitran/Movies/The%20Thing%20%281982%29/The%20Thing%20%281982%29%20Bluray-1080p.mp4",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(result[0]["path"], "/volume2/DATA/rclone/gdrive/Movies/The Thing (1982)")
         default_storage_manager_mock.assert_not_called()
 
     @patch("media_library_manager.path_repair.list_entries_recursive")
@@ -556,6 +617,120 @@ class PathRepairTests(unittest.TestCase):
         self.assertEqual(result["summary"]["issues"], 0)
         self.assertEqual(result["issues"], [])
 
+    @patch("media_library_manager.path_repair.RadarrClient.get_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.refresh_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
+    def test_scan_provider_path_issues_refreshes_connected_radarr_item_before_reporting_missing(
+        self,
+        list_movies_mock,
+        refresh_movie_mock,
+        get_movie_mock,
+    ) -> None:
+        list_movies_mock.return_value = [
+            {
+                "id": 587,
+                "title": "3 Idiots",
+                "year": 2009,
+                "path": "/volume2/DATA/rclone/gdrive/Movies/3 Idiots (2009)",
+                "hasFile": False,
+                "isAvailable": True,
+            }
+        ]
+        refresh_movie_mock.return_value = {"status": "queued"}
+        get_movie_mock.return_value = {
+            "id": 587,
+            "title": "3 Idiots",
+            "year": 2009,
+            "path": "/volume2/DATA/rclone/gdrive/Movies/3 Idiots (2009)",
+            "hasFile": True,
+            "isAvailable": True,
+        }
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
+            [RootConfig(path=Path("/rclone/aitran"), label="DATA gdrive", kind="mixed", storage_uri="rclone://aitran/")],
+            {"smb": []},
+            refresh_wait_seconds=0,
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        refresh_movie_mock.assert_called_once_with(587)
+        get_movie_mock.assert_called()
+
+    @patch("media_library_manager.path_repair.RadarrClient.get_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.refresh_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
+    def test_scan_provider_path_issues_does_not_refresh_unmapped_radarr_item(
+        self,
+        list_movies_mock,
+        refresh_movie_mock,
+        get_movie_mock,
+    ) -> None:
+        list_movies_mock.return_value = [
+            {
+                "id": 588,
+                "title": "Unknown Root",
+                "year": 2024,
+                "path": "/other/system/Movies/Unknown Root (2024)",
+                "hasFile": False,
+                "isAvailable": True,
+            }
+        ]
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
+            [RootConfig(path=Path("/rclone/aitran"), label="DATA gdrive", kind="mixed", storage_uri="rclone://aitran/")],
+            {"smb": []},
+            refresh_wait_seconds=0,
+        )
+
+        self.assertEqual(result["summary"]["issues"], 1)
+        refresh_movie_mock.assert_not_called()
+        get_movie_mock.assert_not_called()
+
+    @patch("media_library_manager.path_repair.time.sleep")
+    @patch("media_library_manager.path_repair.RadarrClient.get_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.refresh_movie")
+    @patch("media_library_manager.path_repair.RadarrClient.list_movies")
+    def test_scan_provider_path_issues_skips_radarr_movie_when_refresh_finds_file(
+        self,
+        list_movies_mock,
+        refresh_movie_mock,
+        get_movie_mock,
+        sleep_mock,
+    ) -> None:
+        list_movies_mock.return_value = [
+            {
+                "id": 587,
+                "title": "3 Idiots",
+                "year": 2009,
+                "path": "/volume2/DATA/rclone/gdrive/Movies/3 Idiots (2009)",
+                "hasFile": False,
+                "isAvailable": True,
+            }
+        ]
+        refresh_movie_mock.return_value = {"status": "queued"}
+        get_movie_mock.return_value = {
+            "id": 587,
+            "title": "3 Idiots",
+            "year": 2009,
+            "path": "/volume2/DATA/rclone/gdrive/Movies/3 Idiots (2009)",
+            "hasFile": True,
+            "isAvailable": True,
+        }
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": True, "base_url": "http://radarr.local", "api_key": "abc"}, "sonarr": {"enabled": False}},
+            [RootConfig(path=Path("/volume2/DATA/rclone/gdrive"), label="DATA gdrive", kind="mixed", storage_uri="rclone://aitran/")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        self.assertEqual(result["issues"], [])
+        refresh_movie_mock.assert_called_once_with(587)
+        get_movie_mock.assert_called_once_with(587)
+        sleep_mock.assert_not_called()
+
     @patch("media_library_manager.path_repair.SonarrClient.list_series")
     def test_scan_provider_path_issues_keeps_sonarr_series_when_provider_reports_it_missing(self, list_series_mock) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -658,6 +833,53 @@ class PathRepairTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["issues"], 0)
         self.assertEqual(result["issues"], [])
+
+    @patch("media_library_manager.path_repair.time.sleep")
+    @patch("media_library_manager.path_repair.SonarrClient.get_series")
+    @patch("media_library_manager.path_repair.SonarrClient.refresh_series")
+    @patch("media_library_manager.path_repair.SonarrClient.list_series")
+    def test_scan_provider_path_issues_skips_sonarr_series_when_refresh_finds_episode_files(
+        self,
+        list_series_mock,
+        refresh_series_mock,
+        get_series_mock,
+        sleep_mock,
+    ) -> None:
+        list_series_mock.return_value = [
+            {
+                "id": 5,
+                "title": "The 8 Show",
+                "year": 2024,
+                "path": "/volume2/DATA/rclone/gdrive/TV Series/The 8 Show",
+                "statistics": {
+                    "episodeCount": 8,
+                    "episodeFileCount": 0,
+                },
+            }
+        ]
+        refresh_series_mock.return_value = {"status": "queued"}
+        get_series_mock.return_value = {
+            "id": 5,
+            "title": "The 8 Show",
+            "year": 2024,
+            "path": "/volume2/DATA/rclone/gdrive/TV Series/The 8 Show",
+            "statistics": {
+                "episodeCount": 8,
+                "episodeFileCount": 8,
+            },
+        }
+
+        result = scan_provider_path_issues(
+            {"radarr": {"enabled": False}, "sonarr": {"enabled": True, "base_url": "http://sonarr.local", "api_key": "abc"}},
+            [RootConfig(path=Path("/volume2/DATA/rclone/gdrive"), label="DATA gdrive", kind="mixed", storage_uri="rclone://aitran/")],
+            {"smb": []},
+        )
+
+        self.assertEqual(result["summary"]["issues"], 0)
+        self.assertEqual(result["issues"], [])
+        refresh_series_mock.assert_called_once_with(5)
+        get_series_mock.assert_called_once_with(5)
+        sleep_mock.assert_not_called()
 
     @patch("media_library_manager.path_repair.RadarrClient.delete_movie")
     def test_delete_provider_item_removes_radarr_item_without_deleting_files(self, delete_movie_mock) -> None:

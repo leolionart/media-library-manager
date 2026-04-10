@@ -305,7 +305,12 @@ export function PathRepairView() {
     });
     setSearchProcessJob(null);
     try {
-      const result = await searchPathRepairFolders({ provider: issue.provider, query: initialQuery });
+      const result = await searchPathRepairFolders({
+        provider: issue.provider,
+        query: initialQuery,
+        currentPath: issue.path || "",
+        year: issue.year || null,
+      });
       const process = await fetchCurrentProcess();
       setSearchState((current) => ({
         ...current,
@@ -558,7 +563,12 @@ export function PathRepairView() {
               setSearchState((current) => ({ ...current, loading: true, query: value }));
               setSearchProcessJob(null);
               try {
-                const result = await searchPathRepairFolders({ provider: issue.provider, query: value });
+                const result = await searchPathRepairFolders({
+                  provider: issue.provider,
+                  query: value,
+                  currentPath: issue.path || "",
+                  year: issue.year || null,
+                });
                 const process = await fetchCurrentProcess();
                 setSearchState((current) => ({
                   ...current,

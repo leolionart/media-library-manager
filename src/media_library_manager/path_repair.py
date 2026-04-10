@@ -3,12 +3,22 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 from datetime import UTC, datetime
 import re
+import time
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .folder_index import filter_index_candidates_for_provider, validate_folder_index_report
 from .models import RootConfig
+from .provider_path_resolution import (
+    _extract_root_hints,
+    _find_subsequence,
+    _normalize_root_hint,
+    _normalize_segment,
+    _path_segments,
+    _root_match_candidates,
+    provider_path_maps_to_connected_root,
+)
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
 from .rclone_cli import list_entries_recursive
@@ -69,6 +79,7 @@ LIBRARY_JUNK_TOKENS = {
     "subs",
 }
 EPISODE_TOKEN_RE = re.compile(r"\bs\d{1,2}e\d{1,3}\b", re.IGNORECASE)
+REFRESH_RECHECK_ATTEMPTS = 3
 
 
 def scan_provider_path_issues(
@@ -78,6 +89,8 @@ def scan_provider_path_issues(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     start_provider_index: int = 1,
     folder_index_report: dict[str, Any] | None = None,
+    refresh_missing_items: bool = True,
+    refresh_wait_seconds: float = 1.0,
 ) -> dict[str, Any]:
     _ = lan_connections
     providers = [provider for provider in ["radarr", "sonarr"] if integrations.get(provider, {}).get("enabled")]
@@ -97,8 +110,9 @@ def scan_provider_path_issues(
                 }
             )
         config = build_provider_config(integrations.get(provider, {}))
+        client = _build_provider_client(provider, config)
         try:
-            items = _list_provider_items(provider, config)
+            items = _list_provider_items(provider, config, client=client)
         except ProviderError as exc:
             errors.append({"provider": provider, "message": str(exc)})
             if progress_callback is not None:
@@ -136,6 +150,11 @@ def scan_provider_path_issues(
             if cache_error is None
             else []
         )
+        items_by_id = {
+            int(item.get("id") or 0): item
+            for item in items
+            if isinstance(item, dict) and int(item.get("id") or 0) > 0
+        }
         for item_index, item in enumerate(items, start=1):
             if not _should_include_item_in_path_repair_scan(provider, item):
                 if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
@@ -151,6 +170,43 @@ def scan_provider_path_issues(
                         }
                     )
                 continue
+            if refresh_missing_items:
+                refreshed_item = _refresh_missing_provider_item(
+                    provider=provider,
+                    client=client,
+                    item=item,
+                    roots=roots,
+                    wait_seconds=refresh_wait_seconds,
+                )
+                if refreshed_item is not None:
+                    items_by_id[int(refreshed_item.get("id") or 0)] = refreshed_item
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "event": "provider_item_refreshed",
+                                "provider": provider,
+                                "index": index,
+                                "total_providers": total_providers,
+                                "item_id": refreshed_item.get("id"),
+                                "title": refreshed_item.get("title"),
+                                "still_missing": _should_include_item_in_path_repair_scan(provider, refreshed_item),
+                            }
+                        )
+                    if not _should_include_item_in_path_repair_scan(provider, refreshed_item):
+                        if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
+                            progress_callback(
+                                {
+                                    "event": "provider_item_progress",
+                                    "provider": provider,
+                                    "index": index,
+                                    "total_providers": total_providers,
+                                    "item_index": item_index,
+                                    "total_items": total_items,
+                                    "total_issues": len(issues),
+                                }
+                            )
+                        continue
+                    item = refreshed_item
             issue = _build_issue(provider, item, reason="item_missing")
             if provider_cached_candidates:
                 aliases = _build_search_aliases(item)
@@ -263,7 +319,9 @@ def update_provider_item_path(integrations: dict[str, Any], *, provider: str, it
     if not config.enabled:
         return {"status": "error", "message": f"{provider} is disabled"}
 
-    resolved_path = str(Path(new_path).expanduser().resolve())
+    resolved_path = str(PurePosixPath(str(new_path or "").strip()))
+    if not resolved_path or resolved_path == ".":
+        return {"status": "error", "message": "new path is required"}
     try:
         if provider == "radarr":
             client = RadarrClient(config)
@@ -388,6 +446,8 @@ def search_library_paths(
     roots: list[RootConfig],
     lan_connections: dict[str, Any],
     folder_index_report: dict[str, Any] | None = None,
+    current_path: str = "",
+    year: int | None = None,
     max_depth: int = 8,
     max_results: int = 20,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -395,7 +455,7 @@ def search_library_paths(
     normalized_query = normalize_title(query)
     if not normalized_query:
         return []
-    aliases = [normalized_query]
+    aliases = _build_query_aliases(query=query, current_path=current_path)
 
     cached_results = _search_cached_index_matches(
         provider=provider,
@@ -403,6 +463,8 @@ def search_library_paths(
         roots=roots,
         folder_index_report=folder_index_report,
         aliases=aliases,
+        current_path=current_path,
+        year=year,
         max_results=max_results,
     )
     if cached_results:
@@ -464,7 +526,8 @@ def search_library_paths(
             root,
             root_storage_path,
             aliases=aliases,
-            year=None,
+            year=year,
+            current_path=current_path,
             max_depth=max_depth,
             max_results=max_results,
         )
@@ -508,25 +571,29 @@ def _search_cached_index_matches(
     roots: list[RootConfig],
     folder_index_report: dict[str, Any] | None,
     aliases: list[str],
+    current_path: str,
+    year: int | None,
     max_results: int,
 ) -> list[dict[str, Any]]:
-    cached_candidates = filter_index_candidates_for_provider(provider=provider, roots=roots, report=folder_index_report)
+    cached_candidates = _expand_cached_candidates(
+        filter_index_candidates_for_provider(provider=provider, roots=roots, report=folder_index_report)
+    )
     if not cached_candidates:
         return []
 
     # Try exact or close match first with full alias list
-    ranked = _rank_candidates(cached_candidates, aliases=aliases, year=None, max_suggestions=max_results)
+    ranked = _rank_candidates(cached_candidates, aliases=aliases, year=year, max_suggestions=max_results)
     if ranked:
-        return ranked
+        return _rewrite_ranked_paths_for_provider_namespace(ranked=ranked, roots=roots, current_path=current_path)
 
     # If no close match, try normalized query search as a fallback but with a higher minimum score requirement
     normalized_query = normalize_title(query)
     if not normalized_query:
         return []
 
-    fallback_ranked = _rank_candidates(cached_candidates, aliases=[normalized_query], year=None, max_suggestions=max_results, min_score=80)
+    fallback_ranked = _rank_candidates(cached_candidates, aliases=[normalized_query], year=year, max_suggestions=max_results, min_score=80)
     if fallback_ranked:
-        return fallback_ranked
+        return _rewrite_ranked_paths_for_provider_namespace(ranked=fallback_ranked, roots=roots, current_path=current_path)
 
     # No matches found in cache
     return []
@@ -620,6 +687,7 @@ def _search_root_matches(
     *,
     aliases: list[str],
     year: int | None,
+    current_path: str,
     max_depth: int,
     max_results: int,
 ) -> tuple[list[dict[str, Any]], int, bool]:
@@ -629,11 +697,13 @@ def _search_root_matches(
             current,
             aliases=aliases,
             year=year,
+            current_path=current_path,
             max_results=max_results,
         )
 
     matches: list[dict[str, Any]] = []
     root_storage_path = _root_to_storage_path(root)
+    provider_root_base = _infer_provider_root_base(root=root, root_storage_path=root_storage_path, current_path=current_path)
     pending: list[tuple[StoragePath, int]] = [(current, 0)]
     indexed_folders = 0
     exact_match_found = False
@@ -653,7 +723,12 @@ def _search_root_matches(
             candidate = {
                 "label": entry.name,
                 "normalized_name": normalize_title(entry.name),
-                "path": _storage_entry_display_path(root=root, root_storage_path=root_storage_path, entry_path=entry.path),
+                "path": _storage_entry_display_path(
+                    root=root,
+                    root_storage_path=root_storage_path,
+                    entry_path=entry.path,
+                    provider_root_base=provider_root_base,
+                ),
                 "storage_uri": entry.path.to_uri(),
                 "root_label": root.label,
                 "root_path": str(root.path),
@@ -680,6 +755,7 @@ def _search_rclone_root_matches(
     *,
     aliases: list[str],
     year: int | None,
+    current_path: str,
     max_results: int,
 ) -> tuple[list[dict[str, Any]], int, bool]:
     filtered_rows = list_entries_recursive(
@@ -698,6 +774,7 @@ def _search_rclone_root_matches(
     matches: list[dict[str, Any]] = []
     exact_match_found = False
     indexed_folders = 0
+    provider_root_base = _infer_provider_root_base(root=root, root_storage_path=root_storage_path, current_path=current_path)
     for row in rows:
         if not bool(row.get("IsDir", True)):
             continue
@@ -712,7 +789,12 @@ def _search_rclone_root_matches(
         candidate = {
             "label": relative_parts[-1],
             "normalized_name": normalize_title(relative_parts[-1]),
-            "path": _storage_entry_display_path(root=root, root_storage_path=root_storage_path, entry_path=entry_path),
+            "path": _storage_entry_display_path(
+                root=root,
+                root_storage_path=root_storage_path,
+                entry_path=entry_path,
+                provider_root_base=provider_root_base,
+            ),
             "storage_uri": entry_path.to_uri(),
             "root_label": root.label,
             "root_path": str(root.path),
@@ -773,14 +855,148 @@ def _merge_ranked_results(existing: list[dict[str, Any]], new_items: list[dict[s
     return ranked[:max_results]
 
 
-def _storage_entry_display_path(*, root: RootConfig, root_storage_path: StoragePath, entry_path: StoragePath) -> str:
-    if entry_path.backend == "local":
+def _storage_entry_display_path(
+    *,
+    root: RootConfig,
+    root_storage_path: StoragePath,
+    entry_path: StoragePath,
+    provider_root_base: PurePosixPath | None = None,
+) -> str:
+    if entry_path.backend == "local" and provider_root_base is None:
         return entry_path.normalized_path()
     relative = entry_path.relative_to(root_storage_path)
     parts = [segment for segment in str(relative).split("/") if segment and segment != "."]
+    if provider_root_base is not None:
+        if not parts:
+            return str(provider_root_base)
+        return str(provider_root_base.joinpath(*parts))
     if not parts:
         return str(root.path)
     return str(Path(root.path).joinpath(*parts))
+
+
+def _expand_cached_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        expanded.append(candidate)
+        for video in candidate.get("video_files") or []:
+            if not isinstance(video, dict):
+                continue
+            video_name = str(video.get("name") or Path(str(video.get("path") or "")).name).strip()
+            if not video_name:
+                continue
+            expanded.append({**candidate, "label": video_name, "normalized_name": normalize_title(video_name)})
+    return expanded
+
+
+def _rewrite_ranked_paths_for_provider_namespace(
+    *,
+    ranked: list[dict[str, Any]],
+    roots: list[RootConfig],
+    current_path: str,
+) -> list[dict[str, Any]]:
+    if not current_path:
+        return ranked
+    roots_by_storage = {_root_storage_identity(root): root for root in roots}
+    roots_by_path = {str(root.path): root for root in roots}
+    rewritten: list[dict[str, Any]] = []
+    for item in ranked:
+        root = roots_by_storage.get(str(item.get("root_storage_uri") or "").strip()) or roots_by_path.get(str(item.get("root_path") or "").strip())
+        storage_uri = str(item.get("storage_uri") or "").strip()
+        if root is None or not storage_uri:
+            rewritten.append(item)
+            continue
+        try:
+            entry_path = StoragePath.from_uri(storage_uri)
+        except ValueError:
+            rewritten.append(item)
+            continue
+        root_storage_path = _root_to_storage_path(root)
+        provider_root_base = _infer_provider_root_base(root=root, root_storage_path=root_storage_path, current_path=current_path)
+        if provider_root_base is None:
+            rewritten.append(item)
+            continue
+        rewritten.append(
+            {
+                **item,
+                "path": _storage_entry_display_path(
+                    root=root,
+                    root_storage_path=root_storage_path,
+                    entry_path=entry_path,
+                    provider_root_base=provider_root_base,
+                ),
+            }
+        )
+    return rewritten
+
+
+def _build_query_aliases(*, query: str, current_path: str) -> list[str]:
+    aliases: list[str] = []
+    normalized_query = normalize_title(query)
+    if normalized_query:
+        aliases.append(normalized_query)
+    raw_path = str(current_path or "").strip()
+    if raw_path:
+        path = PurePosixPath(raw_path)
+        for candidate in [path.name, path.parent.name]:
+            normalized = normalize_title(candidate)
+            if normalized and normalized not in aliases:
+                aliases.append(normalized)
+    return aliases
+
+
+def _infer_provider_root_base(*, root: RootConfig, root_storage_path: StoragePath, current_path: str) -> PurePosixPath | None:
+    text = str(current_path or "").strip()
+    if not text:
+        return None
+    provider_segments = _path_segments(text)
+    if not provider_segments:
+        return None
+
+    if root_storage_path.backend == "rclone":
+        rclone_base = _infer_rclone_provider_root_base(root=root, root_storage_path=root_storage_path, provider_segments=provider_segments)
+        if rclone_base is not None:
+            return rclone_base
+
+    for root_segments in _root_match_candidates(root=root, storage_path=root_storage_path):
+        if not root_segments:
+            continue
+        start_index = _find_subsequence(provider_segments, root_segments)
+        if start_index < 0:
+            continue
+        return PurePosixPath("/").joinpath(*provider_segments[: start_index + len(root_segments)])
+    return None
+
+
+def _infer_rclone_provider_root_base(
+    *,
+    root: RootConfig,
+    root_storage_path: StoragePath,
+    provider_segments: list[str],
+) -> PurePosixPath | None:
+    if root_storage_path.backend != "rclone":
+        return None
+    for index, segment in enumerate(provider_segments[:-1]):
+        if _normalize_segment(segment) != "rclone":
+            continue
+        alias = provider_segments[index + 1]
+        normalized_alias = _normalize_root_hint(alias)
+        if not normalized_alias:
+            continue
+        if normalized_alias == _normalize_root_hint(root_storage_path.rclone_remote):
+            return PurePosixPath("/").joinpath(*provider_segments[: index + 2])
+        if normalized_alias in _normalize_root_hint(root.label):
+            return PurePosixPath("/").joinpath(*provider_segments[: index + 2])
+        for hint in _extract_root_hints(root):
+            if normalized_alias == hint or normalized_alias in hint:
+                return PurePosixPath("/").joinpath(*provider_segments[: index + 2])
+    return None
+
+
+def _root_storage_identity(root: RootConfig) -> str:
+    return str(root.storage_uri or root.path)
 
 
 def _rank_candidates(
@@ -880,12 +1096,59 @@ def _build_issue(provider: str, item: dict[str, Any], *, reason: str) -> dict[st
     }
 
 
-def _list_provider_items(provider: str, config: Any) -> list[dict[str, Any]]:
+def _build_provider_client(provider: str, config: Any) -> Any:
     if provider == "radarr":
-        return RadarrClient(config).list_movies()
+        return RadarrClient(config)
     if provider == "sonarr":
-        return SonarrClient(config).list_series()
+        return SonarrClient(config)
     raise ProviderError(f"unsupported provider: {provider}")
+
+
+def _list_provider_items(provider: str, config: Any, *, client: Any | None = None) -> list[dict[str, Any]]:
+    active_client = client or _build_provider_client(provider, config)
+    if provider == "radarr":
+        return active_client.list_movies()
+    if provider == "sonarr":
+        return active_client.list_series()
+    raise ProviderError(f"unsupported provider: {provider}")
+
+
+def _refresh_missing_provider_item(
+    *,
+    provider: str,
+    client: Any,
+    item: dict[str, Any],
+    roots: list[RootConfig],
+    wait_seconds: float,
+) -> dict[str, Any] | None:
+    item_id = int(item.get("id") or 0)
+    if item_id <= 0:
+        return None
+    raw_path = str(item.get("path") or "").strip()
+    if not raw_path or not provider_path_maps_to_connected_root(raw_path=raw_path, roots=roots):
+        return None
+    try:
+        if provider == "radarr":
+            client.refresh_movie(item_id)
+            for attempt in range(REFRESH_RECHECK_ATTEMPTS):
+                if wait_seconds > 0 and attempt > 0:
+                    time.sleep(wait_seconds)
+                refreshed = client.get_movie(item_id)
+                if not _is_item_missing_in_provider(provider, refreshed):
+                    return refreshed
+            return refreshed
+        if provider == "sonarr":
+            client.refresh_series(item_id)
+            for attempt in range(REFRESH_RECHECK_ATTEMPTS):
+                if wait_seconds > 0 and attempt > 0:
+                    time.sleep(wait_seconds)
+                refreshed = client.get_series(item_id)
+                if not _is_item_missing_in_provider(provider, refreshed):
+                    return refreshed
+            return refreshed
+    except ProviderError:
+        return None
+    return None
 
 
 def _root_to_storage_path(root: RootConfig) -> StoragePath:

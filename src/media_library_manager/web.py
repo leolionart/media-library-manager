@@ -1088,6 +1088,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             provider = str(payload.get("provider") or "").strip().lower()
             query = str(payload.get("query") or "").strip()
+            current_path = str(payload.get("current_path") or "").strip()
+            year = payload.get("year")
             if provider not in {"radarr", "sonarr"} or not query:
                 self._send_json({"error": "provider and query are required"}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -1102,12 +1104,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 kind="path-repair",
                 message="Searching connected library folders.",
                 summary={"total": max(len(matched_roots), 1), "completed": 0, "results": 0},
-                details={"provider": provider, "query": query, "action": "search-path-repair", "root_count": len(matched_roots)},
+                details={
+                    "provider": provider,
+                    "query": query,
+                    "current_path": current_path or None,
+                    "year": int(year or 0) or None,
+                    "action": "search-path-repair",
+                    "root_count": len(matched_roots),
+                },
             )
             self.store.append_job_log(
                 level="info",
                 message="Preparing title-based folder search.",
-                details={"provider": provider, "query": query, "root_count": len(matched_roots)},
+                details={
+                    "provider": provider,
+                    "query": query,
+                    "current_path": current_path or None,
+                    "year": int(year or 0) or None,
+                    "root_count": len(matched_roots),
+                },
             )
             try:
                 results = search_library_paths(
@@ -1116,6 +1131,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     roots=roots,
                     lan_connections=self.store.load_lan_connections(),
                     folder_index_report=self.store.load_folder_index_report(),
+                    current_path=current_path,
+                    year=int(year or 0) or None,
                     progress_callback=self._path_repair_search_progress_callback,
                 )
             except Exception as exc:
