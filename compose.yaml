@@ -4,6 +4,9 @@ services:
     image: ghcr.io/leolionart/media-library-manager:latest
     restart: unless-stopped
     network_mode: host
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
     ports:
       - 9988:9988
     environment:
