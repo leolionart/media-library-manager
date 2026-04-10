@@ -1313,14 +1313,48 @@ export function SettingsView() {
                 </>
               ) : getFieldValue("mode") === "rclone" ? (
                 <>
-                  <Form.Item name="rclone_remote" label="Rclone Remote Name" rules={[{ required: true }]}>
-                    <Input placeholder="gdrive" />
+                  <Form.Item name="rclone_remote" label="Rclone Remote" rules={[{ required: true }]}>
+                    <Select placeholder="Choose a saved Rclone connection">
+                      {rcloneConnections.map((conn) => (
+                        <Select.Option key={conn.id} value={conn.rclone_name}>
+                          {conn.label} ({conn.rclone_name})
+                        </Select.Option>
+                      ))}
+                    </Select>
                   </Form.Item>
                   <Form.Item name="rclone_mount_path" label="Mounted Path Alias">
                     <Input placeholder="/volume2/DATA/rclone/gdrive" />
                   </Form.Item>
-                  <Form.Item name="rclone_path" label="Folder Path Inside Remote">
-                    <Input placeholder="/Movies" />
+                  <Form.Item label="Folder Picker">
+                    <Space.Compact style={{ width: "100%" }}>
+                      <Form.Item name="rclone_path" noStyle>
+                        <Input placeholder="/Movies" />
+                      </Form.Item>
+                      <Button
+                        onClick={() => {
+                          const remote = getFieldValue("rclone_remote");
+                          if (!remote) {
+                            message.error("Choose a remote first.");
+                            return;
+                          }
+                          setPathBrowser({
+                            open: true,
+                            mode: "rclone",
+                            loading: false,
+                            error: "",
+                            path: getFieldValue("rclone_path") || "/",
+                            parent: null,
+                            breadcrumbs: [],
+                            entries: [],
+                            favorites: [],
+                            connectionId: remote,
+                            shareName: "",
+                          });
+                        }}
+                      >
+                        Browse
+                      </Button>
+                    </Space.Compact>
                   </Form.Item>
                 </>
               ) : (
@@ -1533,9 +1567,23 @@ export function SettingsView() {
             </Col>
           </Row>
           <Form.Item name="config_json" label="Config (JSON)" rules={[{ required: true }]}>
-            <TextArea rows={10} placeholder={'{\n  "type": "drive",\n  "client_id": "...",\n  "client_secret": "...",\n  "scope": "drive",\n  "token": "..."\n}'} />
+            <TextArea rows={8} placeholder={'{\n  "type": "drive",\n  "client_id": "...",\n  "client_secret": "...",\n  "scope": "drive",\n  "token": "..."\n}'} />
           </Form.Item>
-          <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+          <Alert
+            type="info"
+            showIcon
+            message="How to get this JSON?"
+            description={
+              <div style={{ fontSize: "12px" }}>
+                <p>Run this command on your machine to get the JSON config for an existing remote:</p>
+                <code style={{ background: "#f0f0f0", padding: "2px 4px", borderRadius: "4px" }}>
+                  rclone config show YOUR_REMOTE_NAME --dump json
+                </code>
+                <p style={{ marginTop: "8px" }}>Or find your <b>rclone.conf</b> file and convert the INI sections to JSON format.</p>
+              </div>
+            }
+          />
+          <Form.Item name="enabled" label="Enabled" valuePropName="checked" style={{ marginTop: 16 }}>
             <Switch />
           </Form.Item>
         </Form>
