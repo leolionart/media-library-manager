@@ -10,6 +10,6 @@ services:
       - STATE_FILE=/app/data/app-state.json
     volumes:
       - ./data:/app/data
-      - /mnt:/mnt:ro
-      - /media:/media:ro
-      - /srv:/srv:ro
+      - ${MNT_DIR:-/mnt}:/mnt:ro
+      - ${MEDIA_DIR:-/media}:/media:ro
+      - ${SRV_DIR:-/srv}:/srv:ro
