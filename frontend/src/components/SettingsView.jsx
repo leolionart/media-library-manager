@@ -1572,16 +1572,47 @@ export function SettingsView() {
           <Alert
             type="info"
             showIcon
-            message="How to get this JSON?"
+            message="Configuration Guide"
             description={
               <div style={{ fontSize: "12px" }}>
-                <p>Run this command on your machine to get the JSON config for an existing remote:</p>
-                <div style={{ margin: '8px 0' }}>
-                  <Text code copyable>
-                    rclone config show YOUR_REMOTE_NAME --dump json
-                  </Text>
+                <p>Rclone is a tool to sync files with cloud storage. You have two ways to get this JSON:</p>
+                
+                <div style={{ fontWeight: 'bold', marginTop: '8px' }}>Option A: Export from your local machine</div>
+                <p>If you already have Rclone installed, run this command to get the JSON:</p>
+                <div style={{ margin: '4px 0' }}>
+                  <Text code copyable>rclone config show YOUR_NAME --dump json</Text>
                 </div>
-                <p style={{ marginTop: "8px" }}>Or find your <b>rclone.conf</b> file and convert the INI sections to JSON format.</p>
+
+                <div style={{ fontWeight: 'bold', marginTop: '12px' }}>Option B: Use a template</div>
+                <p>If you are new to Rclone, pick a template below and fill in your credentials:</p>
+                <Space wrap style={{ marginTop: '4px' }}>
+                  <Button size="small" onClick={() => {
+                    rcloneForm.setFieldsValue({
+                      config_json: JSON.stringify({
+                        type: "drive",
+                        scope: "drive",
+                        client_id: "YOUR_CLIENT_ID",
+                        client_secret: "YOUR_CLIENT_SECRET",
+                        token: '{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}'
+                      }, null, 2)
+                    });
+                  }}>Google Drive</Button>
+                  <Button size="small" onClick={() => {
+                    rcloneForm.setFieldsValue({
+                      config_json: JSON.stringify({
+                        type: "onedrive",
+                        client_id: "YOUR_CLIENT_ID",
+                        client_secret: "YOUR_CLIENT_SECRET",
+                        token: '{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}'
+                      }, null, 2)
+                    });
+                  }}>OneDrive</Button>
+                  <Button size="small" type="link" href="https://rclone.org/downloads/" target="_blank">Download Rclone</Button>
+                </Space>
+                
+                <p style={{ marginTop: "12px" }}>
+                  <b>Note:</b> For cloud services (Drive, OneDrive), you usually need to run <code>rclone config</code> once on a machine with a browser to get the <code>token</code>.
+                </p>
               </div>
             }
           />
