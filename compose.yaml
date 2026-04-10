@@ -3,6 +3,7 @@ services:
     container_name: media-library-manager
     image: ghcr.io/leolionart/media-library-manager:latest
     restart: unless-stopped
+    network_mode: host
     ports:
       - 9988:9988
     environment:
