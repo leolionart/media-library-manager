@@ -1576,9 +1576,11 @@ export function SettingsView() {
             description={
               <div style={{ fontSize: "12px" }}>
                 <p>Run this command on your machine to get the JSON config for an existing remote:</p>
-                <code style={{ background: "#f0f0f0", padding: "2px 4px", borderRadius: "4px" }}>
-                  rclone config show YOUR_REMOTE_NAME --dump json
-                </code>
+                <div style={{ margin: '8px 0' }}>
+                  <Text code copyable>
+                    rclone config show YOUR_REMOTE_NAME --dump json
+                  </Text>
+                </div>
                 <p style={{ marginTop: "8px" }}>Or find your <b>rclone.conf</b> file and convert the INI sections to JSON format.</p>
               </div>
             }
