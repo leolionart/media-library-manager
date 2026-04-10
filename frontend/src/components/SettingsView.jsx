@@ -39,17 +39,23 @@ import {
   browseSmbPath,
   deleteLanConnection,
   discoverLanDevices,
+  fetchRcloneRemotes,
   fetchSettingsState,
+  mountRclone,
   removeRoot,
   runManualSync,
   saveIntegrations,
   saveLanConnection,
+  saveRcloneConnection,
+  syncRcloneConfig,
   testIntegrations,
   testLanConnection,
+  unmountRclone,
   updateRoot
 } from "../api";
 
 const { Text } = Typography;
+const { TextArea } = Input;
 
 const ROOT_KIND_OPTIONS = [
   { label: "Mixed", value: "mixed" },
@@ -71,7 +77,7 @@ const emptyState = {
       create_root_folder_if_missing: true
     }
   },
-  lan_connections: { smb: [] },
+  lan_connections: { smb: [], rclone: [] },
   sync_result: null,
   activity_log: []
 };
@@ -394,6 +400,14 @@ export function SettingsView() {
   const [editingRoot, setEditingRoot] = useState(null);
   const [connectionModalOpen, setConnectionModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState(null);
+  const [rcloneModalOpen, setRcloneModalOpen] = useState(false);
+  const [editingRclone, setEditingRclone] = useState(null);
+  const [rcloneRemotes, setRcloneRemotes] = useState([]);
+  const [loadingRcloneRemotes, setLoadingRcloneRemotes] = useState(false);
+  const [syncingRclone, setSyncingRclone] = useState(false);
+  const [savingRclone, setSavingRclone] = useState(false);
+  const [deletingRcloneId, setDeletingRcloneId] = useState("");
+  const [mountingRcloneId, setMountingRcloneId] = useState("");
   const [savingIntegrations, setSavingIntegrations] = useState(false);
   const [testingIntegration, setTestingIntegration] = useState("");
   const [testingConnectionId, setTestingConnectionId] = useState("");
@@ -415,10 +429,12 @@ export function SettingsView() {
   });
   const [rootForm] = Form.useForm();
   const [connectionForm] = Form.useForm();
+  const [rcloneForm] = Form.useForm();
   const [integrationsForm] = Form.useForm();
   const [lanTestResults, setLanTestResults] = useState({});
 
   const connections = state.lan_connections?.smb || [];
+  const rcloneConnections = state.lan_connections?.rclone || [];
   const selectedConnectionId = Form.useWatch("connection_id", rootForm);
   const selectedRootConnection = useMemo(
     () => connections.find((item) => item.id === selectedConnectionId) || null,
@@ -431,10 +447,23 @@ export function SettingsView() {
     integrationsForm.setFieldsValue(payload?.integrations || emptyState.integrations);
   };
 
+  const loadRcloneRemotes = async () => {
+    setLoadingRcloneRemotes(true);
+    try {
+      const result = await fetchRcloneRemotes();
+      setRcloneRemotes(result.remotes || []);
+    } catch (error) {
+      message.error(error.message);
+    } finally {
+      setLoadingRcloneRemotes(false);
+    }
+  };
+
   useEffect(() => {
     refreshSettings()
       .catch((error) => message.error(error.message))
       .finally(() => setLoading(false));
+    loadRcloneRemotes().catch(() => {});
   }, [message, integrationsForm]);
 
   const providerCards = ["radarr", "sonarr"].map((provider) => ({
@@ -691,6 +720,71 @@ export function SettingsView() {
     }
   ];
 
+  const rcloneColumns = [
+    {
+      title: "Remote",
+      key: "label",
+      render: (_, record) => (
+        <Space direction="vertical" size={4}>
+          <Text strong>{record.label}</Text>
+          <Space size={[4, 4]} wrap>
+            <Tag color={record.enabled ? "success" : "default"}>{record.enabled ? "Enabled" : "Disabled"}</Tag>
+            <Tag color="geekblue">{record.rclone_name}</Tag>
+            {record.has_config ? <Tag color="processing">Config stored</Tag> : null}
+          </Space>
+        </Space>
+      )
+    },
+    {
+      title: "Type",
+      key: "type",
+      render: (_, record) => <Text type="secondary">{record.config?.type || "unknown"}</Text>
+    },
+    {
+      title: "",
+      key: "actions",
+      width: 280,
+      render: (_, record) => (
+        <Space wrap>
+          <Button
+            onClick={() => {
+              setEditingRclone(record);
+              rcloneForm.setFieldsValue({
+                ...record,
+                config_json: JSON.stringify(record.config, null, 2)
+              });
+              setRcloneModalOpen(true);
+            }}
+          >
+            Edit
+          </Button>
+          <Popconfirm
+            title="Delete Rclone connection?"
+            description={record.label}
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={async () => {
+              setDeletingRcloneId(record.id);
+              try {
+                await deleteLanConnection(record.id); // This now handles rclone- prefix
+                await refreshSettings();
+                message.success("Rclone connection removed.");
+              } catch (error) {
+                message.error(error.message);
+              } finally {
+                setDeletingRcloneId("");
+              }
+            }}
+          >
+            <Button danger loading={deletingRcloneId === record.id}>
+              Delete
+            </Button>
+          </Popconfirm>
+        </Space>
+      )
+    }
+  ];
+
   if (loading) {
     return (
       <div className="app-loading">
@@ -805,6 +899,104 @@ export function SettingsView() {
                 </Card>
 
                 <Card
+                  title={
+                    <Space>
+                      <RadarChartOutlined />
+                      <span>Rclone Connections</span>
+                    </Space>
+                  }
+                  extra={
+                    <Space>
+                      <Button
+                        loading={syncingRclone}
+                        onClick={async () => {
+                          setSyncingRclone(true);
+                          try {
+                            await syncRcloneConfig();
+                            await loadRcloneRemotes();
+                            message.success("Rclone config synced with system.");
+                          } catch (error) {
+                            message.error(error.message);
+                          } finally {
+                            setSyncingRclone(false);
+                          }
+                        }}
+                      >
+                        Sync With System
+                      </Button>
+                      <Button
+                        type="primary"
+                        icon={<PlusOutlined />}
+                        onClick={() => {
+                          setEditingRclone(null);
+                          rcloneForm.setFieldsValue({
+                            id: "",
+                            label: "",
+                            rclone_name: "",
+                            config_json: "{}",
+                            enabled: true
+                          });
+                          setRcloneModalOpen(true);
+                        }}
+                      >
+                        New Rclone Connection
+                      </Button>
+                    </Space>
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    columns={rcloneColumns}
+                    dataSource={rcloneConnections}
+                    pagination={false}
+                    scroll={{ x: 1080 }}
+                    locale={{ emptyText: <Empty description="No Rclone connections saved." /> }}
+                  />
+                </Card>
+
+                <Card
+                  title="Rclone System Remotes"
+                  extra={
+                    <Button loading={loadingRcloneRemotes} onClick={loadRcloneRemotes}>
+                      Refresh Remotes
+                    </Button>
+                  }
+                >
+                  <List
+                    dataSource={rcloneRemotes}
+                    loading={loadingRcloneRemotes}
+                    locale={{ emptyText: "No Rclone remotes found in system config." }}
+                    renderItem={(remote) => (
+                      <List.Item
+                        actions={[
+                          <Button
+                            key="use"
+                            onClick={() => {
+                              setEditingRclone(null);
+                              rcloneForm.setFieldsValue({
+                                id: "",
+                                label: remote.name,
+                                rclone_name: remote.name,
+                                config_json: JSON.stringify({ type: remote.type }, null, 2),
+                                enabled: true
+                              });
+                              setRcloneModalOpen(true);
+                            }}
+                          >
+                            Use As Template
+                          </Button>
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={remote.name}
+                          description={<Tag color="geekblue">{remote.type}</Tag>}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                </Card>
+
+                <Card
                   title="LAN Discovery"
                   extra={
                     <Button
@@ -838,8 +1030,8 @@ export function SettingsView() {
                               setEditingConnection(null);
                               connectionForm.setFieldsValue({
                                 id: "",
-                                label: device.hostname || device.address || "",
-                                host: device.hostname || device.address || "",
+                                label: device.hostname || device.display_name || device.ip_address || "",
+                                host: device.hostname || device.ip_address || "",
                                 port: 445,
                                 share_name: "",
                                 base_path: "",
@@ -857,10 +1049,11 @@ export function SettingsView() {
                         ]}
                       >
                         <List.Item.Meta
-                          title={device.hostname || device.address || "Unknown device"}
+                          title={device.hostname || device.display_name || device.ip_address || "Unknown device"}
                           description={
                             <Space size={[8, 8]} wrap>
-                              {device.address ? <Text className="mono">{device.address}</Text> : null}
+                              {device.ip_address ? <Text className="mono">{device.ip_address}</Text> : null}
+                              {device.mac_address ? <Text type="secondary" className="mono">{device.mac_address}</Text> : null}
                               {(device.connect_urls || []).map((url) => (
                                 <Tag key={url}>{url}</Tag>
                               ))}
@@ -1275,6 +1468,72 @@ export function SettingsView() {
             label={editingConnection?.has_password ? "Password (leave blank to keep current)" : "Password"}
           >
             <Input.Password placeholder="Password" />
+          </Form.Item>
+          <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        open={rcloneModalOpen}
+        title={editingRclone ? "Edit Rclone Connection" : "New Rclone Connection"}
+        okText={editingRclone ? "Save Changes" : "Save Connection"}
+        confirmLoading={savingRclone}
+        onCancel={() => setRcloneModalOpen(false)}
+        onOk={() => rcloneForm.submit()}
+      >
+        <Form
+          form={rcloneForm}
+          layout="vertical"
+          onFinish={async (values) => {
+            setSavingRclone(true);
+            try {
+              let config = {};
+              try {
+                config = JSON.parse(values.config_json || "{}");
+              } catch {
+                throw new Error("Invalid JSON in Config field.");
+              }
+
+              const payload = {
+                id: values.id,
+                label: values.label,
+                rclone_name: values.rclone_name,
+                config,
+                enabled: values.enabled
+              };
+
+              await saveRcloneConnection(payload);
+              await refreshSettings();
+              setRcloneModalOpen(false);
+              setEditingRclone(null);
+              rcloneForm.resetFields();
+              message.success("Rclone connection saved.");
+            } catch (error) {
+              message.error(error.message);
+            } finally {
+              setSavingRclone(false);
+            }
+          }}
+        >
+          <Form.Item name="id" hidden>
+            <Input />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item name="label" label="Label" rules={[{ required: true }]}>
+                <Input placeholder="Google Drive Personal" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="rclone_name" label="Rclone Remote Name" rules={[{ required: true }]}>
+                <Input placeholder="gdrive" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="config_json" label="Config (JSON)" rules={[{ required: true }]}>
+            <TextArea rows={10} placeholder={'{\n  "type": "drive",\n  "client_id": "...",\n  "client_secret": "...",\n  "scope": "drive",\n  "token": "..."\n}'} />
           </Form.Item>
           <Form.Item name="enabled" label="Enabled" valuePropName="checked">
             <Switch />
