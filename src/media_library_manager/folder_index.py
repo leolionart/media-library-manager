@@ -7,10 +7,23 @@ from typing import Any, Callable
 
 from .models import MediaFile, RootConfig
 from .rclone_cli import list_entries_recursive
-from .scanner import VIDEO_EXTENSIONS, inspect_media_file
 from .scanner_storage import ScannedFileEntry
 from .storage import StoragePath, default_storage_manager
 from .sync_integrations import normalize_title
+
+VIDEO_EXTENSIONS = {
+    ".mkv",
+    ".mp4",
+    ".avi",
+    ".m4v",
+    ".mov",
+    ".wmv",
+    ".mpg",
+    ".mpeg",
+    ".ts",
+    ".m2ts",
+    ".iso",
+}
 
 
 DEFAULT_FOLDER_INDEX_MAX_DEPTH = 6
@@ -158,11 +171,33 @@ def validate_folder_index_report(
     items = report.get("items")
     if not isinstance(items, list) or not items:
         return "Cached folder metadata is empty. Refresh Library Finder before running this scan."
-    capabilities = {str(item).strip() for item in report.get("capabilities", []) if str(item).strip()}
+
+    declared_capabilities = {str(item).strip() for item in report.get("capabilities", []) if str(item).strip()}
+    capabilities = declared_capabilities or _infer_capabilities_from_items(items)
+
     missing = [name for name in (required_capabilities or []) if name not in capabilities]
     if missing:
         return f"Cached folder metadata is missing capabilities: {', '.join(missing)}. Refresh Library Finder to rebuild the folder index."
     return None
+
+
+def _infer_capabilities_from_items(items: list[Any]) -> set[str]:
+    sample = next((item for item in items if isinstance(item, dict)), None)
+    if sample is None:
+        return set()
+
+    inferred: set[str] = set()
+    if "video_files" in sample:
+        inferred.add("video_files")
+    if "has_any_file" in sample:
+        inferred.add("has_any_file")
+    if "non_video_file_count" in sample:
+        inferred.add("non_video_file_count")
+    if "child_folder_count" in sample:
+        inferred.add("child_folder_count")
+    if "normalized_name" in sample:
+        inferred.add("normalized_name")
+    return inferred
 
 
 def build_folder_index_lookup(report: dict[str, Any] | None) -> dict[str, Any]:
@@ -210,7 +245,14 @@ def folder_index_rows_for_roots(*, roots: list[RootConfig], report: dict[str, An
     return rows
 
 
-def media_files_from_index_rows(rows: list[dict[str, Any]], *, roots: list[RootConfig]) -> list[MediaFile]:
+def media_files_from_index_rows(
+    rows: list[dict[str, Any]],
+    *,
+    roots: list[RootConfig],
+    force_root: RootConfig | None = None,
+) -> list[MediaFile]:
+    from .scanner import inspect_media_file
+
     roots_by_storage = {_root_storage_identity(root): root for root in roots}
     roots_by_path = {str(root.path): root for root in roots}
     fallback_roots_by_path: dict[str, RootConfig] = {}
@@ -220,7 +262,7 @@ def media_files_from_index_rows(rows: list[dict[str, Any]], *, roots: list[RootC
     for item in rows:
         if not isinstance(item, dict):
             continue
-        root = _root_for_index_item(
+        root = force_root or _root_for_index_item(
             item=item,
             roots_by_storage=roots_by_storage,
             roots_by_path=roots_by_path,

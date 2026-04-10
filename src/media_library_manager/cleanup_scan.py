@@ -103,7 +103,7 @@ def scan_provider_cleanup(
                 storage_uri=resolved.storage_uri,
                 share_name=resolved.share_name,
             )
-            cached_files = media_files_from_index_rows(folder_rows, roots=[root])
+            cached_files = media_files_from_index_rows(folder_rows, roots=[root], force_root=root)
 
             # Verify files existence to avoid "ghost" duplicates from stale cache.
             # We check both local and remote files. 
@@ -114,7 +114,7 @@ def scan_provider_cleanup(
                     raise RuntimeError("job cancelled")
 
                 if not f.storage_uri: # Local file
-                    if not f.path.exists():
+                    if storage_router and not f.path.exists():
                         skipped_ghost_files += 1
                         continue
                 else: # Remote file (rclone or smb)
@@ -271,7 +271,10 @@ def _attach_group_metadata(groups: list[dict[str, Any]], provider_items: list[di
     item_by_path = {str(item.get("path") or ""): item for item in provider_items}
     attached: list[dict[str, Any]] = []
     for group in groups:
-        provider_item = item_by_path.get(str(group.get("root_path") or ""), {})
+        root_path = str(group.get("root_path") or "")
+        provider_item = item_by_path.get(root_path)
+        if provider_item is None:
+            provider_item = next((item for item in provider_items if root_path.startswith(str(item.get("path") or ""))), {})
         attached.append(
             {
                 **group,

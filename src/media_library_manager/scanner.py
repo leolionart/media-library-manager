@@ -155,6 +155,7 @@ def scan_roots(
             roots=roots,
             folder_index_report=folder_index_report,
             progress_callback=progress_callback,
+            storage_backend=storage_backend,
             should_cancel=should_cancel,
             start_root_index=normalized_start_index,
             total_roots=total_roots,
@@ -175,6 +176,7 @@ def _scan_roots_from_cache(
     roots: list[RootConfig],
     folder_index_report: dict[str, object] | None,
     progress_callback: ScanProgressCallback | None,
+    storage_backend: ScannerStorageBackend | None,
     should_cancel: ScanCancellationCallback | None,
     start_root_index: int,
     total_roots: int,
@@ -212,7 +214,7 @@ def _scan_roots_from_cache(
         if not root_rows and str(root.path) != root_key:
             root_rows = rows_by_root.get(str(root.path), [])
 
-        root_files = media_files_from_index_rows(root_rows, roots=[root])
+        root_files = media_files_from_index_rows(root_rows, roots=[root], force_root=root)
         files.extend(root_files)
         total_files += len(root_files)
 
@@ -244,7 +246,11 @@ def _scan_roots_from_cache(
                 }
             )
 
-    report = rebuild_scan_report(roots, files)
+    report = _attach_hashes_for_cache_scan(
+        report=rebuild_scan_report(roots, files),
+        storage_backend=storage_backend,
+        should_cancel=should_cancel,
+    )
     if progress_callback:
         progress_callback(
             {
@@ -256,6 +262,49 @@ def _scan_roots_from_cache(
                 "folder_media_duplicate_groups": len(report.folder_media_duplicates),
             }
         )
+    return report
+
+
+def _attach_hashes_for_cache_scan(
+    *,
+    report: ScanReport,
+    storage_backend: ScannerStorageBackend | None,
+    should_cancel: ScanCancellationCallback | None,
+) -> ScanReport:
+    if storage_backend is not None:
+        for media in report.files:
+            if should_cancel and should_cancel():
+                raise RuntimeError("job cancelled")
+            if media.sha256:
+                continue
+            if not media.storage_uri:
+                continue
+            entry = ScannedFileEntry(
+                path=media.storage_uri,
+                relative_path=media.relative_path,
+                size=media.size,
+                stem=Path(str(media.path)).stem,
+                suffix=Path(str(media.path)).suffix.lower(),
+                parent_name=Path(str(media.path)).parent.name,
+            )
+            try:
+                media.sha256 = storage_backend.compute_sha256(entry)
+            except Exception:
+                continue
+
+    for media in report.files:
+        if should_cancel and should_cancel():
+            raise RuntimeError("job cancelled")
+        if media.sha256:
+            continue
+        if not media.path.exists():
+            continue
+        try:
+            media.sha256 = compute_sha256(media.path)
+        except Exception:
+            continue
+
+    report.exact_duplicates = build_exact_duplicate_groups_from_files(report.files)
     return report
 
 

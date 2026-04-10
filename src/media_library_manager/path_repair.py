@@ -79,7 +79,6 @@ def scan_provider_path_issues(
     start_provider_index: int = 1,
     folder_index_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _ = roots
     _ = lan_connections
     providers = [provider for provider in ["radarr", "sonarr"] if integrations.get(provider, {}).get("enabled")]
     issues: list[dict[str, Any]] = []

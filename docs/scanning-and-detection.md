@@ -4,6 +4,8 @@
 
 Scan hiện làm việc trên tất cả roots đã connect trong state.
 
+Các luồng scan chính (`duplicate scan`, `provider cleanup`, `empty-folder cleanup`, `provider path repair issue scan`) ưu tiên đọc từ `folder metadata cache` trước. Khi cache thiếu capability cần thiết hoặc version cũ, backend sẽ tự refresh folder index rồi retry.
+
 Root có thể là:
 
 - local filesystem
@@ -13,6 +15,8 @@ Root có thể là:
 ## 2. Storage backend
 
 Scan không còn phụ thuộc tuyệt đối vào `Path.rglob`.
+
+Với duplicate scan, storage backend live (`LocalPathScannerStorage` hoặc `StorageManagerScannerStorage`) hiện là fallback path khi cache metadata không khả dụng.
 
 Hiện có hai mode:
 
@@ -75,7 +79,21 @@ Mỗi file sau scan tạo thành `MediaFile` với các field như:
 - `storage_uri`
 - `root_storage_uri`
 
-## 6. Current job logging
+## 6. Folder metadata cache capabilities
+
+Folder index report hiện có `version = 3` và khai báo `capabilities` để các luồng scan kiểm tra trước khi dùng cache.
+
+Các capability chính:
+
+- `video_files`
+- `has_any_file`
+- `non_video_file_count`
+- `child_folder_count`
+- `normalized_name`
+
+Nếu thiếu capability cần thiết, backend sẽ chuyển sang refresh index thay vì dùng dữ liệu cache cũ.
+
+## 7. Current job logging
 
 Scan dashboard mode ghi log theo các event:
 
@@ -89,7 +107,7 @@ Những log này được lưu trong `current_job.logs`.
 
 Với SMB hoặc rclone-backed roots, log trung gian này giúp thấy scan đang đi tới thư mục nào và đã index được bao nhiêu video files gần như liên tục, thay vì chỉ thấy lúc bắt đầu và kết thúc root.
 
-## 7. Cancel behavior
+## 8. Cancel behavior
 
 `scan_roots()` hiện nhận `should_cancel`.
 
@@ -103,13 +121,13 @@ Nếu cancel được request:
 - scan raise error kiểu cancel
 - backend finish job với `status = cancelled`
 
-## 8. SMB caveat
+## 9. SMB caveat
 
 Cancel scan SMB là cooperative, không phải hard kill.
 
 Nếu backend đang ở một lệnh `smbclient` dài, cancel flag sẽ được thấy ở bước an toàn kế tiếp chứ không ngắt syscall tức thì.
 
-## 8. Retry and resume behavior
+## 10. Retry and resume behavior
 
 Các scan nặng hiện có 2 lớp phục hồi:
 
@@ -118,7 +136,7 @@ Các scan nặng hiện có 2 lớp phục hồi:
 
 Với duplicate scan, provider cleanup scan, empty-folder cleanup scan, và provider path repair scan, backend giữ checkpoint mức root hoặc provider đã hoàn tất gần nhất. `resume` sẽ tiếp tục từ root/provider kế tiếp thay vì bắt đầu lại toàn bộ lượt scan.
 
-## 9. Empty duplicate folder cleanup matching
+## 11. Empty duplicate folder cleanup matching
 
 Luồng empty-folder cleanup không còn chỉ so top-level folder names.
 

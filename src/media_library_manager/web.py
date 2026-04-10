@@ -1692,13 +1692,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.start_job(kind="cleanup-scan", message="Started provider library duplicate cleanup scan.", summary={"total": 0, "completed": 0}, details=job_details)
         self.store.append_activity(kind="scan", status="running", message="Started provider library duplicate cleanup scan.", details=job_details)
         try:
-            cleanup_report = scan_provider_cleanup(
-                integrations,
+            cleanup_report = self._scan_provider_cleanup_with_auto_refresh(
+                integrations=integrations,
                 providers=providers,
                 roots=self.store.list_roots(),
-                folder_index_report=self.store.load_folder_index_report(),
-                progress_callback=self._scan_progress_callback,
-                should_cancel=self.store.is_current_job_cancel_requested,
+                start_root_index=1,
             )
         except JobCancelledError:
             cancel_details = {**job_details, "cancel_requested": True}
@@ -2762,7 +2760,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         report_override: dict[str, Any] | None,
     ) -> Any:
         report = report_override
-        if _folder_index_outdated(report, minimum_version=2):
+        needs_refresh = _folder_index_outdated(report, minimum_version=2)
+        if not needs_refresh:
+            needs_refresh = _folder_index_missing_capability(report, capability="video_files")
+        if needs_refresh:
             self.store.append_job_log(
                 level="info",
                 message="Cached folder metadata is unavailable for duplicate scan. Refreshing automatically.",
@@ -2814,7 +2815,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         report_override: dict[str, Any] | None,
     ) -> dict[str, Any]:
         report = report_override
-        if _folder_index_outdated(report, minimum_version=2):
+        needs_refresh = _folder_index_outdated(report, minimum_version=2)
+        if not needs_refresh:
+            needs_refresh = _folder_index_missing_capability(report, capability="normalized_name")
+        if needs_refresh:
             self.store.append_job_log(
                 level="info",
                 message="Cached folder metadata is unavailable for path repair issue scan. Refreshing automatically.",

@@ -24,7 +24,7 @@ class FolderIndexTests(unittest.TestCase):
                 max_depth=3,
             )
 
-            self.assertEqual(report["version"], 2)
+            self.assertEqual(report["version"], 3)
             self.assertEqual(report["summary"]["folders"], 1)
             self.assertEqual(report["summary"]["video_files"], 1)
             self.assertEqual(report["items"][0]["path"], str(movie_dir))
