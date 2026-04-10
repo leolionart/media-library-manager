@@ -10,6 +10,7 @@ services:
       - STATE_FILE=/app/data/app-state.json
     volumes:
       - ./data:/app/data
-      - ${MNT_DIR:-/mnt}:/mnt:ro
-      - ${MEDIA_DIR:-/media}:/media:ro
-      - ${SRV_DIR:-/srv}:/srv:ro
+      # Change these paths to match your host folders (e.g., /volume1/video on Synology)
+      - /mnt:/mnt:ro
+      - /media:/media:ro
+      - /srv:/srv:ro
