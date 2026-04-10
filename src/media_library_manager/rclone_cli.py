@@ -142,13 +142,23 @@ def list_entries_recursive(
 
 
 def list_remotes(*, timeout: int = 30) -> list[dict[str, str]]:
-    """List all remotes using rclone listremotes --json."""
-    payload = run_rclone_json(["listremotes", "--json"], timeout=timeout)
-    if payload is None:
+    """List all remotes using rclone listremotes --long and parse the output."""
+    result = run_rclone_command(["listremotes", "--long"], timeout=timeout)
+    if not result.stdout:
         return []
-    if not isinstance(payload, list):
-        raise RcloneError("rclone listremotes returned invalid payload")
-    return payload
+    
+    remotes = []
+    for line in result.stdout.strip().splitlines():
+        if not line.strip():
+            continue
+        # Format is usually "name: type" or "name: type: description"
+        parts = line.split(":", 2)
+        if len(parts) >= 2:
+            remotes.append({
+                "name": parts[0].strip(),
+                "type": parts[1].strip()
+            })
+    return remotes
 
 
 def create_remote(name: str, rclone_type: str, config: dict[str, str], *, timeout: int = 60) -> Any:
