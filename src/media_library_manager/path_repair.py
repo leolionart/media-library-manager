@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .folder_index import filter_index_candidates_for_provider
+from .folder_index import filter_index_candidates_for_provider, validate_folder_index_report
 from .models import RootConfig
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
@@ -77,6 +77,7 @@ def scan_provider_path_issues(
     lan_connections: dict[str, Any],
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     start_provider_index: int = 1,
+    folder_index_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _ = roots
     _ = lan_connections
@@ -126,6 +127,16 @@ def scan_provider_path_issues(
             )
         issues_before = len(issues)
         total_items = len(items)
+        cache_error = validate_folder_index_report(
+            folder_index_report,
+            required_capabilities=["normalized_name"],
+            minimum_version=2,
+        )
+        provider_cached_candidates = (
+            filter_index_candidates_for_provider(provider=provider, roots=roots, report=folder_index_report)
+            if cache_error is None
+            else []
+        )
         for item_index, item in enumerate(items, start=1):
             if not _should_include_item_in_path_repair_scan(provider, item):
                 if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
@@ -141,7 +152,18 @@ def scan_provider_path_issues(
                         }
                     )
                 continue
-            issues.append(_build_issue(provider, item, reason="item_missing"))
+            issue = _build_issue(provider, item, reason="item_missing")
+            if provider_cached_candidates:
+                aliases = _build_search_aliases(item)
+                ranked = _rank_candidates(
+                    provider_cached_candidates,
+                    aliases=aliases,
+                    year=int(item.get("year") or 0) or None,
+                    max_suggestions=3,
+                )
+                issue["cached_candidates"] = ranked
+                issue["cached_candidate_count"] = len(ranked)
+            issues.append(issue)
 
             if progress_callback is not None and (item_index == total_items or item_index == 1 or item_index % 25 == 0):
                 progress_callback(

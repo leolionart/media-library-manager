@@ -3,13 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from .folder_index import build_folder_index_lookup as build_shared_folder_index_lookup
+from .folder_index import media_files_from_index_rows, validate_folder_index_report
 from .models import MediaFile, RootConfig
 from .provider_path_resolution import map_provider_directory
 from .providers.base import ProviderError
 from .providers.radarr import RadarrClient
 from .providers.sonarr import SonarrClient
-from .scanner import build_folder_media_duplicate_groups, inspect_media_file
-from .scanner_storage import ScannedFileEntry
+from .scanner import build_folder_media_duplicate_groups
 from .sync_integrations import build_provider_config
 
 
@@ -102,8 +103,8 @@ def scan_provider_cleanup(
                 storage_uri=resolved.storage_uri,
                 share_name=resolved.share_name,
             )
-            cached_files = _media_files_from_index_rows(folder_rows, root=root)
-            
+            cached_files = media_files_from_index_rows(folder_rows, roots=[root])
+
             # Verify files existence to avoid "ghost" duplicates from stale cache.
             # We check both local and remote files. 
             # For remote (rclone), we use the router to probe existence which is optimized in _rclone_entry.
@@ -172,36 +173,15 @@ def scan_provider_cleanup(
 
 
 def _validate_cleanup_folder_index(report: dict[str, Any] | None) -> str | None:
-    if not isinstance(report, dict):
-        return "Refresh cached folder metadata in Library Finder before running Library Cleanup."
-    if int(report.get("version", 0) or 0) < MIN_CLEANUP_FOLDER_INDEX_VERSION:
-        return "Cached folder metadata is outdated. Refresh Library Finder to rebuild the folder index."
-    items = report.get("items")
-    if not isinstance(items, list) or not items:
-        return "Cached folder metadata is empty. Refresh Library Finder before running Library Cleanup."
-    sample = next((item for item in items if isinstance(item, dict)), None)
-    if sample is None or "video_files" not in sample:
-        return "Cached folder metadata is missing video file details. Refresh Library Finder before running Library Cleanup."
-    return None
+    return validate_folder_index_report(
+        report,
+        required_capabilities=["video_files"],
+        minimum_version=MIN_CLEANUP_FOLDER_INDEX_VERSION,
+    )
 
 
-def _build_folder_index_lookup(report: dict[str, Any] | None) -> dict[str, dict[str, dict[str, Any]]]:
-    by_storage_uri: dict[str, dict[str, Any]] = {}
-    by_path: dict[str, dict[str, Any]] = {}
-    items: list[dict[str, Any]] = []
-    if not isinstance(report, dict):
-        return {"by_storage_uri": by_storage_uri, "by_path": by_path, "items": items}
-    for item in report.get("items", []):
-        if not isinstance(item, dict):
-            continue
-        items.append(item)
-        path = str(item.get("path") or "")
-        storage_uri = str(item.get("storage_uri") or "")
-        if path:
-            by_path[path] = item
-        if storage_uri:
-            by_storage_uri[storage_uri] = item
-    return {"by_storage_uri": by_storage_uri, "by_path": by_path, "items": items}
+def _build_folder_index_lookup(report: dict[str, Any] | None) -> dict[str, Any]:
+    return build_shared_folder_index_lookup(report)
 
 
 def _resolve_provider_directory_from_cache(*, raw_path: str, roots: list[RootConfig]) -> tuple[Any | None, str]:
@@ -247,43 +227,6 @@ def rebuild_cleanup_report(existing_report: dict[str, Any], files: list[MediaFil
         skipped_items=[item for item in existing_report.get("skipped_items", []) if isinstance(item, dict)],
         errors=[item for item in existing_report.get("errors", []) if isinstance(item, dict)],
     )
-
-
-def _media_files_from_index_rows(rows: list[dict[str, Any]], *, root: RootConfig) -> list[MediaFile]:
-    files: list[MediaFile] = []
-    root_path = root.path
-    seen: set[str] = set()
-    for item in rows:
-        for video in item.get("video_files", []):
-            if not isinstance(video, dict):
-                continue
-            path = str(video.get("path") or "").strip()
-            storage_uri = str(video.get("storage_uri") or "").strip()
-            name = str(video.get("name") or Path(path).name or "").strip()
-            if not path or not name:
-                continue
-            dedupe_key = storage_uri or path
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            video_path = Path(path)
-            try:
-                relative_path = str(video_path.relative_to(root_path))
-            except ValueError:
-                continue
-            entry = ScannedFileEntry(
-                path=path,
-                relative_path=relative_path,
-                size=int(video.get("size") or 0),
-                stem=Path(name).stem,
-                suffix=Path(name).suffix.lower(),
-                parent_name=video_path.parent.name,
-            )
-            media = inspect_media_file(entry, root)
-            media.path = video_path
-            media.storage_uri = storage_uri
-            files.append(media)
-    return files
 
 
 def _build_cleanup_report(

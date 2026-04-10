@@ -5,6 +5,7 @@ from collections import defaultdict
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
+from .folder_index import folder_index_rows_for_roots, validate_folder_index_report
 from .models import RootConfig
 from .rclone_cli import RcloneError, is_rclone_not_found_error, list_entries_recursive
 from .scanner import VIDEO_EXTENSIONS, parse_media_details
@@ -53,6 +54,7 @@ def scan_duplicate_empty_folders(
     roots: list[RootConfig],
     *,
     lan_connections: dict[str, Any],
+    folder_index_report: dict[str, Any] | None = None,
     progress_callback: CleanupProgressCallback | None = None,
     should_cancel: CleanupCancellationCallback | None = None,
     start_root_index: int = 1,
@@ -62,6 +64,11 @@ def scan_duplicate_empty_folders(
     errors: list[dict[str, Any]] = []
     total_roots = len(roots)
     total_folders_indexed = 0
+    cache_error = validate_folder_index_report(
+        folder_index_report,
+        required_capabilities=["has_any_file", "video_files", "non_video_file_count"],
+        minimum_version=3,
+    )
 
     normalized_start_index = max(1, int(start_root_index or 1))
     for index, root in enumerate(roots[normalized_start_index - 1 :], start=normalized_start_index):
@@ -82,17 +89,25 @@ def scan_duplicate_empty_folders(
             )
 
         try:
-            root_folder_count = _index_root_folders(
-                manager=manager,
-                root=root,
-                root_storage=root_storage,
-                indexed_by_match_path=indexed_by_match_path,
-                progress_callback=progress_callback,
-                root_index=index,
-                total_roots=total_roots,
-                total_folders_indexed=total_folders_indexed,
-                should_cancel=should_cancel,
-            )
+            if cache_error is None:
+                root_folder_count = _index_root_folders_from_cache(
+                    root=root,
+                    root_storage=root_storage,
+                    folder_index_report=folder_index_report,
+                    indexed_by_match_path=indexed_by_match_path,
+                )
+            else:
+                root_folder_count = _index_root_folders(
+                    manager=manager,
+                    root=root,
+                    root_storage=root_storage,
+                    indexed_by_match_path=indexed_by_match_path,
+                    progress_callback=progress_callback,
+                    root_index=index,
+                    total_roots=total_roots,
+                    total_folders_indexed=total_folders_indexed,
+                    should_cancel=should_cancel,
+                )
         except Exception as exc:
             errors.append(
                 {
@@ -246,6 +261,82 @@ def scan_duplicate_empty_folders(
         "groups": groups,
         "errors": errors,
     }
+
+
+def _index_root_folders_from_cache(
+    *,
+    root: RootConfig,
+    root_storage: StoragePath,
+    folder_index_report: dict[str, Any] | None,
+    indexed_by_match_path: dict[str, list[dict[str, Any]]],
+) -> int:
+    rows = folder_index_rows_for_roots(roots=[root], report=folder_index_report)
+    if not rows:
+        return 0
+
+    has_video_paths: set[str] = set()
+    for item in rows:
+        if int(item.get("video_file_count") or 0) <= 0:
+            continue
+        relative_path = _relative_path_from_index_item(item=item, root=root, root_storage=root_storage)
+        if not relative_path:
+            continue
+        segments = [segment for segment in relative_path.split("/") if segment]
+        for length in range(1, len(segments) + 1):
+            has_video_paths.add("/".join(segments[:length]))
+
+    indexed_count = 0
+    for item in rows:
+        relative_path = _relative_path_from_index_item(item=item, root=root, root_storage=root_storage)
+        if not relative_path:
+            continue
+        folder_name = str(item.get("label") or relative_path.rsplit("/", 1)[-1]).strip()
+        if not folder_name or _should_ignore_folder(folder_name):
+            continue
+        storage_uri = str(item.get("storage_uri") or "").strip()
+        entry_path = StoragePath.from_uri(storage_uri) if storage_uri else root_storage.join(*relative_path.split("/"))
+        normalized_relative = relative_path.strip("/")
+        folder_record = {
+            "folder_name": folder_name,
+            "relative_path": normalized_relative,
+            "match_relative_path": _canonicalize_match_relative_path(normalized_relative),
+            "path": str(item.get("path") or (root.path / normalized_relative)),
+            "delete_path": entry_path.to_uri() if entry_path.backend != "local" else entry_path.normalized_path(),
+            "storage_uri": entry_path.to_uri(),
+            "root_label": root.label,
+            "root_path": str(root.path),
+            "root_storage_uri": root.storage_uri or str(root.path),
+            "root_kind": root.kind,
+            "storage_path": entry_path,
+            "has_video": normalized_relative in has_video_paths,
+            "has_any_file": bool(item.get("has_any_file")),
+        }
+        indexed_by_match_path[folder_record["match_relative_path"]].append(folder_record)
+        indexed_count += 1
+
+    return indexed_count
+
+
+def _relative_path_from_index_item(*, item: dict[str, Any], root: RootConfig, root_storage: StoragePath) -> str:
+    storage_uri = str(item.get("storage_uri") or "").strip()
+    if storage_uri:
+        try:
+            storage_path = StoragePath.from_uri(storage_uri)
+            relative = str(storage_path.relative_to(root_storage)).strip()
+            if relative and relative != ".":
+                return relative
+        except Exception:
+            pass
+
+    path_text = str(item.get("path") or "").strip()
+    if path_text:
+        try:
+            relative = str(PurePosixPath(path_text).relative_to(PurePosixPath(str(root.path)))).strip()
+            if relative and relative != ".":
+                return relative
+        except Exception:
+            pass
+    return ""
 
 
 def _index_root_folders(

@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .browser import browse_path, list_mounts
 from .cleanup_scan import rebuild_cleanup_report, scan_provider_cleanup
 from .empty_folder_cleanup import scan_duplicate_empty_folders
-from .folder_index import DEFAULT_FOLDER_INDEX_MAX_DEPTH, build_folder_metadata_index
+from .folder_index import DEFAULT_FOLDER_INDEX_MAX_DEPTH, FOLDER_INDEX_VERSION, build_folder_metadata_index
 from .lan_connections import (
     build_cd_command,
     browse_smb_path,
@@ -72,6 +72,19 @@ class JobCancelledError(RuntimeError):
 def _is_cleanup_folder_index_error(error: Exception) -> bool:
     text = str(error or "").lower()
     return "folder metadata" in text and "refresh" in text
+
+
+def _folder_index_missing_capability(report: dict[str, Any] | None, *, capability: str) -> bool:
+    if not isinstance(report, dict):
+        return True
+    capabilities = {str(item).strip() for item in report.get("capabilities", []) if str(item).strip()}
+    return capability not in capabilities
+
+
+def _folder_index_outdated(report: dict[str, Any] | None, *, minimum_version: int) -> bool:
+    if not isinstance(report, dict):
+        return True
+    return int(report.get("version", 0) or 0) < int(minimum_version)
 
 
 def _root_identity(root: RootConfig) -> str:
@@ -1730,11 +1743,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.start_job(kind="cleanup-scan", message="Started duplicate empty-folder cleanup scan.", summary={"total": len(roots), "completed": 0}, details=job_details)
         self.store.append_activity(kind="scan", status="running", message="Started duplicate empty-folder cleanup scan.", details=job_details)
         try:
-            cleanup_report = scan_duplicate_empty_folders(
-                roots,
-                lan_connections=self.store.load_lan_connections(),
-                progress_callback=self._scan_progress_callback,
-                should_cancel=self.store.is_current_job_cancel_requested,
+            cleanup_report = self._scan_empty_folders_with_auto_refresh(
+                roots=roots,
+                start_root_index=1,
+                report_override=self.store.load_folder_index_report(),
             )
         except JobCancelledError:
             cancel_details = {**job_details, "cancel_requested": True}
@@ -1789,11 +1801,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             smb_root_count = sum(1 for root in scan_roots_selection if (root.storage_uri or "").startswith("smb://"))
             self.store.append_job_log(level="info", message="Using storage abstraction for scan roots.", details={"smb_roots": smb_root_count, "total_roots": len(scan_roots_selection)})
         try:
-            report = scan_roots(
-                scan_roots_selection,
-                progress_callback=self._scan_progress_callback,
+            report = self._scan_duplicates_with_auto_refresh(
+                roots=scan_roots_selection,
                 storage_backend=scan_backend,
-                should_cancel=self.store.is_current_job_cancel_requested,
+                start_root_index=1,
+                report_override=self.store.load_folder_index_report(),
             ).to_dict()
         except JobCancelledError:
             cancel_details = {**job_details, "cancel_requested": True}
@@ -1913,7 +1925,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.start_job(kind="path-repair", message="Scanning provider library paths.", summary={"total": max(len(providers), 1), "completed": 0}, details=job_details)
         self.store.append_activity(kind="scan", status="running", message="Started provider library path repair scan.", details={"providers": providers, "root_count": len(roots)})
         try:
-            result = scan_provider_path_issues(integrations, roots, self.store.load_lan_connections(), progress_callback=self._path_repair_progress_callback)
+            result = self._scan_provider_path_issues_with_auto_refresh(
+                integrations=integrations,
+                roots=roots,
+                start_provider_index=1,
+                report_override=self.store.load_folder_index_report(),
+            )
         except JobCancelledError:
             cancel_details = {"providers": providers, "root_count": len(roots), "cancel_requested": True, **job_details}
             self.store.finish_job(status="cancelled", message="Provider path repair scan cancelled.", details=cancel_details)
@@ -2736,6 +2753,83 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 start_root_index=start_root_index,
             )
 
+    def _scan_duplicates_with_auto_refresh(
+        self,
+        *,
+        roots: list[RootConfig],
+        storage_backend: StorageManagerScannerStorage | None,
+        start_root_index: int,
+        report_override: dict[str, Any] | None,
+    ) -> Any:
+        report = report_override
+        if _folder_index_outdated(report, minimum_version=2):
+            self.store.append_job_log(
+                level="info",
+                message="Cached folder metadata is unavailable for duplicate scan. Refreshing automatically.",
+                details={"version": int((report or {}).get("version", 0) if isinstance(report, dict) else 0)},
+            )
+            report = self._refresh_folder_index_for_cleanup()
+        return scan_roots(
+            roots,
+            progress_callback=self._scan_progress_callback,
+            storage_backend=storage_backend,
+            should_cancel=self.store.is_current_job_cancel_requested,
+            start_root_index=start_root_index,
+            folder_index_report=report,
+        )
+
+    def _scan_empty_folders_with_auto_refresh(
+        self,
+        *,
+        roots: list[RootConfig],
+        start_root_index: int,
+        report_override: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        report = report_override
+        needs_refresh = _folder_index_outdated(report, minimum_version=FOLDER_INDEX_VERSION)
+        if not needs_refresh:
+            needs_refresh = _folder_index_missing_capability(report, capability="has_any_file")
+        if needs_refresh:
+            self.store.append_job_log(
+                level="info",
+                message="Cached folder metadata is unavailable for empty-folder cleanup. Refreshing automatically.",
+                details={"version": int((report or {}).get("version", 0) if isinstance(report, dict) else 0)},
+            )
+            report = self._refresh_folder_index_for_cleanup()
+        return scan_duplicate_empty_folders(
+            roots,
+            lan_connections=self.store.load_lan_connections(),
+            folder_index_report=report,
+            progress_callback=self._scan_progress_callback,
+            should_cancel=self.store.is_current_job_cancel_requested,
+            start_root_index=start_root_index,
+        )
+
+    def _scan_provider_path_issues_with_auto_refresh(
+        self,
+        *,
+        integrations: dict[str, Any],
+        roots: list[RootConfig],
+        start_provider_index: int,
+        report_override: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        report = report_override
+        if _folder_index_outdated(report, minimum_version=2):
+            self.store.append_job_log(
+                level="info",
+                message="Cached folder metadata is unavailable for path repair issue scan. Refreshing automatically.",
+                details={"version": int((report or {}).get("version", 0) if isinstance(report, dict) else 0)},
+            )
+            report = self._refresh_folder_index_for_cleanup()
+        return scan_provider_path_issues(
+            integrations,
+            roots,
+            self.store.load_lan_connections(),
+            progress_callback=self._path_repair_progress_callback,
+            start_provider_index=start_provider_index,
+            folder_index_report=report,
+        )
+
     def _refresh_folder_index_for_cleanup(self) -> dict[str, Any]:
         roots = self.store.list_roots()
         if not roots:
@@ -2782,12 +2876,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.append_activity(kind="scan", status="running", message="Started duplicate empty-folder cleanup scan.", details=job_details)
         try:
             cleanup_report = self._run_job_with_retries(
-                run_attempt=lambda: scan_duplicate_empty_folders(
-                    roots,
-                    lan_connections=self.store.load_lan_connections(),
-                    progress_callback=self._scan_progress_callback,
-                    should_cancel=self.store.is_current_job_cancel_requested,
+                run_attempt=lambda: self._scan_empty_folders_with_auto_refresh(
+                    roots=roots,
                     start_root_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_root_index", 1)),
+                    report_override=self.store.load_folder_index_report(),
                 )
             )
         except JobCancelledError:
@@ -2841,12 +2933,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
         try:
             cleanup_report = self._run_job_with_retries(
-                run_attempt=lambda: scan_duplicate_empty_folders(
-                    selected_roots,
-                    lan_connections=self.store.load_lan_connections(),
-                    progress_callback=self._scan_progress_callback,
-                    should_cancel=self.store.is_current_job_cancel_requested,
+                run_attempt=lambda: self._scan_empty_folders_with_auto_refresh(
+                    roots=selected_roots,
                     start_root_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_root_index", 1)),
+                    report_override=self.store.load_folder_index_report(),
                 )
             )
         except JobCancelledError:
@@ -3045,12 +3135,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.store.append_activity(kind="scan", status="running", message="Started provider library path repair scan.", details={"providers": providers, "root_count": len(roots)})
         try:
             result = self._run_job_with_retries(
-                run_attempt=lambda: scan_provider_path_issues(
-                    integrations,
-                    roots,
-                    self.store.load_lan_connections(),
-                    progress_callback=self._path_repair_progress_callback,
+                run_attempt=lambda: self._scan_provider_path_issues_with_auto_refresh(
+                    integrations=integrations,
+                    roots=roots,
                     start_provider_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_provider_index", 1)),
+                    report_override=self.store.load_folder_index_report(),
                 )
             )
         except JobCancelledError:
@@ -3150,12 +3239,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.store.append_job_log(level="info", message="Using storage abstraction for scan roots.", details={"smb_roots": smb_root_count, "total_roots": len(scan_roots_selection)})
         try:
             report = self._run_job_with_retries(
-                run_attempt=lambda: scan_roots(
-                    scan_roots_selection,
-                    progress_callback=self._scan_progress_callback,
+                run_attempt=lambda: self._scan_duplicates_with_auto_refresh(
+                    roots=scan_roots_selection,
                     storage_backend=scan_backend,
-                    should_cancel=self.store.is_current_job_cancel_requested,
                     start_root_index=int(((self.store.load_current_job() or {}).get("details", {}).get("resume_state", {}) or {}).get("next_root_index", 1)),
+                    report_override=self.store.load_folder_index_report(),
                 ).to_dict()
             )
         except JobCancelledError:

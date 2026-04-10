@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
+from .folder_index import build_folder_index_lookup, media_files_from_index_rows, validate_folder_index_report
 from .models import MediaFile, RootConfig, ScanReport
 from .scanner_storage import LocalPathScannerStorage, ScannedFileEntry, ScannerStorageBackend
 
@@ -139,16 +140,141 @@ def scan_roots(
     storage_backend: ScannerStorageBackend | None = None,
     should_cancel: ScanCancellationCallback | None = None,
     start_root_index: int = 1,
+    folder_index_report: dict[str, object] | None = None,
+) -> ScanReport:
+    total_roots = len(roots)
+    normalized_start_index = max(1, int(start_root_index or 1))
+
+    cache_error = validate_folder_index_report(
+        folder_index_report,
+        required_capabilities=["video_files"],
+        minimum_version=2,
+    )
+    if cache_error is None:
+        return _scan_roots_from_cache(
+            roots=roots,
+            folder_index_report=folder_index_report,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
+            start_root_index=normalized_start_index,
+            total_roots=total_roots,
+        )
+
+    return _scan_roots_live(
+        roots=roots,
+        progress_callback=progress_callback,
+        storage_backend=storage_backend,
+        should_cancel=should_cancel,
+        start_root_index=normalized_start_index,
+        total_roots=total_roots,
+    )
+
+
+def _scan_roots_from_cache(
+    *,
+    roots: list[RootConfig],
+    folder_index_report: dict[str, object] | None,
+    progress_callback: ScanProgressCallback | None,
+    should_cancel: ScanCancellationCallback | None,
+    start_root_index: int,
+    total_roots: int,
+) -> ScanReport:
+    roots_to_scan = roots[start_root_index - 1 :]
+    lookup = build_folder_index_lookup(folder_index_report if isinstance(folder_index_report, dict) else None)
+    rows_by_root: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in lookup.get("items", []):
+        if not isinstance(row, dict):
+            continue
+        root_key = str(row.get("root_storage_uri") or row.get("root_path") or "")
+        if not root_key:
+            continue
+        rows_by_root[root_key].append(row)
+
+    files: list[MediaFile] = []
+    total_files = 0
+    for index, root in enumerate(roots_to_scan, start=start_root_index):
+        if should_cancel and should_cancel():
+            raise RuntimeError("job cancelled")
+        if progress_callback:
+            progress_callback(
+                {
+                    "event": "root_started",
+                    "index": index,
+                    "total_roots": total_roots,
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                    "total_indexed_files": total_files,
+                }
+            )
+
+        root_key = str(root.storage_uri or root.path)
+        root_rows = rows_by_root.get(root_key, [])
+        if not root_rows and str(root.path) != root_key:
+            root_rows = rows_by_root.get(str(root.path), [])
+
+        root_files = media_files_from_index_rows(root_rows, roots=[root])
+        files.extend(root_files)
+        total_files += len(root_files)
+
+        if progress_callback:
+            if root_files:
+                sample = root_files[-1]
+                progress_callback(
+                    {
+                        "event": "file_indexed",
+                        "index": index,
+                        "total_roots": total_roots,
+                        "root_label": root.label,
+                        "root_path": str(root.path),
+                        "file_path": str(sample.path),
+                        "relative_path": sample.relative_path,
+                        "root_indexed_files": len(root_files),
+                        "total_indexed_files": total_files,
+                    }
+                )
+            progress_callback(
+                {
+                    "event": "root_completed",
+                    "index": index,
+                    "total_roots": total_roots,
+                    "root_label": root.label,
+                    "root_path": str(root.path),
+                    "indexed_files": len(root_files),
+                    "total_indexed_files": total_files,
+                }
+            )
+
+    report = rebuild_scan_report(roots, files)
+    if progress_callback:
+        progress_callback(
+            {
+                "event": "scan_completed",
+                "total_roots": total_roots,
+                "total_indexed_files": len(files),
+                "exact_duplicate_groups": len(report.exact_duplicates),
+                "media_collision_groups": len(report.media_collisions),
+                "folder_media_duplicate_groups": len(report.folder_media_duplicates),
+            }
+        )
+    return report
+
+
+def _scan_roots_live(
+    *,
+    roots: list[RootConfig],
+    progress_callback: ScanProgressCallback | None,
+    storage_backend: ScannerStorageBackend | None,
+    should_cancel: ScanCancellationCallback | None,
+    start_root_index: int,
+    total_roots: int,
 ) -> ScanReport:
     files: list[MediaFile] = []
     size_groups: dict[int, list[MediaFile]] = defaultdict(list)
     hash_entries: dict[int, ScannedFileEntry] = {}
-    total_roots = len(roots)
     total_files = 0
     backend = storage_backend or LocalPathScannerStorage()
 
-    normalized_start_index = max(1, int(start_root_index or 1))
-    for index, root in enumerate(roots[normalized_start_index - 1 :], start=normalized_start_index):
+    for index, root in enumerate(roots[start_root_index - 1 :], start=start_root_index):
         if should_cancel and should_cancel():
             raise RuntimeError("job cancelled")
         root_file_count = 0
