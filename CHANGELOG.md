@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased - 2026-06-06 16:16 +07
+
+Generated before push from commits:
+
+- `899442d` Document release notes push policy
+
 ## [0.3.0](https://github.com/leolionart/media-library-manager/compare/v0.2.0...v0.3.0) (2026-04-09)
 
 
