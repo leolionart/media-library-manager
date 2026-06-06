@@ -88,3 +88,15 @@ Update both:
 
 - the token section in `styles.css`
 - this `AGENTS.md` file if the new pattern changes the design-system rules or conventions
+
+## Release notes on push
+
+- Before pushing user-facing, deployable, or behavior-changing work, include a
+  release notes/changelog update in the same commit range whenever practical.
+- This repo uses the shared pre-push hook at
+  `/Volumes/DATA/Coding Projects/.codex-tools/git-hooks`. If pushed commits do
+  not include release notes, the hook auto-generates them, commits `Add release
+  notes`, and pushes the updated branch.
+- Accepted paths: `CHANGELOG.md`, `Changelog.md`, `changelog.md`,
+  `RELEASE_NOTES.md`, `RELEASE-NOTES.md`, `docs/releases/*.md`,
+  `docs/release-notes/*.md`.
