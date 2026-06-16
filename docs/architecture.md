@@ -123,6 +123,7 @@ Chứa:
 - `apply_plan()`
 - `move_folder()`
 - `move_folder_contents()`
+- `move_path_into_folder()`
 - `delete_folder()`
 - `delete_file()`
 
@@ -213,7 +214,7 @@ Sau apply execute, backend clear `last-plan.json`.
 
 ### Provider move
 
-`Library Finder -> provider items -> move_folder_contents() -> provider refresh`
+`Library Finder -> provider items -> move_path_into_folder() -> provider refresh`
 
 ### Cleanup
 

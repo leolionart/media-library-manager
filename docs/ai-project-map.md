@@ -213,7 +213,7 @@ Các action ngoài plan/apply:
 - `DELETE /api/files`
 - `DELETE /api/folders`
 
-`move-to-provider` dùng khi source là folder download còn đích là path movie/series mà provider đang quản lý.
+`move-to-provider` dùng khi source là folder download hoặc một file lẻ còn đích là path movie/series mà provider đang quản lý.
 
 ### 4.3 Library Cleanup
 

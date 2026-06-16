@@ -369,6 +369,101 @@ def move_folder_contents(
     }
 
 
+def move_path_into_folder(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    source_type: str = "auto",
+    execute: bool = False,
+    storage_router: OperationStorageRouter | None = None,
+) -> dict[str, Any]:
+    router = storage_router or OperationStorageRouter()
+    source_ref, source_error = _parse_storage_path(router, source)
+    if source_error:
+        return {"status": "error", "message": source_error}
+    destination_ref, destination_error = _parse_storage_path(router, destination)
+    if destination_error:
+        return {"status": "error", "message": destination_error}
+    assert source_ref is not None and destination_ref is not None
+    router_error = _validate_router_for_storage_paths(router, source_ref, destination_ref)
+    if router_error:
+        return {"status": "error", "message": router_error}
+
+    source_value = router.stringify(source_ref)
+    destination_value = router.stringify(destination_ref)
+    normalized_type = str(source_type or "auto").strip().lower()
+
+    try:
+        if not router.exists(source_ref):
+            return {"status": "error", "message": f"source does not exist: {source_value}"}
+        if not router.exists(destination_ref):
+            return {"status": "error", "message": f"destination does not exist: {destination_value}"}
+        if not router.is_dir(destination_ref):
+            return {"status": "error", "message": f"destination is not a directory: {destination_value}"}
+        source_is_file = router.is_file(source_ref)
+        source_is_dir = router.is_dir(source_ref)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    if normalized_type == "folder" and not source_is_dir:
+        return {"status": "error", "message": f"source is not a directory: {source_value}"}
+    if normalized_type == "file" and not source_is_file:
+        return {"status": "error", "message": f"source is not a file: {source_value}"}
+    if source_is_dir:
+        return move_folder_contents(source, destination, execute=execute, storage_router=router)
+    if not source_is_file:
+        return {"status": "error", "message": f"source is not a file or directory: {source_value}"}
+
+    destination_file_ref = router.join(destination_ref, source_ref.name)
+    destination_file_value = router.stringify(destination_file_ref)
+    try:
+        if router.exists(destination_file_ref):
+            return {"status": "error", "message": f"destination entry exists: {destination_file_value}"}
+        if router.is_relative_to(destination_ref, source_ref):
+            return {"status": "error", "message": "destination cannot be inside the source path"}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    operations = (
+        [{"move": source_value, "destination": destination_file_value}]
+        if router.same_backend_namespace(source_ref, destination_file_ref)
+        else [{"copy": source_value, "destination": destination_file_value}, {"delete": source_value}]
+    )
+    if not execute:
+        return {
+            "status": "dry-run",
+            "type": "move-file-to-folder",
+            "source": source_value,
+            "destination": destination_value,
+            "destination_file": destination_file_value,
+            "operations": operations,
+        }
+
+    try:
+        if router.same_backend_namespace(source_ref, destination_file_ref):
+            router.rename(source_ref, destination_file_ref)
+        else:
+            parent = router.parent(destination_file_ref)
+            if parent is not None:
+                router.mkdir_parents(parent)
+            router.copy_file(source_ref, destination_file_ref)
+            router.delete_file(source_ref)
+        source_parent = router.parent(source_ref)
+        if source_parent is not None:
+            router.remove_dir_if_empty(source_parent)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    return {
+        "status": "applied",
+        "type": "move-file-to-folder",
+        "source": source_value,
+        "destination": destination_value,
+        "destination_file": destination_file_value,
+        "operations": operations,
+    }
+
+
 def _move_folder_contents_cross_namespace(
     router: OperationStorageRouter,
     source_ref: Any,

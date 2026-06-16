@@ -5,7 +5,7 @@
 Hiện có hai nhóm thao tác filesystem:
 
 1. duplicate workflow: `scan -> plan -> apply`
-2. manual operations: move folder, delete folder, move vào provider path
+2. manual operations: move folder, delete folder, move folder/file vào provider path
 
 ## 2. Plan
 
@@ -49,16 +49,16 @@ Hiện hỗ trợ:
 
 ## 5. Move into provider path
 
-`move_folder_contents()` dùng khi:
+`move_path_into_folder()` dùng khi:
 
-- source là folder download
+- source là folder download hoặc một file lẻ
 - destination là path movie/series đang được provider quản lý
 
 Hành vi:
 
 - preview hoặc execute
-- move từng child entry vào destination
-- thử remove source folder nếu rỗng
+- nếu source là folder, move từng child entry vào destination và thử remove source folder nếu rỗng
+- nếu source là file, move file đó vào destination với tên file hiện tại và thử remove parent folder nếu rỗng
 
 ## 6. Delete folder
 

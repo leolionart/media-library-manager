@@ -5,6 +5,7 @@
 Generated before push from commits:
 
 - `899442d` Document release notes push policy
+- Library Finder can now move a selected file, not only a folder, into a Radarr or Sonarr-managed destination path.
 
 ## [0.3.0](https://github.com/leolionart/media-library-manager/compare/v0.2.0...v0.3.0) (2026-04-09)
 

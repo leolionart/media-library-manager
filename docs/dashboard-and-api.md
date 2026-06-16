@@ -273,7 +273,16 @@ Move cả folder từ source sang destination parent.
 
 ### `POST /api/folders/move-to-provider`
 
-Move nội dung của source folder vào path mà Radarr hoặc Sonarr đang quản lý.
+Move nội dung của source folder hoặc một file lẻ vào path mà Radarr hoặc Sonarr đang quản lý.
+
+Payload:
+
+- `provider`
+- `item_id`
+- `source`
+- `source_type`: `folder`, `file`, hoặc `auto`
+- `destination`
+- `execute`
 
 ### `DELETE /api/folders?path=...&execute=true`
 

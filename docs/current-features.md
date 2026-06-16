@@ -46,7 +46,7 @@ Hiện có:
 - duplicate workflow `scan -> plan -> preview/apply`
 - move folder
 - delete file / delete folder
-- move folder contents vào provider-managed path
+- move folder contents hoặc một file lẻ vào provider-managed path
 - shared process logs
 
 ## 4. Library Cleanup

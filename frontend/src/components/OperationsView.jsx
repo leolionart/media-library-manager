@@ -74,6 +74,7 @@ const emptyProviderModal = {
   open: false,
   provider: "radarr",
   source: "",
+  sourceType: "folder",
   sourceLabel: "",
   items: [],
   query: "",
@@ -431,11 +432,16 @@ function ProviderMoveModal({
   onPreview,
   onConfirm,
 }) {
+  const sourceTypeLabel = modalState.sourceType === "file" ? "File" : "Folder";
   return (
     <Modal
       open={modalState.open}
-      title={modalState.provider === "radarr" ? "Move Folder To Radarr Movie" : "Move Folder To Sonarr Series"}
-      okText="Move Folder"
+      title={
+        modalState.provider === "radarr"
+          ? `Move ${sourceTypeLabel} To Radarr Movie`
+          : `Move ${sourceTypeLabel} To Sonarr Series`
+      }
+      okText={`Move ${sourceTypeLabel}`}
       onCancel={onCancel}
       onOk={onConfirm}
       okButtonProps={{ disabled: !selectedItem, loading: actionLoading === "move-to-provider" }}
@@ -449,7 +455,7 @@ function ProviderMoveModal({
           items={[
             {
               key: "source",
-              label: "Source folder",
+              label: `Source ${modalState.sourceType === "file" ? "file" : "folder"}`,
               children: (
                 <Flex vertical gap={4}>
                   <Text strong>{modalState.sourceLabel || "-"}</Text>
@@ -912,10 +918,10 @@ export function OperationsView() {
     [selectedRecords]
   );
   const selectedRoots = useMemo(() => selectedRecords.filter((record) => record.is_root), [selectedRecords]);
-  const selectedFolder =
-    selectedFolders.length === 1 && selectedRoots.length === 0 && selectedFiles.length === 0 ? selectedFolders[0] : null;
-  const canMoveToRadarr = Boolean(payload.integrations?.radarr?.enabled && selectedFolder);
-  const canMoveToSonarr = Boolean(payload.integrations?.sonarr?.enabled && selectedFolder);
+  const selectedMovableItem =
+    selectedRecords.length === 1 && selectedRoots.length === 0 && !selectedRecords[0]?.is_root ? selectedRecords[0] : null;
+  const canMoveToRadarr = Boolean(payload.integrations?.radarr?.enabled && selectedMovableItem);
+  const canMoveToSonarr = Boolean(payload.integrations?.sonarr?.enabled && selectedMovableItem);
   const selectedPaths = selectedFolders.map((record) => record.path);
   const selectedRootPaths = selectedRoots.map((record) => record.path);
   const duplicateScanSelection = useMemo(() => buildDuplicateScanSelection(selectedRecords), [selectedRecords]);
@@ -1095,16 +1101,18 @@ export function OperationsView() {
     setProviderModal(emptyProviderModal);
   };
 
-  const openProviderModal = async (provider, sourceFolder = selectedFolder) => {
-    if (!sourceFolder) return;
+  const openProviderModal = async (provider, sourceItem = selectedMovableItem) => {
+    if (!sourceItem || sourceItem.is_root) return;
+    const sourceType = sourceItem.is_file ? "file" : "folder";
 
     setProviderModal({
       open: true,
       provider,
-      source: sourceFolder.path,
-      sourceLabel: sourceFolder.label,
+      source: sourceItem.path,
+      sourceType,
+      sourceLabel: sourceItem.label,
       items: [],
-      query: sourceFolder.label,
+      query: sourceItem.label,
       selectedItemId: "",
       preview: null,
       loading: true,
@@ -1114,7 +1122,7 @@ export function OperationsView() {
       const result = await fetchProviderItems(provider);
       const items = result.items || [];
       const bestMatch = [...items]
-        .map((item) => ({ item, score: scoreProviderItem(item, sourceFolder.label) }))
+        .map((item) => ({ item, score: scoreProviderItem(item, sourceItem.label) }))
         .sort((left, right) => right.score - left.score || String(left.item.title).localeCompare(String(right.item.title)))[0];
 
       setProviderModal((current) => ({
@@ -1270,19 +1278,20 @@ export function OperationsView() {
       trigger={["click"]}
       menu={{
         items: [
-          { key: "move-radarr", label: "Move To Radarr...", disabled: record.is_root || record.is_file || !payload.integrations?.radarr?.enabled },
-          { key: "move-sonarr", label: "Move To Sonarr...", disabled: record.is_root || record.is_file || !payload.integrations?.sonarr?.enabled },
+          { key: "move-radarr", label: "Move To Radarr...", disabled: record.is_root || !payload.integrations?.radarr?.enabled },
+          { key: "move-sonarr", label: "Move To Sonarr...", disabled: record.is_root || !payload.integrations?.sonarr?.enabled },
           { type: "divider" },
           { key: "remove-root", label: "Remove From App", disabled: !record.is_root },
           { key: "delete-folder", label: "Delete Folder...", danger: true, disabled: record.is_root || record.is_file },
         ],
         onClick: async ({ domEvent, key }) => {
           domEvent.stopPropagation();
-          setSelectedNodeKeys(record.is_root || record.is_file ? [] : [record.key]);
           if (key === "move-radarr" || key === "move-sonarr") {
+            setSelectedNodeKeys(record.is_root ? [] : [record.key]);
             await openProviderModal(key === "move-radarr" ? "radarr" : "sonarr", record);
             return;
           }
+          setSelectedNodeKeys(record.is_root || record.is_file ? [] : [record.key]);
           if (key === "remove-root") {
             await handleRemoveRoots([record.path]);
             return;
@@ -1535,7 +1544,7 @@ export function OperationsView() {
             {
               key: "selected",
               label: "Selected",
-              children: `${duplicateScanSelection.length} folder${duplicateScanSelection.length === 1 ? "" : "s"}`,
+              children: `${selectedRecords.length} item${selectedRecords.length === 1 ? "" : "s"} (${duplicateScanSelection.length} folder${duplicateScanSelection.length === 1 ? "" : "s"} usable for duplicate scan)`,
             },
             {
               key: "cleanup-groups",
@@ -1582,7 +1591,6 @@ export function OperationsView() {
               checkStrictly: true,
               columnWidth: 44,
               onChange: (keys) => setSelectedNodeKeys(keys),
-              getCheckboxProps: (record) => ({ disabled: record.is_file }),
             }}
             locale={{
               emptyText: search
@@ -1630,6 +1638,7 @@ export function OperationsView() {
               previewMoveToProvider({
                 provider: providerModal.provider,
                 source: providerModal.source,
+                source_type: providerModal.sourceType,
                 item_id: selectedProviderItem.id,
                 destination: selectedProviderItem.path,
               }),
@@ -1646,10 +1655,11 @@ export function OperationsView() {
               executeMoveToProvider({
                 provider: providerModal.provider,
                 source: providerModal.source,
+                source_type: providerModal.sourceType,
                 item_id: selectedProviderItem.id,
                 destination: selectedProviderItem.path,
               }),
-            "Folder moved into provider path."
+            providerModal.sourceType === "file" ? "File moved into provider path." : "Folder moved into provider path."
           );
           if (result) closeProviderModal();
         }}

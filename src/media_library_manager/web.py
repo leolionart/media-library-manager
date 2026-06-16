@@ -37,7 +37,7 @@ from .lan_connections import (
 from .models import LibraryTargets, RootConfig
 from .network import discover_lan_devices
 from .path_repair import delete_provider_item, scan_provider_path_issues, search_library_paths, update_provider_item_path
-from .operations import apply_plan, delete_folder, delete_media_file, move_folder, move_folder_contents
+from .operations import apply_plan, delete_folder, delete_media_file, move_folder, move_path_into_folder
 from .operation_storage import OperationStorageRouter
 from .planner import load_report, media_from_dict, plan_actions
 from .provider_path_resolution import ResolvedProviderDirectory, find_provider_path_replacement, resolve_provider_directory
@@ -854,9 +854,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             provider = str(payload.get("provider") or "").strip()
             item_id = int(payload.get("item_id") or 0)
             destination = str(payload.get("destination") or "").strip()
-            result = move_folder_contents(
+            source_type = str(payload.get("source_type") or "auto").strip().lower() or "auto"
+            result = move_path_into_folder(
                 str(payload.get("source") or ""),
                 destination,
+                source_type=source_type,
                 execute=bool(payload.get("execute")),
                 storage_router=self._operation_storage_router(),
             )
@@ -864,10 +866,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.store.append_activity(
                     kind="folder",
                     status="error",
-                    message="Provider folder move failed.",
-                    details={"provider": provider, "source": payload.get("source"), "destination": destination, "error": result.get("message")},
+                    message="Provider media move failed.",
+                    details={
+                        "provider": provider,
+                        "source": payload.get("source"),
+                        "source_type": source_type,
+                        "destination": destination,
+                        "error": result.get("message"),
+                    },
                 )
-                self._send_json({"error": result.get("message", "provider folder move failed")}, status=HTTPStatus.BAD_REQUEST)
+                self._send_json({"error": result.get("message", "provider media move failed")}, status=HTTPStatus.BAD_REQUEST)
                 return
 
             refresh_result = None
@@ -889,12 +897,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     )
                     return
 
-            message = "Provider folder move preview created." if result.get("status") == "dry-run" else "Folder moved into provider path."
+            item_label = "file" if result.get("type") == "move-file-to-folder" else "folder"
+            message = f"Provider {item_label} move preview created." if result.get("status") == "dry-run" else f"{item_label.capitalize()} moved into provider path."
             self.store.append_activity(
                 kind="folder",
                 status="success" if result.get("status") == "applied" else "running",
                 message=message,
-                details={"provider": provider, "item_id": item_id, "destination": destination, "move_result": result, "refresh_result": refresh_result},
+                details={
+                    "provider": provider,
+                    "item_id": item_id,
+                    "source_type": source_type,
+                    "destination": destination,
+                    "move_result": result,
+                    "refresh_result": refresh_result,
+                },
             )
             self._send_json({"move_result": result, "refresh_result": refresh_result})
             return

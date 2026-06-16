@@ -5,7 +5,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from media_library_manager.operation_storage import OperationStorageRouter
-from media_library_manager.operations import apply_plan, delete_file, delete_folder, delete_media_file, move_folder, move_folder_contents
+from media_library_manager.operations import (
+    apply_plan,
+    delete_file,
+    delete_folder,
+    delete_media_file,
+    move_folder,
+    move_folder_contents,
+    move_path_into_folder,
+)
 from media_library_manager.rclone_cli import RcloneCommandResult
 
 
@@ -128,6 +136,41 @@ class OperationTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertTrue((destination / "Movie (2024).mkv").exists())
             self.assertTrue((destination / "Movie (2024).srt").exists())
+
+    def test_move_path_into_folder_moves_single_file_into_existing_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source = tmp_path / "Downloads" / "Movie (2024).mkv"
+            destination = tmp_path / "Library" / "Movie (2024)"
+            source.parent.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            source.write_bytes(b"movie")
+
+            preview = move_path_into_folder(source, destination, source_type="file", execute=False)
+            self.assertEqual(preview["status"], "dry-run")
+            self.assertEqual(preview["type"], "move-file-to-folder")
+            self.assertTrue(source.exists())
+
+            result = move_path_into_folder(source, destination, source_type="file", execute=True)
+            self.assertEqual(result["status"], "applied")
+            self.assertFalse(source.exists())
+            self.assertTrue((destination / "Movie (2024).mkv").exists())
+
+    def test_move_path_into_folder_keeps_folder_source_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp_path = Path(raw_tmp)
+            source = tmp_path / "Downloads" / "Movie (2024)"
+            destination = tmp_path / "Library" / "Movie (2024)"
+            source.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            (source / "Movie (2024).mkv").write_bytes(b"movie")
+
+            result = move_path_into_folder(source, destination, source_type="folder", execute=True)
+
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["type"], "move-folder-contents")
+            self.assertFalse(source.exists())
+            self.assertTrue((destination / "Movie (2024).mkv").exists())
 
     def test_delete_folder_removes_directory_tree(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:

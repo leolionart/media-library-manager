@@ -66,10 +66,10 @@ Manual sync.
 
 Luồng:
 
-1. user chọn folder trong `Library Finder`
+1. user chọn folder hoặc file trong `Library Finder`
 2. frontend load item list từ provider
 3. user chọn movie hoặc series đích
-4. backend gọi `move_folder_contents()`
+4. backend gọi `move_path_into_folder()`
 5. backend refresh provider item tương ứng
 
 ## 6. Sync after apply
